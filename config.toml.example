@@ -1,0 +1,36 @@
+# rust_dazhang configuration — copy to config.toml and adjust the paths.
+# config.toml is gitignored: it holds machine-local paths and must NEVER be
+# committed. This repository contains NO game assets; every path below points
+# at files on your own machine that you obtained legally.
+
+[paths]
+# Your own legally obtained classic Warcraft III installation (MPQ-based).
+# It must contain war3.mpq / War3x.mpq and must NOT be a Reforged/CASC install
+# (a CASC install has a Data/ directory instead of loose .mpq files).
+#
+# Note on 1.27a: some installs name the base archive "war3.mpq" in lower case
+# while the others use "War3x.mpq" etc. Windows is case-insensitive, but the
+# Rust reader must match case-insensitively so the same paths work on
+# Linux/macOS too.
+wc3_dir = "D:/soft/game/war3/1.27a"
+
+# Locally exported JSON produced from that installation by the reference
+# asset pipeline. SLK tables and parsed maps are read from here in P0/P1.
+# These files are DERIVED from the game archives: read them, never commit them.
+#   <wc3_exported>/slk-exported/   unit / ability / UI tables
+#   <wc3_exported>/map-parsed/      parsed map JSON
+wc3_exported = "C:/open_rts/godot_warcraft3/assets"
+
+# This project's own scratch directory (also gitignored).
+cache_dir = ".cache"
+
+[sim]
+# Integer logic frames per second. FROZEN for the lifetime of a match — never
+# change it mid-match, and freeze it project-wide in ADR 0002 before P1.
+# The authoritative simulation must never read wall-clock time, render frame
+# rate or a caller-supplied delta.
+logic_fps = 30
+
+# Determinism contract (see ADR 0002): all authoritative state math uses
+# fixed-point. No f32/f64 may enter simulation state, and no wall clock,
+# unordered collection iteration or async completion order may affect rules.

@@ -50,19 +50,17 @@ GPLv3 保证的是：任何分发的修改版都必须以同协议提供源码�
 
 ## 快速开始
 
-> 当前仓库只有许可证、配置模板与文档骨架，`Cargo.toml` / `crates/w3-core` 尚未创建。以下命令在 P0 骨架落地后可用。
-
 ```bash
 # 1. 复制本机配置（config.toml 已被 .gitignore 排除）
 cp config.toml.example config.toml
 #    按需修改其中的 wc3_dir / wc3_exported 路径
 
-# 2. 构建与测试
+# 2. 单元测试与确定性验收
 cargo test -p w3-core --lib
-cargo test -p w3-core --lib determinism:: -- --nocapture
+cargo test -p w3-core --test determinism -- --nocapture
 ```
 
-Rust 版本见 `rust-toolchain.toml`。所有 `cargo test` 使用 `--lib`；确定性相关测试集中在 `tests/determinism.rs`。
+Rust 版本见 `rust-toolchain.toml`。`--lib` 跑各模块的单元测试；确定性验收是 `w3-core` 的集成测试，位于 `crates/w3-core/tests/determinism.rs`。P0 当前共 19 个单元测试 + 5 个确定性测试。
 
 ## 目录（P0）
 
@@ -71,13 +69,24 @@ rust_dazhang/
 ├─ Cargo.toml              workspace；P0 只挂一个 w3-core crate
 ├─ Cargo.lock              提交（应用项目）
 ├─ LICENSE                 GPLv3 全文
+├─ rust-toolchain.toml     stable
 ├─ config.toml.example     本机路径模板
-├─ crates/w3-core/         确定性模拟内核
-├─ tests/determinism.rs    双实例一致性 / 快照往返 / 回放
+├─ crates/w3-core/
+│   ├─ Cargo.toml
+│   ├─ src/
+│   │   ├─ lib.rs          模块与公共入口
+│   │   ├─ fixed.rs        SimFixed 定点数（i128 中间计算）
+│   │   ├─ frame.rs        整数帧 / 固定步长
+│   │   ├─ entity.rs       EntityId / EntityStore（稳定 ID 顺序）
+│   │   ├─ command.rs      命令队列 + 稳定排序 + 本帧冻结
+│   │   ├─ state_hash.rs   FNV-1a 全状态哈希
+│   │   ├─ snapshot.rs     快照 v1 数据结构
+│   │   └─ sim_match.rs    RtsMatch：唯一状态所有者 + Step()
+│   └─ tests/determinism.rs  双实例一致性 / 快照往返 / 回放
 └─ docs/decisions/         架构决策记录（ADR）
 ```
 
-P0 刻意只建一个 crate：等出现真实消费者（资产解析、渲染、网络）后再拆分，避免过早抽象。
+P0 刻意只建一个 crate：等出现真实消费者（资产解析、渲染、网络）后再拆分，避免过早抽象。内核模块名为 `sim_match` 而非 `match`（Rust 关键字）；`RtsMatch` 已由 `lib.rs` 重导出，调用方直接用 `w3_core::RtsMatch`。
 
 ## 参考的上游项目
 

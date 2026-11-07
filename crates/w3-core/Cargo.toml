@@ -1,0 +1,16 @@
+[package]
+name = "w3-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Deterministic fixed-step RTS simulation kernel (P0 skeleton)"
+
+[lib]
+name = "w3_core"
+path = "src/lib.rs"
+
+# No dependencies on purpose. P0 needs only the standard library so that
+# builds are offline-capable and the numeric contract is fully under our
+# control. A `fixed` crate can be evaluated later against ADR 0002.
+
+[dependencies]

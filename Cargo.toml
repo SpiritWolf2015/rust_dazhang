@@ -1,0 +1,5 @@
+# Virtual workspace. P0 intentionally has a single crate: split further only
+# when a real consumer (formats, render, net) appears.
+[workspace]
+members = ["crates/w3-core"]
+resolver = "3"

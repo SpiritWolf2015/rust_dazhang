@@ -1,0 +1,42 @@
+schema: spec-driven
+
+context: |
+  Project: rust_dazhang — GPLv3, Rust edition 2024 workspace reimplementing a
+  classic RTS, Melee-first (ADR 0003). Crates: w3-core (zero-dependency
+  deterministic simulation kernel), w3-content (reads locally exported WC3
+  JSON; serde/serde_json). No game assets are ever committed.
+
+  Determinism is a hard gate (ADR 0002): SimFixed Q47.16 integer math only in
+  authoritative state; integer logic frames frozen at 30 Hz; commands ordered
+  by ExecuteFrame -> PlayerId -> Sequence -> Arrival; stable EntityId order;
+  FNV-1a state hash; snapshot v1 is the complete state after a committed frame.
+  w3-content coordinates are frozen f64 INPUT only — they must never enter
+  snapshots or state hashes, and P2 must freeze the SimFixed conversion rule.
+
+  Asset/legal boundary (ADR 0001): the repository contains no Blizzard assets
+  and no MPQ-derived JSON/PNG/GLB/sounds. Players supply their own classic
+  1.27a client; exports stay under C:/open_rts/godot_warcraft3/assets and are
+  read via gitignored config.toml paths. Upstream references (read-only):
+  vera20k (GPLv3), godot_warcraft3 (MIT), rts_kernel_cs (MIT) — see
+  docs/references/UPSTREAM.md and NOTICE.md.
+
+  Verification: cargo test --workspace; cargo fmt --all -- --check. Any change
+  to authoritative state, frame order, command ordering, hash encoding or
+  snapshot fields must keep crates/w3-core/tests/determinism.rs green.
+
+  Out of scope for v1: JASS/wtg trigger VM, custom maps, campaigns, fog of war/
+  stealth, mod API, cross-version saves, Godot host, official Battle.net.
+
+rules:
+  proposal:
+    - Reference the relevant ADR number and identify the roadmap phase (P0-P5).
+    - State the impact on the asset/legal boundary and on determinism.
+  specs:
+    - Use SHALL/MUST; every requirement needs at least one #### Scenario with WHEN/THEN.
+    - New authoritative state MUST be declared as entering the state hash and snapshot v1.
+  design:
+    - Relate every decision to ADR 0002 and state the cross-platform determinism impact.
+    - List alternatives considered for each decision.
+  tasks:
+    - Every task MUST be a checkbox `- [ ] X.Y ...`.
+    - Any change touching deterministic code MUST include a task to rerun tests/determinism.rs.

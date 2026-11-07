@@ -33,14 +33,28 @@
 | `C:/open_rts/godot_warcraft3/assets/map-parsed/<slug>/` | `summary.json`、`info.json`、`terrain.json`、`terrain-heightfield.json`、`units.json`、`doodads.json`、`strings.json` 等 |
 | `C:/open_rts/godot_warcraft3/assets/asset-converted/` | PNG / GLTF / `.scn` / PathTextures / Sound |
 
-**当前状态（2026-11-07）**：三个目录只有 `.gitkeep` / `.gdignore`，说明本机尚未运行 `dev-setup` 流水线。P1 的真实数据需要先在上游仓库执行：
+**当前状态（2026-11-07）**：已运行 `dev-setup` 的 `slk` 与 `maps` 步骤，生成 **42 张 SLK 表**与 **Echo Isles 地图 JSON**（129×97 顶点、97 单位、2491 装饰物）。`extract` 步骤因单个 `Units/Undead/Ghoul/GhoulWarcry1.wav` 解包失败而以 exit 2 退出（上游把任何单文件失败当致命错误），但 17,490 个文件已成功写入 staging，因此用 `--only` 跳过 extract 完成导出：
 
 ```bash
 cd /c/open_rts/godot_warcraft3
-node tools/dev-setup.mjs --game-dir "D:/soft/game/war3/1.27a" --profile game
+# 首次：install + extract（extract 会报 1 个错误，数据已写入 staging）
+node tools/dev-setup.mjs --game-dir "D:/soft/game/war3/1.27a" --only install --only extract --only slk --only maps --maps echoisles
+# 之后重导 SLK / 地图（跳过 extract）：
+node tools/dev-setup.mjs --game-dir "D:/soft/game/war3/1.27a" --only slk --only maps --maps echoisles
 ```
 
-这些目录里的 JSON / PNG / GLB 属于**从 MPQ 派生的资产**，一律不得提交进本仓库（`.gitignore` 已排除）；运行时通过 `config.toml` 的本机路径读取。本项目 P1 的读取器用合成的最小 fixture 做回归测试，不依赖真实导出文件。
+端到端验证（本机，`w3-content/examples/load_export.rs`）：
+
+```bash
+cd /c/open_rts/rust_dazhang
+cargo run -p w3-content --example load_export -- \
+  "C:/open_rts/godot_warcraft3/assets/map-parsed/echoisles" \
+  "C:/open_rts/godot_warcraft3/assets/slk-exported/Units/UnitBalance.json"
+```
+
+结果：`heightfield 129x97 = 12513 vertices`、`units 97`、`doodads 2491`、`UnitBalance 61 cols / 836 rows`，P1 读取器无需改动即可解析真实 schema。
+
+这些目录里的 JSON / PNG / GLB 属于**从 MPQ 派生的资产**，一律不得提交进本仓库（`.gitignore` 已排除）；运行时通过 `config.toml` 的本机路径读取。本项目 P1 的回归测试仍用合成 fixture，不依赖真实导出文件。
 
 ## 合规
 

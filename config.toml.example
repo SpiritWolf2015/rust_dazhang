@@ -22,9 +22,9 @@ wc3_dir = "D:/soft/game/war3/1.27a"
 wc3_exported = "C:/open_rts/godot_warcraft3/assets"
 
 # P1: directory name under <wc3_exported>/map-parsed/ to load. Use the exact
-# local folder name produced by the upstream tools; no map name is hardcoded
-# in the reader.
-map_slug = "example"
+# local folder name produced by the upstream tools; the reader hardcodes no
+# map name. This machine currently has "echoisles" exported.
+map_slug = "echoisles"
 
 # This project's own scratch directory (also gitignored).
 cache_dir = ".cache"

@@ -85,7 +85,7 @@ rust_dazhang/
 └─ docs/references/UPSTREAM.md
 ```
 
-P0 只建 `w3-core` 一个 crate；P1 才增加 `w3-content`，因为出现了真实消费者（内容读取）。**过渡期不写 MPQ / SLK / MDX / W3X 原生解析器**——真实导出数据由上游 `godot_warcraft3` 的 Node 工具在本机生成，运行时通过 `config.toml` 的路径读取，绝不入库。当前本机导出目录只有占位文件，需先执行 `node tools/dev-setup.mjs --game-dir "D:/soft/game/war3/1.27a" --profile game`（见 [`docs/references/UPSTREAM.md`](docs/references/UPSTREAM.md)）。
+P0 只建 `w3-core` 一个 crate；P1 才增加 `w3-content`，因为出现了真实消费者（内容读取）。**过渡期不写 MPQ / SLK / MDX / W3X 原生解析器**——真实导出数据由上游 `godot_warcraft3` 的 Node 工具在本机生成，运行时通过 `config.toml` 的路径读取，绝不入库。本机已生成 42 张 SLK 表与 Echo Isles 地图 JSON，并用 `w3-content/examples/load_export.rs` 完成端到端加载验证（129×97 顶点 / 97 单位 / 2491 装饰物 / UnitBalance 836 行）；导出命令与绕过方式见 [`docs/references/UPSTREAM.md`](docs/references/UPSTREAM.md)。
 
 内核模块名为 `sim_match` 而非 `match`（Rust 关键字）；`RtsMatch` 已由 `lib.rs` 重导出，调用方直接用 `w3_core::RtsMatch`。`w3-content` 的坐标是上游 JSON 的原始 `f64`，属于冻结输入，不进权威状态 / 快照 / 哈希；P2 进入模拟前须按 ADR 0002 冻结定点转换规则。
 

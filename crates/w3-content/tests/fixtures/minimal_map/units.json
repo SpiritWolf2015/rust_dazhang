@@ -1,0 +1,32 @@
+{
+  "formatVersion": 8,
+  "subversion": 11,
+  "count": 2,
+  "byTypeId": { "AAAA": 1, "BBBB": 1 },
+  "byOwner": { "0": 1, "1": 1 },
+  "units": [
+    {
+      "typeId": "AAAA",
+      "variation": 0,
+      "position": { "x": 128.0, "y": 256.0, "z": 0.0 },
+      "angle": 0.0,
+      "angleDegrees": 0.0,
+      "scale": { "x": 1.0, "y": 1.0, "z": 1.0 },
+      "owner": 0,
+      "flags": 0,
+      "creationNumber": 1
+    },
+    {
+      "typeId": "BBBB",
+      "variation": 0,
+      "position": { "x": -64.5, "y": 512.25, "z": 0.0 },
+      "angle": 1.5708,
+      "angleDegrees": 90.0,
+      "scale": { "x": 1.0, "y": 1.0, "z": 1.0 },
+      "owner": 1,
+      "flags": 2,
+      "creationNumber": 2
+    }
+  ],
+  "_bytesRemaining": 0
+}

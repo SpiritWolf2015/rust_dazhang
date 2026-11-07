@@ -1,5 +1,5 @@
-# Virtual workspace. P0 intentionally has a single crate: split further only
-# when a real consumer (formats, render, net) appears.
+# Virtual workspace. P0 has the simulation kernel; P1 adds a reader for the
+# upstream JSON exports. Split further only when a real consumer appears.
 [workspace]
-members = ["crates/w3-core"]
+members = ["crates/w3-core", "crates/w3-content"]
 resolver = "3"

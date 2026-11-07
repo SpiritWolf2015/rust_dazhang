@@ -1,0 +1,11 @@
+{
+  "source": "Units/SyntheticUnitData.slk",
+  "columns": 3,
+  "rows": 2,
+  "headers": ["unitID", "Name", "hitPoints"],
+  "recordCount": 2,
+  "records": [
+    { "unitID": "AAAA", "Name": "Synthetic A", "hitPoints": 100 },
+    { "unitID": "BBBB", "Name": "Synthetic B", "hitPoints": 200 }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "formatVersion": 8,
+  "subversion": 11,
+  "count": 1,
+  "byId": { "DDDD": 1 },
+  "doodads": [
+    {
+      "id": "DDDD",
+      "variation": 0,
+      "position": { "x": 10.0, "y": 20.0, "z": 0.0 },
+      "angle": 0.0,
+      "angleDegrees": 0.0,
+      "scale": { "x": 1.0, "y": 1.0, "z": 1.0 },
+      "flags": 0,
+      "life": 100,
+      "creationNumber": 7
+    }
+  ],
+  "specialDoodads": [],
+  "_bytesRemaining": 0
+}

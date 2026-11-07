@@ -55,38 +55,39 @@ GPLv3 保证的是：任何分发的修改版都必须以同协议提供源码�
 cp config.toml.example config.toml
 #    按需修改其中的 wc3_dir / wc3_exported 路径
 
-# 2. 单元测试与确定性验收
+# 2. 单元测试与确定性验收（P0）
 cargo test -p w3-core --lib
 cargo test -p w3-core --test determinism -- --nocapture
+
+# 3. P1 内容读取器
+cargo test -p w3-content
 ```
 
-Rust 版本见 `rust-toolchain.toml`。`--lib` 跑各模块的单元测试；确定性验收是 `w3-core` 的集成测试，位于 `crates/w3-core/tests/determinism.rs`。P0 当前共 19 个单元测试 + 5 个确定性测试。
+Rust 版本见 `rust-toolchain.toml`。`--lib` 跑各模块的单元测试；确定性验收是 `w3-core` 的集成测试，位于 `crates/w3-core/tests/determinism.rs`。P0 共 19 个单元测试 + 5 个确定性测试；P1 的 `w3-content` 用合成 fixture 测试，不依赖真实导出数据。
 
-## 目录（P0）
+## 目录（P0–P1）
 
 ```text
 rust_dazhang/
-├─ Cargo.toml              workspace；P0 只挂一个 w3-core crate
+├─ Cargo.toml              workspace：w3-core（P0）+ w3-content（P1）
 ├─ Cargo.lock              提交（应用项目）
 ├─ LICENSE                 GPLv3 全文
+├─ NOTICE.md / CONTRIBUTING.md
 ├─ rust-toolchain.toml     stable
 ├─ config.toml.example     本机路径模板
-├─ crates/w3-core/
-│   ├─ Cargo.toml
-│   ├─ src/
-│   │   ├─ lib.rs          模块与公共入口
-│   │   ├─ fixed.rs        SimFixed 定点数（i128 中间计算）
-│   │   ├─ frame.rs        整数帧 / 固定步长
-│   │   ├─ entity.rs       EntityId / EntityStore（稳定 ID 顺序）
-│   │   ├─ command.rs      命令队列 + 稳定排序 + 本帧冻结
-│   │   ├─ state_hash.rs   FNV-1a 全状态哈希
-│   │   ├─ snapshot.rs     快照 v1 数据结构
-│   │   └─ sim_match.rs    RtsMatch：唯一状态所有者 + Step()
+├─ crates/w3-core/         确定性模拟内核（零依赖）
+│   ├─ src/{fixed,frame,entity,command,state_hash,snapshot,sim_match}.rs
 │   └─ tests/determinism.rs  双实例一致性 / 快照往返 / 回放
-└─ docs/decisions/         架构决策记录（ADR）
+├─ crates/w3-content/      P1：只读上游导出 JSON（serde / serde_json）
+│   ├─ src/{heightfield,placements,table,load}.rs
+│   └─ tests/fixtures/      合成 JSON，不含任何游戏派生资产
+├─ docs/decisions/         ADR 0001–0003
+└─ docs/references/UPSTREAM.md
 ```
 
-P0 刻意只建一个 crate：等出现真实消费者（资产解析、渲染、网络）后再拆分，避免过早抽象。内核模块名为 `sim_match` 而非 `match`（Rust 关键字）；`RtsMatch` 已由 `lib.rs` 重导出，调用方直接用 `w3_core::RtsMatch`。
+P0 只建 `w3-core` 一个 crate；P1 才增加 `w3-content`，因为出现了真实消费者（内容读取）。**过渡期不写 MPQ / SLK / MDX / W3X 原生解析器**——真实导出数据由上游 `godot_warcraft3` 的 Node 工具在本机生成，运行时通过 `config.toml` 的路径读取，绝不入库。当前本机导出目录只有占位文件，需先执行 `node tools/dev-setup.mjs --game-dir "D:/soft/game/war3/1.27a" --profile game`（见 [`docs/references/UPSTREAM.md`](docs/references/UPSTREAM.md)）。
+
+内核模块名为 `sim_match` 而非 `match`（Rust 关键字）；`RtsMatch` 已由 `lib.rs` 重导出，调用方直接用 `w3_core::RtsMatch`。`w3-content` 的坐标是上游 JSON 的原始 `f64`，属于冻结输入，不进权威状态 / 快照 / 哈希；P2 进入模拟前须按 ADR 0002 冻结定点转换规则。
 
 ## 参考的上游项目
 

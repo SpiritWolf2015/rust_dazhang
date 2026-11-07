@@ -1,0 +1,7 @@
+{
+  "tilepointWidth": 2,
+  "tilepointHeight": 2,
+  "mapWidth": 1,
+  "mapHeight": 1,
+  "heights": [0.0, 0.5, 1.0, 1.5]
+}

@@ -1,5 +1,9 @@
 # 贡献指南
 
+开发约定以 [`CODEBUDDY.md`](CODEBUDDY.md) 为**单一权威**：UTF-8 无 BOM / LF 编码基线、源码注释（含 `pub` rustdoc）中文、日志与错误英文、UI 文案走 i18n、以及 git 权限矩阵。本文件只引用，不另立规则。
+
+**Git 边界（强制）**：AI 可执行 `status` / `log` / `diff` / `show` / `add` / `commit` 等本地操作；`push` / `fetch` / `pull` / `clone` / `submodule update` / `remote set-url` / `gh pr ...` 等所有远端同步命令**仅由程序员手动执行**，由 `.codebuddy/settings.json` 的 `permissions.deny` 与 `PreToolUse` hook 强制拦截。
+
 ## 许可证与署名
 
 - 本项目采用 **GPLv3**（见 `LICENSE`、[ADR 0001](docs/decisions/0001-license.md)）。**提交贡献即表示你同意按 GPLv3 授权你的代码**，并确认你有权这样授权。

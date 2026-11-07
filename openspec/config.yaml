@@ -1,42 +1,45 @@
 schema: spec-driven
 
 context: |
-  Project: rust_dazhang — GPLv3, Rust edition 2024 workspace reimplementing a
-  classic RTS, Melee-first (ADR 0003). Crates: w3-core (zero-dependency
-  deterministic simulation kernel), w3-content (reads locally exported WC3
-  JSON; serde/serde_json). No game assets are ever committed.
+  项目：rust_dazhang，GPLv3，Rust edition 2024 虚拟 workspace，复刻经典 RTS，
+  第一版以 Melee 对战优先（ADR 0003）。crate：w3-core（零依赖确定性模拟内核）、
+  w3-content（读取本机导出的 WC3 JSON，使用 serde/serde_json）。
+  仓库绝不提交任何游戏资产。
 
-  Determinism is a hard gate (ADR 0002): SimFixed Q47.16 integer math only in
-  authoritative state; integer logic frames frozen at 30 Hz; commands ordered
-  by ExecuteFrame -> PlayerId -> Sequence -> Arrival; stable EntityId order;
-  FNV-1a state hash; snapshot v1 is the complete state after a committed frame.
-  w3-content coordinates are frozen f64 INPUT only — they must never enter
-  snapshots or state hashes, and P2 must freeze the SimFixed conversion rule.
+  确定性是硬门禁（ADR 0002）：权威状态只使用 SimFixed Q47.16 整数数学；
+  整数逻辑帧冻结为 30 Hz；命令按
+  ExecuteFrame -> PlayerId -> Sequence -> Arrival 排序；稳定 EntityId 顺序；
+  FNV-1a 状态哈希；快照 v1 是帧提交完成后的完整状态。
+  w3-content 的坐标只是冻结的 f64 输入，绝不能进入快照或状态哈希；
+  P2 必须先冻结 SimFixed 的转换规则。
 
-  Asset/legal boundary (ADR 0001): the repository contains no Blizzard assets
-  and no MPQ-derived JSON/PNG/GLB/sounds. Players supply their own classic
-  1.27a client; exports stay under C:/open_rts/godot_warcraft3/assets and are
-  read via gitignored config.toml paths. Upstream references (read-only):
-  vera20k (GPLv3), godot_warcraft3 (MIT), rts_kernel_cs (MIT) — see
-  docs/references/UPSTREAM.md and NOTICE.md.
+  资产与法律边界（ADR 0001）：仓库不含暴雪资产，也不含 MPQ 派生的
+  JSON/PNG/GLB/音效。玩家自备经典 1.27a 客户端；导出数据留在
+  C:/open_rts/godot_warcraft3/assets，通过被 gitignore 的 config.toml 路径读取。
+  只读参考项目：vera20k (GPLv3)、godot_warcraft3 (MIT)、rts_kernel_cs (MIT)，
+  见 docs/references/UPSTREAM.md 与 NOTICE.md。
 
-  Verification: cargo test --workspace; cargo fmt --all -- --check. Any change
-  to authoritative state, frame order, command ordering, hash encoding or
-  snapshot fields must keep crates/w3-core/tests/determinism.rs green.
+  验收命令：cargo test --workspace；cargo fmt --all -- --check。
+  任何改动权威状态、帧序、命令排序、哈希编码或快照字段的变更，
+  都必须保持 crates/w3-core/tests/determinism.rs 全绿。
 
-  Out of scope for v1: JASS/wtg trigger VM, custom maps, campaigns, fog of war/
-  stealth, mod API, cross-version saves, Godot host, official Battle.net.
+  第一版范围之外：JASS/wtg 触发器 VM、自定义地图、战役、战争迷雾/隐身、
+  Mod API、跨版本存档、Godot 宿主、官方战网。
+
+  开发约定见 CODEBUDDY.md：源码注释（含 pub rustdoc）一律中文；
+  日志与错误信息一律英文；所有文件 UTF-8 无 BOM、LF；
+  AI 不得执行 git push / fetch / pull / clone 等远端同步命令。
 
 rules:
   proposal:
-    - Reference the relevant ADR number and identify the roadmap phase (P0-P5).
-    - State the impact on the asset/legal boundary and on determinism.
+    - 引用相关 ADR 编号并标明路线图阶段（P0-P5）。
+    - 声明对资产/法律边界与确定性的影响。
   specs:
-    - Use SHALL/MUST; every requirement needs at least one #### Scenario with WHEN/THEN.
-    - New authoritative state MUST be declared as entering the state hash and snapshot v1.
+    - 使用 SHALL/MUST；每条 requirement 至少一个 #### Scenario（WHEN/THEN）。
+    - 新增权威状态必须声明进入状态哈希与快照 v1。
   design:
-    - Relate every decision to ADR 0002 and state the cross-platform determinism impact.
-    - List alternatives considered for each decision.
+    - 每个决策都要关联 ADR 0002，并说明对跨平台确定性的影响。
+    - 每个决策列出考虑过的备选方案。
   tasks:
-    - Every task MUST be a checkbox `- [ ] X.Y ...`.
-    - Any change touching deterministic code MUST include a task to rerun tests/determinism.rs.
+    - 每条任务必须是复选框 `- [ ] X.Y ...`。
+    - 涉及确定性代码的改动必须包含重跑 tests/determinism.rs 的任务。

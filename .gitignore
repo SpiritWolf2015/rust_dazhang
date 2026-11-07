@@ -1,30 +1,28 @@
 # ---------------------------------------------------------------------------
-# Rust build artifacts
+# Rust 构建产物
 # ---------------------------------------------------------------------------
 /target/
 **/*.rs.bk
 
-# Cargo.lock IS committed. This is an application/binary project, not a
-# library: a locked dependency graph keeps builds and simulation reproducible.
-# (The default GitHub Rust template ignores it; that rule is deliberately
-#  removed here.)
+# Cargo.lock 需要提交。本项目是应用/可执行项目而非库：
+# 锁定依赖图能保证构建与模拟可复现。
+# （GitHub 默认 Rust 模板会忽略它，此处刻意移除了那条规则。）
 
 # ---------------------------------------------------------------------------
-# Machine-local configuration — NEVER commit
-# Holds absolute paths to a locally installed game client.
+# 本机配置——绝不提交
+# 内含本机已安装游戏客户端的绝对路径。
 # ---------------------------------------------------------------------------
 config.toml
 
 # ---------------------------------------------------------------------------
-# LEGAL: no Blizzard game assets, and no files derived from them, may enter
-# this repository. Tools, parsers and readers are committed; assets stay on
-# the user's own machine and are read at runtime through config.toml paths.
+# 法律红线：任何暴雪游戏资产及其派生文件都不得进入本仓库。
+# 工具、解析器与读取器可以提交；资产留在玩家本机，
+# 运行时通过 config.toml 中的路径读取。
 #
-# The exported trees below normally live OUTSIDE this repo (in the reference
-# project). These rules are a second line of defence against accidentally
-# copying them in.
+# 下面列出的导出目录通常位于本仓库之外（在参考项目里）。
+# 这些规则是防止误把它们复制进来的第二道防线。
 # ---------------------------------------------------------------------------
-# Classic-client archives and their binary formats
+# 经典客户端归档及其二进制格式
 *.mpq
 *.MPQ
 *.w3x
@@ -46,18 +44,18 @@ config.toml
 *.tga
 *.pcx
 
-# Exported / derived asset trees (JSON, PNG, GLB, sounds produced from MPQ)
+# 从 MPQ 导出的资产目录（JSON / PNG / GLB / 音效）
 /assets-export/
 /assets/slk-exported/
 /assets/map-parsed/
 /assets/asset-converted/
 /.cache/
 
-# NOTE: do NOT add a blanket *.png / *.wav ignore here — the project's own
-# documentation images and original source media must remain committable.
+# 注意：不要在这里加 *.png / *.wav 的一刀切忽略——
+# 项目自己的文档图片与原创素材仍需可以提交。
 
 # ---------------------------------------------------------------------------
-# Local working files
+# 本机工作文件
 # ---------------------------------------------------------------------------
 *.log
 *.tmp

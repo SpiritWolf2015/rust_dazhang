@@ -1,8 +1,7 @@
-//! File-boundary loading: read the locally exported JSON into a `ParsedMap`.
+//! 文件边界加载：把本机导出的 JSON 读入 `ParsedMap`。
 //!
-//! `terrain-heightfield.json` is mandatory. `units.json` and `doodads.json`
-//! are optional (a map may legitimately have none). Nothing here writes files
-//! or reaches into the simulation crate.
+//! `terrain-heightfield.json` 为必需；`units.json` 与 `doodads.json` 可选
+//! （地图可以合法地没有摆放物）。本模块不写文件，也不访问模拟 crate。
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -69,7 +68,7 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ContentError
     }
 }
 
-/// Load one parsed map directory (`assets/map-parsed/<slug>/`).
+/// 加载一个已解析的地图目录（`assets/map-parsed/<slug>/`）。
 pub fn load_map(dir: &Path) -> Result<ParsedMap, ContentError> {
     let heightfield_path = dir.join("terrain-heightfield.json");
     let heightfield: TerrainHeightfield = read_json(&heightfield_path)?
@@ -99,7 +98,7 @@ pub fn load_map(dir: &Path) -> Result<ParsedMap, ContentError> {
     })
 }
 
-/// Load one exported SLK table JSON.
+/// 加载一张已导出的 SLK 表 JSON。
 pub fn load_table(path: &Path) -> Result<SlkTable, ContentError> {
     let table: SlkTable =
         read_json(path)?.ok_or_else(|| ContentError::MissingTable(path.to_path_buf()))?;

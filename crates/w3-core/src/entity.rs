@@ -1,5 +1,5 @@
-//! Entity identity. IDs are positive integers, unique within a match and never
-//! reused. A `BTreeSet` keeps iteration in stable ID order for hashing.
+//! 实体标识。ID 为正整数，在同一对局内唯一且绝不复用。
+//! `BTreeSet` 保证迭代按稳定 ID 顺序，供状态哈希使用。
 
 use std::collections::BTreeSet;
 
@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 pub struct EntityId(u64);
 
 impl EntityId {
-    /// Zero is reserved as "no entity".
+    /// 0 保留为"无实体"。
     pub const NONE: Self = Self(0);
 
     pub fn new(value: u64) -> Option<Self> {
@@ -56,7 +56,7 @@ impl EntityStore {
         self.alive.is_empty()
     }
 
-    /// Stable ID order — never a hash-map iteration order.
+    /// 稳定 ID 顺序，绝不使用哈希容器的迭代顺序。
     pub fn iter(&self) -> impl Iterator<Item = EntityId> + '_ {
         self.alive.iter().copied()
     }
@@ -65,7 +65,7 @@ impl EntityStore {
         self.next_id
     }
 
-    /// Snapshot restore only.
+    /// 仅供快照恢复使用。
     pub(crate) fn restore(next_id: u64, ids: &[u64]) -> Self {
         let mut alive = BTreeSet::new();
         for &value in ids {

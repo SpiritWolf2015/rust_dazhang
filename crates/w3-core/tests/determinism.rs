@@ -1,5 +1,5 @@
-//! P0 acceptance: two instances, snapshot round-trip and replay must agree
-//! frame by frame. These are the determinism gates from the P0 checklist.
+//! P0 验收：双实例、快照往返与回放必须逐帧一致。
+//! 这三类测试是 P0 清单中的确定性门禁。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, SnapshotError,
@@ -13,9 +13,9 @@ fn config() -> MatchConfig {
     }
 }
 
-/// A fixed command script. The two Spawn commands at frame 0 are ordered by
-/// player id (1 then 2), so the kernel's never-reused ID counter gives them
-/// IDs 1 and 2. Depending on that is intentional: it is part of the contract.
+/// 固定的命令脚本。第 0 帧的两个 Spawn 命令按玩家编号（先 1 后 2）排序，
+/// 因此内核"ID 绝不复用"的计数器会分配 1 与 2。刻意依赖这一点，
+/// 因为它本身就是内核契约的一部分。
 fn script() -> Vec<Command> {
     let first = EntityId::new(1).unwrap();
     let second = EntityId::new(2).unwrap();
@@ -72,7 +72,7 @@ fn two_instances_interleaved_match_frame_hashes() {
     let mut hashes = Vec::new();
 
     for frame in 0..40 {
-        // Interleave the two instances so neither can share hidden state.
+        // 交错推进两个实例，确保二者无法共享隐藏状态。
         if frame % 2 == 0 {
             a.step();
             b.step();
@@ -91,7 +91,7 @@ fn two_instances_interleaved_match_frame_hashes() {
         hashes.push(hash_a);
     }
 
-    // Guard against a vacuous pass where nothing ever changes.
+    // 防止「状态从未变化」造成的空泛通过。
     assert!(
         hashes.windows(2).any(|pair| pair[0] != pair[1]),
         "the simulation did not actually advance"

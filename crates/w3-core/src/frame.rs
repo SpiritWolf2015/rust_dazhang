@@ -1,6 +1,5 @@
-//! Integer logic frames. There is deliberately no delta, no wall clock and no
-//! render frame rate anywhere in this module: `advance()` always moves exactly
-//! one frame.
+//! 整数逻辑帧。本模块刻意不引入 delta、墙钟或渲染帧率：
+//! `advance()` 每次恰好推进一帧。
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct Frame(u64);
@@ -24,7 +23,7 @@ pub struct FrameClock {
 }
 
 impl FrameClock {
-    /// `logic_fps` is frozen for the lifetime of the match.
+    /// `logic_fps` 在对局整个生命周期内冻结不变。
     pub const fn new(logic_fps: u32) -> Self {
         Self {
             current: Frame::ZERO,
@@ -32,7 +31,7 @@ impl FrameClock {
         }
     }
 
-    /// Snapshot restore only. Not part of the public frame API.
+    /// 仅供快照恢复使用，不属于公开的帧 API。
     pub(crate) const fn at(frame: Frame, logic_fps: u32) -> Self {
         Self {
             current: frame,
@@ -48,7 +47,7 @@ impl FrameClock {
         self.logic_fps
     }
 
-    /// Commit the current frame and move to the next one.
+    /// 提交当前帧并推进到下一帧。
     pub fn advance(&mut self) -> Frame {
         self.current = Frame(self.current.0 + 1);
         self.current
@@ -65,7 +64,7 @@ mod tests {
         assert_eq!(clock.current(), Frame::ZERO);
         assert_eq!(clock.advance(), Frame::new(1));
         assert_eq!(clock.advance(), Frame::new(2));
-        // No caller-supplied delta can change the step size.
+        // 调用方传入的 delta 无法改变步长。
         for _ in 0..1_000 {
             let before = clock.current().value();
             clock.advance();
@@ -77,7 +76,7 @@ mod tests {
     fn logic_fps_is_frozen_at_construction() {
         let clock = FrameClock::new(45);
         for _ in 0..10 {
-            // There is no setter; the only way to change it is a new clock.
+            // 没有 setter；要改变它只能新建一个时钟。
             assert_eq!(clock.logic_fps(), 45);
         }
     }

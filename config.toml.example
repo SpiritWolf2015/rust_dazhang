@@ -1,41 +1,38 @@
-# rust_dazhang configuration — copy to config.toml and adjust the paths.
-# config.toml is gitignored: it holds machine-local paths and must NEVER be
-# committed. This repository contains NO game assets; every path below points
-# at files on your own machine that you obtained legally.
+# rust_dazhang 配置模板——复制为 config.toml 后按需修改路径。
+# config.toml 已被 gitignore：它含有本机路径，绝不能提交。
+# 本仓库不含任何游戏资产；下面的每个路径都指向你本机合法获得的文件。
 
 [paths]
-# Your own legally obtained classic Warcraft III installation (MPQ-based).
-# It must contain war3.mpq / War3x.mpq and must NOT be a Reforged/CASC install
-# (a CASC install has a Data/ directory instead of loose .mpq files).
+# 你本机合法获得的经典客户端安装目录（基于 MPQ）。
+# 必须包含 war3.mpq / War3x.mpq，且不能是 Reforged/CASC 版本
+# （CASC 版本只有 Data/ 目录，没有散装的 .mpq 文件）。
 #
-# Note on 1.27a: some installs name the base archive "war3.mpq" in lower case
-# while the others use "War3x.mpq" etc. Windows is case-insensitive, but the
-# Rust reader must match case-insensitively so the same paths work on
-# Linux/macOS too.
+# 关于 1.27a：部分安装把基座归档命名为小写的 "war3.mpq"，
+# 其余归档使用 "War3x.mpq" 等大写形式。Windows 大小写不敏感，
+# 但 Rust 读取器必须大小写不敏感匹配，才能在 Linux/macOS 上同样工作。
 wc3_dir = "D:/soft/game/war3/1.27a"
 
-# Locally exported JSON produced from that installation by the reference
-# asset pipeline. SLK tables and parsed maps are read from here in P0/P1.
-# These files are DERIVED from the game archives: read them, never commit them.
-#   <wc3_exported>/slk-exported/   unit / ability / UI tables
-#   <wc3_exported>/map-parsed/      parsed map JSON
+# 由参考资产管线从该安装目录导出的本机 JSON。
+# P0/P1 从这里读取 SLK 表与已解析地图。
+# 这些文件是从游戏归档派生的：只读取，绝不提交。
+#   <wc3_exported>/slk-exported/   单位 / 技能 / UI 表
+#   <wc3_exported>/map-parsed/      已解析的地图 JSON
 wc3_exported = "C:/open_rts/godot_warcraft3/assets"
 
-# P1: directory name under <wc3_exported>/map-parsed/ to load. Use the exact
-# local folder name produced by the upstream tools; the reader hardcodes no
-# map name. This machine currently has "echoisles" exported.
+# P1：要加载的 <wc3_exported>/map-parsed/ 下的目录名。
+# 填上游工具在本机生成的实际目录名；读取器不硬编码任何地图名。
+# 本机当前已导出 "echoisles"。
 map_slug = "echoisles"
 
-# This project's own scratch directory (also gitignored).
+# 本项目自身的临时目录（同样被 gitignore）。
 cache_dir = ".cache"
 
 [sim]
-# Integer logic frames per second. FROZEN for the lifetime of a match — never
-# change it mid-match, and freeze it project-wide in ADR 0002 before P1.
-# The authoritative simulation must never read wall-clock time, render frame
-# rate or a caller-supplied delta.
+# 每秒整数逻辑帧数。对局生命周期内冻结，中途不得变更；
+# 项目级冻结见 ADR 0002。
+# 权威模拟绝不能读取墙钟、渲染帧率或调用方传入的 delta。
 logic_fps = 30
 
-# Determinism contract (see ADR 0002): all authoritative state math uses
-# fixed-point. No f32/f64 may enter simulation state, and no wall clock,
-# unordered collection iteration or async completion order may affect rules.
+# 确定性契约（见 ADR 0002）：所有权威状态数学使用定点数。
+# f32/f64 不得进入模拟状态；墙钟、无序集合迭代顺序、
+# 异步任务完成顺序都不得影响规则。

@@ -1,9 +1,8 @@
-//! Complete, versioned match state at a committed frame boundary.
+//! 帧边界处已完成提交的完整、带版本的对局状态。
 //!
-//! A snapshot is the state *after* frame N has been committed; restoring it
-//! resumes at frame N+1. It contains the RNG stream, the next ID counter and
-//! accepted-but-not-yet-executed commands. Behaviour is rebuilt from IDs and
-//! explicit data, never from closures, tasks or live objects.
+//! 快照是第 N 帧提交完成后的状态，恢复后从第 N+1 帧继续。包含随机流、
+//! 下一 ID 计数器，以及已接收但尚未执行的命令。行为由 ID 与显式数据重建，
+//! 绝不来自闭包、任务或活动对象。
 
 use crate::command::Command;
 

@@ -1,6 +1,5 @@
-//! Explicit, platform-independent state hashing (FNV-1a over little-endian
-//! bytes). Never use `DefaultHasher`, `HashMap` iteration order or object
-//! identity for authoritative state.
+//! 显式、与平台无关的状态哈希（对小端字节做 FNV-1a）。
+//! 权威状态绝不使用 `DefaultHasher`、`HashMap` 迭代顺序或对象身份。
 
 const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const PRIME: u64 = 0x0000_0100_0000_01b3;

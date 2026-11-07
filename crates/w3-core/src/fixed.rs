@@ -1,8 +1,7 @@
-//! Fixed-point arithmetic for authoritative simulation state.
+//! 权威模拟状态的定点数运算。
 //!
-//! Q47.16 over `i64`, with `i128` intermediates. All operations are integer
-//! only, so results are bit-identical on every platform and CPU. No `f32`/`f64`
-//! may enter simulation state.
+//! 基于 `i64` 的 Q47.16，中间量使用 `i128`。全部运算均为整数运算，
+//! 因此在所有平台与 CPU 上位级一致。`f32` / `f64` 不得进入模拟状态。
 
 pub const FRACTIONAL_BITS: u32 = 16;
 pub const SCALE: i64 = 1i64 << FRACTIONAL_BITS;
@@ -20,7 +19,7 @@ impl SimFixed {
     pub const ZERO: Self = Self(0);
     pub const ONE: Self = Self(SCALE);
 
-    /// Wrap a raw Q16 value. Only snapshot/restore and tests should need this.
+    /// 包装一个原始 Q16 值，仅快照恢复与测试需要使用。
     pub const fn from_raw(raw: i64) -> Self {
         Self(raw)
     }
@@ -50,8 +49,8 @@ impl SimFixed {
             .ok_or(FixedError::Overflow)
     }
 
-    /// `(a * b) / SCALE`, computed in i128 so no intermediate overflows.
-    /// Integer division truncates toward zero on every Rust target.
+    /// `(a * b) / SCALE`，用 i128 计算以避免中间结果溢出。
+    /// 整数除法在所有 Rust 目标上均向零截断。
     pub fn checked_mul(self, rhs: Self) -> Result<Self, FixedError> {
         let product = (self.0 as i128) * (rhs.0 as i128);
         let scaled = product / (SCALE as i128);
@@ -60,7 +59,7 @@ impl SimFixed {
             .map_err(|_| FixedError::Overflow)
     }
 
-    /// `(a * SCALE) / b`, computed in i128.
+    /// `(a * SCALE) / b`，用 i128 计算。
     pub fn checked_div(self, rhs: Self) -> Result<Self, FixedError> {
         if rhs.0 == 0 {
             return Err(FixedError::DivisionByZero);

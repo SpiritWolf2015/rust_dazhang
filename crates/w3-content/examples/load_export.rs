@@ -1,10 +1,10 @@
-//! End-to-end check against a locally exported map directory.
+//! 针对本机导出地图目录的端到端校验。
 //!
-//! Usage:
+//! 用法：
 //!   cargo run -p w3-content --example load_export -- <map-dir> [slk-table.json]
 //!
-//! Paths are supplied at runtime and never committed. The exported JSON comes
-//! from the player's own classic client and must stay outside this repository.
+//! 路径在运行时提供，绝不提交。导出的 JSON 来自玩家本机的经典客户端，
+//! 必须留在本仓库之外。
 
 use std::path::Path;
 
@@ -37,7 +37,11 @@ fn main() {
                 hf.water_heights.len(),
                 hf.flags_packed.len()
             );
-            println!("  height_at(0,0)={:?} mainTileset={:?}", hf.height_at(0, 0), hf.main_tileset);
+            println!(
+                "  height_at(0,0)={:?} mainTileset={:?}",
+                hf.height_at(0, 0),
+                hf.main_tileset
+            );
             println!("units: {}", map.units.len());
             println!("doodads: {}", map.doodads.len());
             if let Some(unit) = map.units.first() {

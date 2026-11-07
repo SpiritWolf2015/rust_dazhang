@@ -1,8 +1,8 @@
-//! `terrain-heightfield.json` from `tools/map-parse` (parallel vertex arrays).
+//! `tools/map-parse` 产出的 `terrain-heightfield.json`（顶点平行数组）。
 //!
-//! Header fields follow `docs/architecture/MAP_DATA.md`: tilepoint dimensions
-//! are `mapWidth + 1` / `mapHeight + 1`, and every parallel array has
-//! `tilepointWidth * tilepointHeight` entries.
+//! 头部字段遵循 `docs/architecture/MAP_DATA.md`：瓦片点尺寸为
+//! `mapWidth + 1` / `mapHeight + 1`，每个平行数组的长度均为
+//! `tilepointWidth * tilepointHeight`。
 
 use serde::Deserialize;
 
@@ -36,11 +36,10 @@ pub struct TerrainHeightfield {
     #[serde(rename = "tileSize", default)]
     pub tile_size: Option<f64>,
 
-    /// Final ground height per tilepoint. Required.
+    /// 每个瓦片点的最终地面高度，必填。
     pub heights: Vec<f64>,
 
-    // Optional parallel arrays: absent in some exports, but when present they
-    // must have exactly vertex_count() entries.
+    // 可选平行数组：部分导出中缺失；一旦存在，长度必须恰好等于 vertex_count()。
     #[serde(rename = "groundTextures", default)]
     pub ground_textures: Vec<i64>,
     #[serde(rename = "groundVariations", default)]
@@ -78,7 +77,7 @@ impl TerrainHeightfield {
         self.tilepoint_width.checked_mul(self.tilepoint_height)
     }
 
-    /// Validate width/height consistency and every present parallel array.
+    /// 校验宽高一致性，以及每个存在的平行数组。
     pub fn validate(&self) -> Result<usize, HeightfieldError> {
         let expected = self
             .vertex_count()
@@ -126,9 +125,9 @@ impl TerrainHeightfield {
         Ok(expected)
     }
 
-    /// `index = iy * tilepointWidth + ix`, matching MAP_DATA.md.
+    /// `index = iy * tilepointWidth + ix`，与 MAP_DATA.md 一致。
     pub fn height_at(&self, ix: usize, iy: usize) -> Option<f64> {
-        // Without this, ix past the row width would wrap into the next row.
+        // 缺少此检查时，超出行宽的 ix 会绕到下一行。
         if ix >= self.tilepoint_width || iy >= self.tilepoint_height {
             return None;
         }

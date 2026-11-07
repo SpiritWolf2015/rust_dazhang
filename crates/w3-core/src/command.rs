@@ -1,8 +1,7 @@
-//! Player commands and the queue that freezes them into deterministic frames.
+//! 玩家命令，以及把命令冻结成确定性帧的队列。
 //!
-//! Execution order is `ExecuteFrame -> PlayerId -> Sequence -> ArrivalOrder`.
-//! A command is frozen (including its arrival number) at submission time; the
-//! queue never reorders by when a packet happened to arrive.
+//! 执行顺序为 `ExecuteFrame -> PlayerId -> Sequence -> ArrivalOrder`。
+//! 命令在提交时即被冻结（含到达序号），队列绝不按数据包到达的先后重排。
 
 use crate::entity::EntityId;
 use crate::fixed::SimFixed;
@@ -28,7 +27,7 @@ pub struct Command {
     pub player_id: u8,
     pub sequence: u32,
     pub kind: CommandKind,
-    /// Assigned by the queue at submission, so it cannot change afterwards.
+    /// 由队列在提交时分配，之后不再改变。
     arrival: u64,
 }
 
@@ -70,8 +69,8 @@ impl CommandQueue {
         Self::default()
     }
 
-    /// Validate, freeze the arrival number and enqueue. Acceptance does not
-    /// mean the command will execute successfully; `step()` re-validates.
+    /// 校验、冻结到达序号并入队。被接收不等于最终执行成功，
+    /// `step()` 会在执行时重新校验。
     pub fn submit(&mut self, command: Command) -> Result<u64, CommandError> {
         let invalid_entity = match command.kind {
             CommandKind::Move { entity, .. } | CommandKind::Stop { entity } => {
@@ -89,7 +88,7 @@ impl CommandQueue {
         Ok(arrival)
     }
 
-    /// Take every command due at or before `frame`, in the stable order.
+    /// 取出 `frame` 及之前到期的全部命令，按稳定顺序返回。
     pub fn freeze_frame(&mut self, frame: Frame) -> Vec<Command> {
         let (mut due, rest): (Vec<Command>, Vec<Command>) = self
             .pending
@@ -108,7 +107,7 @@ impl CommandQueue {
         self.next_arrival
     }
 
-    /// Snapshot restore only.
+    /// 仅供快照恢复使用。
     pub(crate) fn restore(next_arrival: u64, pending: Vec<Command>) -> Self {
         Self {
             pending,
@@ -124,7 +123,7 @@ mod tests {
     #[test]
     fn freeze_frame_uses_the_stable_sort_key() {
         let mut queue = CommandQueue::new();
-        // Deliberately out of order.
+        // 故意乱序提交。
         queue
             .submit(Command::new(Frame::new(2), 1, 9, CommandKind::Noop))
             .unwrap();
@@ -174,7 +173,7 @@ mod tests {
             .submit(Command::new(Frame::new(0), 1, 2, CommandKind::Noop))
             .unwrap();
         assert_eq!(second, 1);
-        // Re-submitting copies cannot change the recorded arrival order.
+        // 重复提交副本不会改变已记录的到达顺序。
         assert_eq!(queue.next_arrival(), 2);
     }
 

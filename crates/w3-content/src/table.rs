@@ -1,7 +1,7 @@
-//! `slk-exported/*.json` from `tools/slk-export` (one JSON per SLK table).
+//! `tools/slk-export` 产出的 `slk-exported/*.json`（每张 SLK 表一个 JSON）。
 //!
-//! Payload shape: `{ source, columns, rows, headers, recordCount, records }`.
-//! `records` is a list of row objects keyed by column name.
+//! 载荷结构：`{ source, columns, rows, headers, recordCount, records }`。
+//! `records` 是以列名为键的行对象列表。
 
 use std::collections::BTreeMap;
 
@@ -40,8 +40,8 @@ impl SlkTable {
         Ok(())
     }
 
-    /// First row whose `column` string equals `value`. BTreeMap keeps every
-    /// row's fields in a stable order regardless of JSON key order.
+    /// 返回 `column` 列的字符串等于 `value` 的第一行。
+    /// BTreeMap 保证行内字段顺序稳定，与 JSON 键顺序无关。
     pub fn find_row(&self, column: &str, value: &str) -> Option<&BTreeMap<String, Value>> {
         self.records
             .iter()

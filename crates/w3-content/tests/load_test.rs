@@ -1,5 +1,5 @@
-//! P1 acceptance: read a locally exported map directory and one SLK table.
-//! All fixtures here are synthetic (no game-derived content is committed).
+//! P1 验收：读取本机导出的地图目录与一张 SLK 表。
+//! 所有 fixture 均为合成数据，不提交任何游戏派生内容。
 
 use std::path::PathBuf;
 

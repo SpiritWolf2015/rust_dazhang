@@ -1,8 +1,7 @@
-//! The unique owner of authoritative match state.
+//! 权威对局状态的唯一所有者。
 //!
-//! `RtsMatch` is the only writer. Every public read returns an owned copy;
-//! no mutable internal collection is ever exposed. `step()` advances exactly
-//! one logic frame and takes no delta.
+//! `RtsMatch` 是唯一写入者；所有公开读取都返回所有权拷贝，
+//! 绝不暴露可变的内部集合。`step()` 恰好推进一个逻辑帧，不接受 delta。
 
 use std::collections::BTreeMap;
 
@@ -61,7 +60,7 @@ pub struct EntityView {
     pub has_target: bool,
 }
 
-/// Owned, read-only projection of the world. Mutating it cannot affect the sim.
+/// 具备所有权的只读世界视图，修改它不会影响模拟。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct WorldView {
     pub tick: u64,
@@ -80,7 +79,7 @@ pub struct RtsMatch {
     next_event_seq: u64,
 }
 
-/// Pure-integer LCG: the same state always produces the same successor.
+/// 纯整数 LCG：相同状态总是产生相同的后继状态。
 fn next_rng(state: u64) -> u64 {
     state
         .wrapping_mul(6_364_136_223_846_793_005)
@@ -133,23 +132,23 @@ impl RtsMatch {
         self.commands.submit(command)
     }
 
-    /// Complete one logic frame. No caller-supplied delta, no wall clock.
+    /// 完整推进一个逻辑帧；不接受调用方传入的 delta，也不读取墙钟。
     pub fn step(&mut self) {
         let frame = self.clock.current();
 
-        // 1. Freeze and execute this frame's commands in the stable order.
+        // 1. 冻结本帧命令，按稳定顺序执行。
         let due = self.commands.freeze_frame(frame);
         for command in due {
             self.apply(command, frame);
         }
 
-        // 2. Advance motion and other authoritative systems.
+        // 2. 推进移动及其他权威系统。
         self.advance_motions(frame);
 
-        // 3. Consume one RNG step per frame; the stream is part of the state.
+        // 3. 每帧消耗一次随机流；该流属于权威状态。
         self.rng = next_rng(self.rng);
 
-        // 4. Commit the frame.
+        // 4. 提交本帧。
         self.clock.advance();
     }
 
@@ -170,7 +169,7 @@ impl RtsMatch {
                 self.push_event(frame, id, EventKind::Spawned);
             }
             CommandKind::Move { entity, x, y } => {
-                // Re-validate at execution time: acceptance is not execution.
+                // 执行时重新校验：被接收不等于可执行。
                 if let Some(motion) = self
                     .motions
                     .get_mut(&entity)
@@ -194,7 +193,7 @@ impl RtsMatch {
 
     fn advance_motions(&mut self, frame: Frame) {
         let mut arrived = Vec::new();
-        // BTreeMap iteration is in stable EntityId order.
+        // BTreeMap 按稳定的 EntityId 顺序迭代。
         for (&id, motion) in self.motions.iter_mut() {
             if let Some((target_x, target_y)) = motion.target {
                 let dx = target_x.raw() - motion.x.raw();
@@ -259,7 +258,7 @@ impl RtsMatch {
     }
 
     pub fn drain_events(&mut self) -> Vec<Event> {
-        // The sequence counter deliberately does not reset when drained.
+        // 事件序号在取出后刻意不重置。
         std::mem::take(&mut self.events)
     }
 
@@ -299,8 +298,8 @@ impl RtsMatch {
         hasher.finish()
     }
 
-    /// Name the first field that differs, for desync diagnosis. Stable order,
-    /// so the reported field is reproducible.
+    /// 返回首个出现差异的字段名，用于 desync 诊断。
+    /// 比较顺序稳定，因此报告结果可复现。
     pub fn first_difference(&self, other: &Self) -> Option<&'static str> {
         if self.clock.current() != other.clock.current() {
             return Some("tick");
@@ -368,8 +367,8 @@ impl RtsMatch {
         }
     }
 
-    /// Rebuild a match from a frame-boundary snapshot. Historical events are
-    /// not replayed; the event sequence counter is restored instead.
+    /// 从帧边界快照重建对局。历史事件不会被重放，
+    /// 只恢复事件序号计数器。
     pub fn restore_snapshot(
         snapshot: Snapshot,
         expected_content_hash: u64,
@@ -445,7 +444,7 @@ mod tests {
         let view = sim.read_view();
         assert_eq!(view.entities.len(), 1);
         assert_eq!(view.tick, 1);
-        // The view cannot be used to mutate simulation state.
+        // 该视图无法用于修改模拟状态。
         assert_eq!(sim.read_view(), view);
     }
 

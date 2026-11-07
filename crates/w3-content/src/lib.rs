@@ -1,23 +1,19 @@
-//! P1 content reader: turn the upstream `godot_warcraft3` JSON exports into
-//! neutral Rust structures.
+//! P1 内容读取层：把上游 `godot_warcraft3` 导出的 JSON 转成中立的 Rust 结构。
 //!
-//! Scope (ADR 0003, P1): read `map-parsed/<slug>/` (terrain heightfield, unit
-//! and doodad placements) and `slk-exported/*.json` tables. **No native MPQ,
-//! SLK, MDX or W3X parser lives here** — the upstream Node tools own that step.
+//! 范围（ADR 0003 的 P1）：读取 `map-parsed/<slug>/`（地形高度场、单位与装饰物摆放）
+//! 以及 `slk-exported/*.json` 表。**本 crate 不含任何原生 MPQ、SLK、MDX 或 W3X
+//! 解析器**——该步骤由上游的 Node 工具负责。
 //!
-//! ## Determinism boundary (ADR 0002)
+//! ## 确定性边界（ADR 0002）
 //!
-//! Coordinates in this crate are the raw `f64` values from the upstream JSON.
-//! They are **frozen input data**, not authoritative simulation state: they
-//! never enter snapshots or state hashes, and `w3-core` does not depend on
-//! this crate. P2 must convert them to `SimFixed` through an explicitly frozen
-//! rounding rule before any value reaches the simulation.
+//! 本 crate 中的坐标是上游 JSON 的原始 `f64` 值，属于**冻结输入数据**，
+//! 不是权威模拟状态：绝不进入快照或状态哈希，且 `w3-core` 不依赖本 crate。
+//! P2 必须先冻结明确的舍入规则，再把这些值转换为 `SimFixed` 送入模拟。
 //!
-//! ## Asset boundary (ADR 0001)
+//! ## 资产边界（ADR 0001）
 //!
-//! This crate contains only readers. The JSON it consumes is derived from the
-//! player's own legally obtained classic client and must stay on their machine;
-//! none of it is committed to this repository. Tests use synthetic fixtures.
+//! 本 crate 只包含读取器。它读取的 JSON 派生自玩家本机合法获得的经典客户端，
+//! 必须留在本机；其中任何文件都不得提交进本仓库。测试使用合成 fixture。
 
 pub mod heightfield;
 pub mod load;

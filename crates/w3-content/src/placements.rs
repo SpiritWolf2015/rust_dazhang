@@ -1,8 +1,7 @@
-//! `units.json` (`war3mapUnits.doo`) and `doodads.json` (`war3map.doo`).
+//! `units.json`（`war3mapUnits.doo`）与 `doodads.json`（`war3map.doo`）。
 //!
-//! Only the fields P1 needs are read; all other upstream fields (inventories,
-//! abilities, dropped item sets, scales, …) are deliberately ignored by serde,
-//! so schema growth does not break the reader.
+//! 只读取 P1 所需字段；其余上游字段（背包、技能、掉落物品集、缩放等）由 serde
+//! 刻意忽略，因此上游 schema 增长不会破坏读取器。
 
 use serde::Deserialize;
 
@@ -15,7 +14,7 @@ pub struct Position3 {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct UnitPlacement {
-    /// FourCC unit type id, e.g. from `war3mapUnits.doo`.
+    /// FourCC 单位类型 ID，例如来自 `war3mapUnits.doo`。
     #[serde(rename = "typeId")]
     pub type_id: String,
     #[serde(default)]
@@ -33,7 +32,7 @@ pub struct UnitPlacement {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct DoodadPlacement {
-    /// FourCC doodad id.
+    /// FourCC 装饰物 ID。
     pub id: String,
     #[serde(default)]
     pub variation: i64,

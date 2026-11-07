@@ -1,0 +1,39 @@
+# 统一文本换行：覆盖 core.autocrlf=true，消除 CRLF 警告与跨平台差异。
+# 所有文本文件在索引中保存为 LF；工作区检出也强制 LF。
+* text=auto eol=lf
+
+# 明确声明常见文本文件，避免被自动判定为二进制。
+*.rs      text eol=lf
+*.toml    text eol=lf
+*.json    text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.md      text eol=lf
+*.py      text eol=lf
+*.sh      text eol=lf
+*.ps1     text eol=lf
+*.xml     text eol=lf
+*.txt     text eol=lf
+*.cfg     text eol=lf
+*.example text eol=lf
+*.wgsl    text eol=lf
+*.editorconfig text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+
+# 二进制资产（本项目不提交，仅防止误判）。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.mpq  binary
+*.blp  binary
+*.mdx  binary
+*.mdl  binary
+*.w3x  binary
+*.w3m  binary
+*.glb  binary
+*.bin  binary
+*.exe  binary
+*.dll  binary

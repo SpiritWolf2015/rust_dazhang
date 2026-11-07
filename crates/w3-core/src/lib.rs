@@ -1,18 +1,17 @@
-//! Deterministic, engine-independent RTS simulation kernel (P0 skeleton).
+//! 确定性、与引擎无关的 RTS 模拟内核（P0 骨架）。
 //!
-//! This crate owns the authoritative simulation state. It has no dependency on
-//! rendering, UI, audio, networking, file loading or wall-clock time.
+//! 本 crate 独占权威模拟状态，不依赖渲染、UI、音频、网络、文件加载或墙钟时间。
 //!
-//! Determinism contract (see `docs/decisions/0002-determinism.md`, to be added):
-//! - All authoritative state math uses [`fixed::SimFixed`] (integer only).
-//! - A match advances by whole logic frames; callers cannot supply a delta.
-//! - Commands are frozen per frame and executed in a stable order.
-//! - State hashing uses an explicit byte encoding and stable ID order.
-//! - The RNG stream is owned by the match and is part of every snapshot.
+//! 确定性契约（见 `docs/decisions/0002-determinism.md`）：
+//! - 所有权威状态数学只使用 [`fixed::SimFixed`] 整数运算。
+//! - 对局按整数逻辑帧推进，调用方不能传入 delta。
+//! - 命令按帧冻结后以稳定顺序执行。
+//! - 状态哈希使用显式字节编码与稳定 ID 顺序。
+//! - 随机流由对局独占，并写入每一份快照。
 //!
-//! Public entry points mirror the kernel contract: `create`, `submit_command`,
-//! `step`, `read_view`, `drain_events`, `capture_snapshot`,
-//! `restore_snapshot`, `compute_state_hash`, `first_difference`.
+//! 公共入口对应内核契约：`create`、`submit_command`、`step`、`read_view`、
+//! `drain_events`、`capture_snapshot`、`restore_snapshot`、
+//! `compute_state_hash`、`first_difference`。
 
 pub mod command;
 pub mod entity;

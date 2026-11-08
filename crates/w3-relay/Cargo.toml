@@ -1,0 +1,20 @@
+[package]
+name = "w3-relay"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Self-hosted lobby, authenticated frame clock and immutable command stream"
+
+[lib]
+name = "w3_relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "w3-relay"
+path = "src/main.rs"
+
+[dependencies]
+w3-core = { path = "../w3-core" }
+w3-net = { path = "../w3-net" }
+log = "0.4"
+thiserror = "2"

@@ -1,3 +1,5 @@
+> 相关 ADR：ADR 0001（资产与法律）、ADR 0002（确定性契约）、ADR 0004（冻结坐标与定点单位）。
+
 ## ADDED Requirements
 
 ### Requirement: Transmit only input commands

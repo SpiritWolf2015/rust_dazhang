@@ -1628,6 +1628,25 @@ name = "w3-core"
 version = "0.1.0"
 
 [[package]]
+name = "w3-net"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "thiserror 2.0.18",
+ "w3-core",
+]
+
+[[package]]
+name = "w3-relay"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "thiserror 2.0.18",
+ "w3-core",
+ "w3-net",
+]
+
+[[package]]
 name = "w3-render"
 version = "0.1.0"
 dependencies = [

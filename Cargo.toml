@@ -1,6 +1,14 @@
 # 虚拟 workspace：P0 为模拟内核，P1 增加上游导出 JSON 的读取器，
-# P2 增加注入冻结地图数据的 app 层消费者，P3 增加只读的 wgpu 3D 渲染层。
+# P2 增加注入冻结地图数据的 app 层消费者，P3 增加只读的 wgpu 3D 渲染层，
+# P4 增加确定性 lockstep 联机传输与自建 relay。
 # 只有出现真实消费者时才继续拆分 crate。
 [workspace]
-members = ["crates/w3-core", "crates/w3-content", "crates/w3-app", "crates/w3-render"]
+members = [
+    "crates/w3-core",
+    "crates/w3-content",
+    "crates/w3-app",
+    "crates/w3-render",
+    "crates/w3-net",
+    "crates/w3-relay",
+]
 resolver = "3"

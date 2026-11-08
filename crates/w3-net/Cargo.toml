@@ -1,0 +1,15 @@
+[package]
+name = "w3-net"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Deterministic lockstep command transport (reliable UDP, framing, per-frame checksums)"
+
+[lib]
+name = "w3_net"
+path = "src/lib.rs"
+
+[dependencies]
+w3-core = { path = "../w3-core" }
+log = "0.4"
+thiserror = "2"

@@ -28,6 +28,8 @@ tools:
 - UTF-8 无 BOM、LF；不得用 PowerShell 写文件。
 - 不得在文档中写入本机真实路径作为仓库内固定值（路径只出现在 `config.toml.example` 的示例与 `UPSTREAM.md` 的本机记录中）。
 - 不得把"已实现"写成"已验证跨平台"；不得声称 JASS / 自定义地图在第一版范围内。
+- **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
+- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
 
 ## 禁止
 

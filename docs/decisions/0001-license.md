@@ -7,13 +7,14 @@
 
 ## 背景（Context）
 
-新项目 `rust_dazhang` 从零用 Rust 编写，**不复制任何上游仓库的代码**，只借鉴设计与格式规格。三个参考项目的许可证：
+新项目 `rust_dazhang` 从零用 Rust 编写，**不复制任何上游仓库的代码**，只借鉴设计与格式规格。四个参考项目的许可证：
 
 | 上游 | 许可证 | 备注 |
 |---|---|---|
 | `vera20k` | GPLv3 + Section 7 附加条款 | `README.md:142`、`LICENSE-GPL` 为 v3 全文，无 "or later"；附加条款见 `LEGAL.md` |
 | `godot_warcraft3` | MIT | |
 | `rts_kernel_cs` | MIT | |
+| `WarsmashModEngine` | AGPLv3 | Java / LibGDX 的 WC3 模拟器；仅只读参考，**不复制代码**。与 GPLv3 组合有条件，引入前须按本 ADR 复核点重新评估 |
 
 发起人的核心诉求是：**防止他人把本项目成果做成闭源商业产品**。同时希望许可证尽量简单、不要自定义条款，并在将来有条件地允许与 `vera20k` 交换代码。
 
@@ -55,6 +56,7 @@
 - **不阻止私有修改自用**，也不阻止他人用原创资产另立品牌竞争。
 - **copyleft 也约束发起人自己**：接受外部贡献后，改许可证或做商业双许可需逐个取得同意。
 - 贡献者门槛高于 MIT/Apache；部分组织规避 GPL 依赖。
+- 参考项目 `WarsmashModEngine` 为 AGPLv3，与 GPLv3 组合有条件；当前只作只读设计参考，不引入其代码。
 
 **不覆盖**
 
@@ -66,5 +68,6 @@
 出现以下情况时重新评估本 ADR：
 
 - 决定直接引入 `vera20k` 代码（需同时审查其 `LEGAL.md` 附加条款）；
+- 决定引入 `WarsmashModEngine`（AGPLv3）或其它与 GPLv3 组合有条件的上游代码；
 - 项目形态转为以托管联机服务为主（评估 AGPLv3）；
 - 计划商业双许可（需先落地 DCO/CLA）。

@@ -27,6 +27,8 @@ tools:
 - 导出数据一律留在上游本机目录；**禁止复制、提交或打包任何 MPQ 派生文件**。
 - 命令输出用英文；若需写临时脚本，注释用中文且文件不入库。
 - 不得修改上游仓库的源码或配置。
+- **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
+- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine`（AGPLv3）是 Java 模拟器，**不参与 dev-setup 导出链路**，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
 
 ## 禁止
 

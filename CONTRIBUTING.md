@@ -1,6 +1,6 @@
 # 贡献指南
 
-开发约定以 [`CODEBUDDY.md`](CODEBUDDY.md) 为**单一权威**：UTF-8 无 BOM / LF 编码基线、源码注释（含 `pub` rustdoc）中文、日志与错误英文、UI 文案走 i18n、以及 git 权限矩阵。本文件只引用，不另立规则。
+开发约定以 [`CODEBUDDY.md`](CODEBUDDY.md) 为**单一权威**：UTF-8 无 BOM / LF 编码基线、源码注释（含 `pub` rustdoc）中文、日志与错误英文、UI 文案走 i18n、Rust 源码遵循官方 rustfmt 默认风格、以及 git 权限矩阵。本文件只引用，不另立规则。
 
 **Git 边界（强制）**：AI 可执行 `status` / `log` / `diff` / `show` / `add` / `commit` 等本地操作；`push` / `fetch` / `pull` / `clone` / `submodule update` / `remote set-url` / `gh pr ...` 等所有远端同步命令**仅由程序员手动执行**，由 `.codebuddy/settings.json` 的 `permissions.deny` 与 `PreToolUse` hook 强制拦截。
 
@@ -33,13 +33,14 @@ cargo test -p w3-core --test determinism -- --nocapture
 ## 测试与格式
 
 - 每个修复或功能配 1–3 个聚焦回归测试，走生产代码，用边界用例，不做网格扫描或全量穷举。
-- 提交前运行 `cargo fmt --all -- --check` 与 `cargo test --workspace`。
+- **写完 Rust 源码先运行 `cargo fmt --all`**，按 Rust 官方 `rustfmt` 默认风格自动排版（仓库无 `rustfmt.toml`）。
+- **提交前 MUST 运行 `cargo fmt --all -- --check` 与 `cargo test --workspace`**，两者不通过不得提交；`critic` 在提交前 review 会复跑格式校验。
 - 单元测试随模块写在 `#[cfg(test)]` 里（`--lib`）；跨模块验收写成集成测试（`--test <name>`）。
 
 ## 分支与提交
 
 - 从 `main` 建 `feature/<topic>` 分支，PR 目标 `main`；不直接向 `main` 提交或推送。
-- commit message 用英文、祈使句，首行不超过 72 字符；正文说明"改了什么 / 为什么 / 怎么验证"。
+- commit message 用 Conventional Commits：英文 type 前缀（`feat:` / `fix:` / `docs:` / `chore:` 等）保留，**描述一律中文**（与源码中文注释规则一致，见 `CODEBUDDY.md` 第 3 节），首行不超过 72 字符；正文用中文说明"改了什么 / 为什么 / 怎么验证"。
 - 一个改动一个 PR，保持小；无关发现另开 Issue，描述位置与影响即可。
 - 贡献者署名以你希望公开的 GitHub 用户名或姓名为准；Git 本地配置不会自动建立该偏好。
 

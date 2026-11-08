@@ -6,13 +6,14 @@
 
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
 - 阶段：P0 / P1 已实现并归档，P2–P5 为 active OpenSpec changes（见 ADR 0003）。主 specs：`deterministic-simulation`、`content-import`。
-- 参考项目只读：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
+- 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 
 ## 2. 编码与换行（硬性基线）
 
 - 所有源码、配置与文档文件：**UTF-8 无 BOM**、**LF** 换行、文件末尾有换行、无行尾空格。
 - 权威文件：`.editorconfig`（编辑器）、`.gitattributes`（覆盖 `core.autocrlf=true`，消除 CRLF 警告）。
 - 检查命令：`python tools/check_encoding.py`（本地 pre-commit 与 CI 都执行）。
+- **Rust 源码格式一律遵循 Rust 官方 `rustfmt` 默认风格**（仓库无 `rustfmt.toml` / `.rustfmt.toml`）。所有写 Rust 源码的 subagent 写完后 MUST 运行 `cargo fmt --all` 格式化；提交前 MUST 运行 `cargo fmt --all -- --check` 校验，不通过不得提交。
 - Windows 注意：PowerShell 5.1 的 `-Encoding utf8` **会写入 BOM**，默认更是 UTF-16 LE；**禁止用 PowerShell 生成源码或配置文件**，改用 Write 工具、Node 或 Python（写文件时用 `UTF8Encoding($false)`）。终端使用 Windows Terminal 或 `chcp 65001`。
 - 中文注释本身不会乱码；乱码的根因是编码/换行不一致，不靠改变注释语言解决。注释语言是团队约定，编码基线才是防乱码手段。
 
@@ -22,6 +23,7 @@
 - **日志输出、错误信息一律英文**：`log` crate + `RUST_LOG`，结构化 `key=value`；`thiserror` / `anyhow` 错误文本与 `panic!` 文本用英文；禁止把中文路径或中文消息拼进日志，禁止散落的 `println!`。
 - **UI 文案走 i18n，可用中文**；UI 文本不进日志、不进权威状态、不进状态哈希。
 - 工具脚本（`tools/*.py`）的注释中文、运行输出英文，同样遵守本条。
+- **git 提交信息（commit message）描述一律中文**，与源码注释规则一致；Conventional Commits 的英文 type 前缀（`feat:` / `fix:` / `docs:` / `chore:` 等）保留，仅描述文本用中文。
 - 例外：由工具生成、会被自动覆盖的文件不纳入手工注释语言规则，其文本由生成器决定——包括 `Cargo.lock`、OpenSpec archive 生成的主 spec 标题，以及 `.codebuddy/commands/` 与 `.codebuddy/skills/` 中 OpenSpec init 生成的指令文件。项目自己编写的 `.codebuddy/agents/` 必须中文。
 
 ## 4. Git 权限矩阵（AI 强制）
@@ -37,7 +39,7 @@
   1. **文档约定**：本文件 + `CONTRIBUTING.md`。
   2. **工具层**：`.codebuddy/settings.json` 的 `permissions.deny`（优先级最高，`bypassPermissions` 也不能绕过）+ `PreToolUse` hook `tools/guard_git_remote.py`（正则兜底，防止规则语法漏匹配）。
   3. **CI / 本地门禁**：`tools/verify_all.py` + `.github/workflows/ci.yml`（若托管平台非 GitHub，把同一命令配到其流水线）。
-- 提交规范：Conventional Commits（`feat:` / `fix:` / `docs:` / `chore:`）、英文祈使句首行 ≤ 72 字符、一个改动一个 commit / PR、PR 描述约 15 行。
+- 提交规范：Conventional Commits（英文 type 前缀 `feat:` / `fix:` / `docs:` / `chore:` 保留）、**中文描述首行 ≤ 72 字符**（语言规则见第 3 节）、一个改动一个 commit / PR、PR 描述约 15 行。
 
 ## 5. 确定性硬门禁（ADR 0002）
 
@@ -61,7 +63,8 @@
 | 确定性验收 | `cargo test -p w3-core --test determinism -- --nocapture` |
 | 内容层测试 | `cargo test -p w3-content` |
 | 全量测试 | `cargo test --workspace` |
-| 格式 | `cargo fmt --all -- --check` |
+| 格式（提交前校验） | `cargo fmt --all -- --check` |
+| 格式（写完自动排版） | `cargo fmt --all` |
 | 编码 | `python tools/check_encoding.py` |
 | 统一门禁 | `python tools/verify_all.py` |
 | 端到端加载 | `cargo run -p w3-content --example load_export -- <map-dir> <table.json>` |
@@ -88,6 +91,8 @@
 
 - 定义文件在 `.codebuddy/agents/`；每个 subagent 声明 own files 与 tools，继承 `permissions.deny`；critic 只读；Agent Team 的 leader 只编排不写。
 - 串联：`/opsx:propose` → `spec-steward` → `/opsx:apply`（对应 owner）→ `critic` → 本地 commit → **人工 push** → `/opsx:archive`。
+- **Rust 源码格式化门禁（所有写 Rust 的 subagent）**：写代码时即按 `rustfmt` 默认风格组织；写完后先 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`；`critic` 在提交前 review MUST 复跑该校验，不通过不得提交。提交信息描述按第 3 节用中文。
+- **只读参考项目共四个**（见第 1 节 / `docs/references/UPSTREAM.md`）：`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考；四个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。
 
 ## 10. AI 与人工的责任边界
 

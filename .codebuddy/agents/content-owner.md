@@ -28,6 +28,8 @@ tools:
 - 原始 `f64` 坐标是**冻结输入**，不得进入权威状态 / 快照 / 状态哈希；`w3-core` 不依赖本 crate；P2 之前不得擅自把浮点混入模拟。
 - 源码注释（含 `pub` API rustdoc）一律中文；日志/错误英文；UTF-8 无 BOM、LF。
 - 保持 serde 忽略未知字段；不得把上游全部字段硬编码进结构体。
+- **Rust 源码写完先 `cargo fmt --all`**，提交前 `cargo fmt --all -- --check`；提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）。
+- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
 
 ## 验收
 

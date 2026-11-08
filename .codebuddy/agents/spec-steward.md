@@ -32,6 +32,8 @@ tools:
 - `design` 每个决策列出 alternatives considered，并说明对跨平台确定性的影响。
 - `tasks` 全部使用 `- [ ] X.Y ...` 复选框；涉及确定性代码的改动必须包含重跑 `tests/determinism.rs` 的任务。
 - 一个 change 一个 owner；不要同时改多个 owner 的文件。
+- **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
+- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
 
 ## 禁止
 

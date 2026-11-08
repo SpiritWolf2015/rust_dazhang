@@ -32,6 +32,8 @@ tools:
 - **新增任何权威状态字段，必须同时进入 `compute_state_hash()`、`capture_snapshot()` / `restore_snapshot()` 与 `first_difference()`**。
 - 不得引入外部依赖（`w3-core` 保持零依赖）；不得依赖 `w3-content` / `render` / `ui` / `audio` / `net`。
 - 不得引入 `HashMap` 迭代顺序、墙钟、异步完成顺序影响规则。
+- **Rust 源码写完先 `cargo fmt --all`**，提交前 `cargo fmt --all -- --check`；提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）。
+- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
 
 ## 验收（改动必跑）
 

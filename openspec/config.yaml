@@ -16,7 +16,8 @@ context: |
   资产与法律边界（ADR 0001）：仓库不含暴雪资产，也不含 MPQ 派生的
   JSON/PNG/GLB/音效。玩家自备经典 1.27a 客户端；导出数据留在
   C:/open_rts/godot_warcraft3/assets，通过被 gitignore 的 config.toml 路径读取。
-  只读参考项目：vera20k (GPLv3)、godot_warcraft3 (MIT)、rts_kernel_cs (MIT)，
+  只读参考项目共四个：vera20k (GPLv3)、godot_warcraft3 (MIT)、
+  rts_kernel_cs (MIT)、WarsmashModEngine (AGPLv3，仅参考、不复制代码)，
   见 docs/references/UPSTREAM.md 与 NOTICE.md。
 
   验收命令：cargo test --workspace；cargo fmt --all -- --check。
@@ -27,7 +28,10 @@ context: |
   Mod API、跨版本存档、Godot 宿主、官方战网。
 
   开发约定见 CODEBUDDY.md：源码注释（含 pub rustdoc）一律中文；
-  日志与错误信息一律英文；所有文件 UTF-8 无 BOM、LF；
+  git 提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）；
+  日志与错误信息一律英文；Rust 源码遵循官方 rustfmt 默认风格，
+  写完 cargo fmt --all、提交前 cargo fmt --all -- --check；
+  所有文件 UTF-8 无 BOM、LF；
   AI 不得执行 git push / fetch / pull / clone 等远端同步命令。
 
 rules:

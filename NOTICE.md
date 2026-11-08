@@ -10,17 +10,18 @@
 
 ## 上游参考项目
 
-下表三个项目为**只读参考**，用于设计借鉴与格式规格；它们的代码不进入本仓库，也不作为 git 子模块引入。
+下表四个项目为**只读参考**，用于设计借鉴与格式规格；它们的代码不进入本仓库，也不作为 git 子模块引入。
 
 | 项目 | 许可证 / 版权 | 借鉴内容 | 本地参考路径 |
 |---|---|---|---|
 | `vera20k` | GPLv3 + Section 7 附加条款；Copyright © 2026 Halvor Nikolai Rusten and VERA20K contributors | 确定性 lockstep、定点数、命令队列、全状态哈希、UDP 可靠层与 relay 架构、crate 拆分与依赖纪律 | `C:/open_rts/vera20k` |
 | `godot_warcraft3` | MIT；Copyright (c) 2026 李维民 | WC3 MPQ / SLK / BLP / MDX / W3X 格式规格、资产三车道与"工具入库、资产留本机"合规模型；P1 起读取其本机导出 JSON | `C:/open_rts/godot_warcraft3` |
 | `rts_kernel_cs` | MIT；Copyright (c) 2026 李维民 | 模拟内核 API 契约、唯一状态所有者、帧阶段顺序、命令稳定排序、快照与状态哈希设计 | `C:/open_rts/rts_kernel_cs` |
+| `WarsmashModEngine` | AGPLv3；作者 Retera（见其 `README.md`），根目录 `LICENSE` 为 AGPLv3 全文 | Java / LibGDX 的 WC3 模拟器：JASS / 触发器语义、MPQ 与 CASC 数据源、单位与技能玩法行为（只读参考，不复制代码） | `C:/open_rts/WarsmashModEngine` |
 
 固定参考的提交与各自用途详见 [`docs/references/UPSTREAM.md`](docs/references/UPSTREAM.md)。
 
-MIT 条款要求保留版权与许可声明。若将来引入其中任一项目的代码片段，须在对应文件保留其原始版权头，并在此处登记来源与许可证。
+MIT 条款要求保留版权与许可声明；`WarsmashModEngine` 为 AGPLv3，与本项目 GPLv3 组合有条件，未经 ADR 0001 复核不得引入其代码。若将来引入其中任一项目的代码片段，须在对应文件保留其原始版权头，并在此处登记来源与许可证。
 
 ## 第三方资产与商标
 

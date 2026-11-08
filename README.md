@@ -91,15 +91,16 @@ P0 只建 `w3-core` 一个 crate；P1 才增加 `w3-content`，因为出现了�
 
 ## 参考的上游项目
 
-三者均为**只读参考**，不复制其代码进本仓库，也不作为 git submodule 引入；本地路径记录在 `docs/references/UPSTREAM.md`（待补）。
+四者均为**只读参考**，不复制其代码进本仓库，也不作为 git submodule 引入；本地路径与固定提交记录在 `docs/references/UPSTREAM.md`。
 
 | 项目 | 许可证 | 借鉴内容 |
 |---|---|---|
 | `vera20k` | GPLv3 + 附加条款 | 确定性 lockstep、定点数、命令队列、全状态哈希、UDP 可靠层与 relay 架构、crate 拆分与依赖纪律 |
 | `godot_warcraft3` | MIT | MPQ / SLK / BLP / MDX / W3X 格式规格、资产三车道与"工具入库、资产留本机"的合规模型；过渡期直接读其导出 JSON |
 | `rts_kernel_cs` | MIT | 模拟内核 API 契约、唯一状态所有者、每帧阶段顺序、命令稳定排序、快照与状态哈希设计 |
+| `WarsmashModEngine` | AGPLv3 | Java / LibGDX 的 WC3 模拟器：JASS / 触发器语义、MPQ 与 CASC 数据源、单位与技能玩法行为（只读参考，不复制代码） |
 
-致谢与版权声明见 `NOTICE.md`（待补）。三者均不含游戏资产，本项目的资产合规模型与它们一致。
+致谢与版权声明见 `NOTICE.md`。四者均不含游戏资产，本项目的资产合规模型与它们一致；`WarsmashModEngine` 为 AGPLv3，与本项目 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。
 
 ## 贡献
 

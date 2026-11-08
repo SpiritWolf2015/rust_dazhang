@@ -1,6 +1,6 @@
 # 上游参考项目（只读）
 
-本文件固定三个只读参考项目的**本地路径、提交与用途**。它们不是本仓库的子模块，代码不进入本仓库；借鉴边界见 [ADR 0001](../decisions/0001-license.md)、[ADR 0003](../decisions/0003-scope.md) 与 `NOTICE.md`。
+本文件固定四个只读参考项目的**本地路径、提交与用途**。它们不是本仓库的子模块，代码不进入本仓库；借鉴边界见 [ADR 0001](../decisions/0001-license.md)、[ADR 0003](../decisions/0003-scope.md) 与 `NOTICE.md`。
 
 ## 固定参考版本
 
@@ -9,14 +9,16 @@
 | `vera20k` | `C:/open_rts/vera20k` | `7942296fb` | https://github.com/YuriPlanet/vera20k | GPLv3 + Section 7 附加条款 |
 | `godot_warcraft3` | `C:/open_rts/godot_warcraft3` | `18b7a70` | https://github.com/LiGameAcademy/godot_warcraft3 | MIT |
 | `rts_kernel_cs` | `C:/open_rts/rts_kernel_cs` | `edb8790` | https://github.com/LiGameAcademy/rts_kernel_cs | MIT |
+| `WarsmashModEngine` | `C:/open_rts/WarsmashModEngine` | `f9e0aeed4be372d6016519d0e97b384aa873f374` | https://github.com/Retera/WarsmashModEngine | AGPLv3 |
 
-这些提交是 2026-11-07 记录时的本地 HEAD，仅用于定位参考；升级时显式更新本表并重新核对相关文档。
+前三项是 2026-11-07 记录时的本地 HEAD，`WarsmashModEngine` 是 2026-11-08 克隆时的本地 HEAD（提交日期 2025-12-08）。这些提交仅用于定位参考；升级时显式更新本表并重新核对相关文档。
 
 ## 各自提供什么
 
 - **`vera20k`**：确定性 lockstep、定点数、命令队列、全状态哈希、UDP 可靠层与 relay 架构、crate 拆分与依赖纪律。其 `src/net/` 与 `services/relay-protocol` 是 P4 的设计参考；RA2 专属部分（gamemd 原生地址、INI 规则、SHP/VXL 资产、2D 等距渲染）不借鉴实现。注意其 `LEGAL.md` 附加条款：**只有真的复制其代码时**才随之进入（见 ADR 0001）。
 - **`godot_warcraft3`**：WC3 数据 / 资产格式规格与合规模型。关键文档：`docs/data/PIPELINE.md`、`docs/data/WC3_ASSET_PATHS.md`、`docs/data/CONTENT_PACKS.md`、`docs/architecture/ASSET_LANES.md`、`docs/architecture/MAP_DATA.md`、`docs/design/asset-convert/`（MDX 骨骼与蒙皮、BLP、粒子 PE2、挂点拼装）。工具：`tools/mpq-extract`、`tools/slk-export`、`tools/map-parse`、`tools/asset-convert`。
 - **`rts_kernel_cs`**：模拟内核契约（`docs/FRAMEWORK.md`、`docs/NAVIGATION.md`、`docs/MOVEMENT.md`）、移动 / 寻路 / 编队语义，以及游戏仓库 `docs/architecture/RTS_KERNEL.md` 的帧阶段与快照契约。注意其 `double` 数值路线与"不承诺跨平台确定性"**不被本项目采用**（见 [ADR 0002](../decisions/0002-determinism.md)）。
+- **`WarsmashModEngine`**：Java / LibGDX 实现的 WC3 模拟器，含 JASS / 触发器解析（`jassparser/`）、FDF / 界面解析、MPQ 与 CASC 数据源、完整单位 / 技能 / 玩法行为。作为 JASS 语义、地图与 UI 格式、玩法行为的**只读参考**（ADR 0003 所列远期项）。其许可证为 **AGPLv3**，与本项目 GPLv3 不同：只借鉴设计，**不得复制代码**；若将来需要引入其代码，须按 [ADR 0001](../decisions/0001-license.md) 复核点重新评估许可证兼容性，不得直接并入。
 
 ## 本机游戏客户端
 
@@ -58,4 +60,4 @@ cargo run -p w3-content --example load_export -- \
 
 ## 合规
 
-工具与解析代码入库；资产留在玩家本机；仓库不含任何暴雪资产或派生文件。上游依据：`godot_warcraft3/docs/data/LEGAL.md`；本项目依据：`README.md` 免责声明、[ADR 0001](../decisions/0001-license.md)。
+工具与解析代码入库；资产留在玩家本机；仓库不含任何暴雪资产或派生文件。四个参考项目均为只读、不复制代码；其中 `WarsmashModEngine` 为 AGPLv3，与本项目 GPLv3 组合有条件，仅作设计参考。上游依据：`godot_warcraft3/docs/data/LEGAL.md`；本项目依据：`README.md` 免责声明、[ADR 0001](../decisions/0001-license.md)。

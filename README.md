@@ -95,7 +95,7 @@ rust_dazhang/
 │   ├─ check_encoding.py   编码 / 换行基线
 │   ├─ guard_git_remote.py 远端命令兜底 hook
 │   └─ verify_all.py       统一门禁
-├─ docs/decisions/         ADR 0001–0004
+├─ docs/decisions/         ADR 0001–0005
 └─ docs/references/UPSTREAM.md
 ```
 

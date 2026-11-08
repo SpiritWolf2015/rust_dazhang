@@ -11,5 +11,9 @@ path = "src/lib.rs"
 
 [dependencies]
 w3-core = { path = "../w3-core" }
+prost = "0.13"
 log = "0.4"
 thiserror = "2"
+
+[build-dependencies]
+prost-build = "0.13"

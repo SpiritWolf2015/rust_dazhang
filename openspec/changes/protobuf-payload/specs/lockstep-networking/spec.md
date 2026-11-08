@@ -23,7 +23,7 @@
 #### Scenario: 禁用不确定编码
 
 - **WHEN** 定义或生成 `.proto` schema 并编码同一批命令
-- **THEN** schema 不含 `map` 字段、未知字段被拒绝、生成代码在 Windows / Linux 双平台编码结果逐字节一致
+- **THEN** schema 不含 `map` 字段、未知字段被丢弃且不回显、生成代码在 Windows / Linux 双平台编码结果逐字节一致
 
 #### Scenario: 定点数值无浮点
 

@@ -102,3 +102,5 @@ cargo run -p w3-net --example lockstep_client -- 127.0.0.1:9000 2 30
 `vera20k` 代码；导出资产与密钥仍留在本机，绝不入库（ADR 0001）。
 `NOTICE.md` 的「第三方 crate 依赖（P3 w3-render）」一节所列依赖同样覆盖
 本 change 使用的 `log` / `thiserror`，无需新增条目。
+
+> **后续演进注记（2026-11-08）**：本文件记录的是 P4 归档时的状态，不追溯改写。ADR 0005 之后，独立 change `protobuf-payload` 已把 payload 层改用 Protocol Buffers（`prost`），新增 crates.io 依赖并打破「零新依赖 / 离线可编译」；`W3N1` 帧头保持不变。当前依赖登记见 `NOTICE.md` 的「第三方 crate 依赖（P4 / protobuf-payload）」一节。

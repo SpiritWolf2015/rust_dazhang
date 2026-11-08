@@ -3,7 +3,7 @@
 - **状态**：Accepted（设计决策已定；代码实施由后续独立 OpenSpec change 承载，尚未落地）
 - **日期**：2026-11-08
 - **相关**：[ADR 0001](0001-license.md)、[ADR 0002](0002-determinism.md)、[ADR 0003](0003-scope.md)、[ADR 0004](0004-frozen-coordinates.md)；`crates/w3-net/`、`crates/w3-relay/`
-- **实现对应**：待实施（P4 已归档于 `2026-11-08-p4-lockstep-networking`；实施走后续独立 change）
+- **实现对应**：独立 OpenSpec change `protobuf-payload`（`openspec/changes/protobuf-payload/`；artifacts 与代码实施已完成，归档前以该 change 的 tasks 为准）
 - **修订**：P4 `design.md` 决策一中「用通用序列化框架（serde / protobuf）承载 Event：否决」一条，修订为「仅载荷层采用 protobuf，帧头仍为自有 `W3N1`」
 
 ## 背景（Context）
@@ -72,7 +72,7 @@ protobuf 默认的「灵活性」在此场景是风险，实施时 MUST 全部�
 - 与 P4 归档 `design.md` 决策一的否决条冲突 —— 本 ADR 明确修订该条；P4 已归档，不做追溯改写，后续 change 的 design 须引用本 ADR 编号。
 - 字节布局部分外包给库实现，包级日志 / 回放的字节稳定性不再由本项目单独保证，依赖第 3 节 canonical 约束；若约束被破坏，需按 ADR 0002 复核点重新评估。
 - 第一版规模（双客户端、每帧少量命令）下体积与性能收益有限，本次决策主要面向未来演进，不声称解决 20,000 单位 / 30 人规模（[ADR 0003](0003-scope.md) 的 Non-Goals）。
-- **本 ADR 仅记录决策，未实施任何代码**；在后续 change 落地前不得声称网络层已使用 protobuf。
+- 本 ADR 只记录「为什么决定」；系统行为由 `protobuf-payload` change 的 spec 描述，实施状态以该 change 的 tasks 为准，不在 ADR 内重复维护。
 
 ## 复核点
 

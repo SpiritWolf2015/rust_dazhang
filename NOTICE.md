@@ -44,6 +44,22 @@ P3 新增 `crates/w3-render`（wgpu 3D 渲染层）引入以下 crates.io 依赖
 - `WarsmashModEngine`（AGPLv3）仍仅为只读参考，**未引入其代码**。
 - 资产边界不变：导出 JSON / PNG / GLB 等资产留在本机，绝不入库（见 [ADR 0001](docs/decisions/0001-license.md)）。
 
+## 第三方 crate 依赖（P4 / protobuf-payload）
+
+[ADR 0005](docs/decisions/0005-protobuf-payload.md) 与 `protobuf-payload` change 把 `W3N1` 包的 payload 层改用 Protocol Buffers，新增以下 crates.io 依赖；许可证结论已逐一核对各 crate 的 `Cargo.toml`：
+
+| crate | 版本 | 许可证 |
+|---|---|---|
+| `prost` | 0.13.5 | Apache-2.0 |
+| `prost-build`（build-dependency） | 0.13.5 | Apache-2.0 |
+| `prost-derive` / `prost-types`（传递依赖） | 0.13.5 | Apache-2.0 |
+| `prettyplease` / `petgraph` / `multimap` / `heck` / `itertools` / `tempfile` / `regex`（`prost-build` 传递依赖） | 见 `Cargo.lock` | MIT OR Apache-2.0 |
+
+- 上述均为 Apache-2.0 或 MIT OR Apache-2.0 宽松许可，与本项目 GPLv3 兼容；均为 crates.io 依赖，版本由 `Cargo.lock` 锁定，**未复制任何上游源码进仓库**，沿用「本项目为独立从零编写」的声明。
+- 生成代码由 `build.rs` 调用 `protoc` 在构建期产生，不属于提交进仓库的第三方源码；CI 双平台须安装同版本 protoc 以保证生成结果一致。
+- `W3N1` 帧头仍为本项目自有实现（显式小端 + FNV-1a），未引入第三方线格式代码（见 [ADR 0002](docs/decisions/0002-determinism.md)）。
+- 其余传递依赖未逐一核验，`Cargo.lock` 为依赖图权威清单。
+
 ## 第三方资产与商标
 
 Warcraft、Warcraft III、The Frozen Throne 及相关名称、美术、音乐与游戏内容归其各自权利人所有。本项目与暴雪娱乐无关联、未获其授权或背书。玩家须自备合法获得的经典客户端；仓库不分发任何资产或由资产派生的文件。

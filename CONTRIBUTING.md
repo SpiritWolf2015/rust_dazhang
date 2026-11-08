@@ -12,7 +12,13 @@
 
 ## 开发前
 
+`w3-net` 的 `build.rs` 用 `prost-build` 调用 `protoc` 生成消息类型，本机需安装
+`protoc`（CI 由 `.github/workflows/ci.yml` 的 `setup-protoc` 提供）。版本见
+`NOTICE.md` 与 CI 配置；双平台保持同版本以保证生成结果一致（见
+[ADR 0005](docs/decisions/0005-protobuf-payload.md)）。
+
 ```bash
+protoc --version   # 需可用，例如 libprotoc 31.1
 cp config.toml.example config.toml   # 本机路径，不提交
 cargo test -p w3-core --lib
 cargo test -p w3-core --test determinism -- --nocapture

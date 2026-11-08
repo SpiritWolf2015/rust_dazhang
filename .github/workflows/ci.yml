@@ -23,6 +23,14 @@ jobs:
         with:
           components: rustfmt
 
+      # w3-net 的 build.rs 用 prost-build 调用 protoc 生成消息类型；双平台须
+      # 安装同版本 protoc，保证生成结果与字节编码一致（ADR 0005 / protobuf-payload）。
+      - name: Setup protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "31.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

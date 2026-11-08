@@ -5,7 +5,8 @@
 //! 提交，使 `Command.arrival` 在每个客户端一致（见 ADR 0002）。
 //!
 //! 模块分层：
-//! - [`packet`]：本项目私有 `W3N1` 线格式（不复用 RA2 包布局）。
+//! - [`packet`]：本项目私有 `W3N1` 帧头（25B，显式小端 + FNV-1a；不复用 RA2 包布局）。
+//! - [`payload`]：payload 层的 Protocol Buffers 编解码（ADR 0005；帧头布局保持不变）。
 //! - [`transport`]：真实 UDP 与可注入故障的内存回环。
 //! - [`reliable`]：按 sequence 去重、ACK、确定性 tick 重传。
 //! - [`frame`]：帧边界编排（客户端排序 / relay 缺失输入关闭）。
@@ -18,6 +19,7 @@ pub mod error;
 pub mod frame;
 pub mod logging;
 pub mod packet;
+pub mod payload;
 pub mod reconnect;
 pub mod reliable;
 pub mod session;

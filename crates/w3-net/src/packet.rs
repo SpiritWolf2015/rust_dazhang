@@ -1,18 +1,27 @@
-//! 本项目私有 Event 线格式（W3N1）。
+//! 本项目私有 Event 线格式（W3N1）的帧头。
 //!
 //! 借鉴 `vera20k` 的 lockstep / reliable UDP 架构，但**不复用**其 RA2
-//! `FRAMEINFO` / `FRAMESYNC` 包布局：magic、包头、命令编码与校验和全部
-//! 自定义，显式小端整数编码，与 ADR 0002 的确定性字节约定一致。
-//! 只编码玩家输入命令，绝不编码游戏状态。
-
-use w3_core::{Command, CommandKind, EntityId, Frame, SimFixed};
+//! `FRAMEINFO` / `FRAMESYNC` 包布局：magic、包头与校验和自定义，显式小端
+//! 整数编码，与 ADR 0002 的确定性字节约定一致。
+//! payload 层改用 Protocol Buffers（见 `payload.rs` / ADR 0005）；**帧头
+//! 的 25B 布局与处理逻辑保持不变**，继续承载帧号、sequence、版本与校验。
 
 use crate::error::NetError;
 
+// payload 编解码 API 显式重导出，保持 `packet` 模块下的调用方 import 不变；
+// 不导出 `pb` 生成类型与内部辅助，避免公开面扩散到帧头模块之外（ISP / SRP）。
+pub use crate::payload::{
+    FrameCommands, decode_commands, encode_commands, entity_from_raw, parse_ack, parse_checksum,
+    parse_reject, parse_resync_replay, parse_resync_request, parse_welcome, payload_ack,
+    payload_checksum, payload_reject, payload_resync_replay, payload_resync_request,
+    payload_welcome,
+};
+
 /// 四字节 magic，明确与 RA2 原生包区分。
 pub const MAGIC: [u8; 4] = *b"W3N1";
-/// 协议版本；客户端与 relay 必须一致，不匹配明确拒绝（design 的 Risks）。
-pub const PROTOCOL_VERSION: u8 = 1;
+/// 协议版本；客户端与 relay 必须一致，不匹配明确拒绝。
+/// 2 = payload 改用 protobuf（ADR 0005，BREAKING，schema 变更须继续递增）。
+pub const PROTOCOL_VERSION: u8 = 2;
 /// 固定包头长度：magic4 + version1 + kind1 + sender1 + seq4 + frame8 + len2 + sum4。
 pub const HEADER_LEN: usize = 25;
 const MAX_PAYLOAD: usize = u16::MAX as usize;
@@ -85,7 +94,7 @@ impl Packet {
         }
     }
 
-    /// 显式小端编码；校验和覆盖包头前 21 字节与整个 payload。
+    /// 显式小端编码；校验和覆盖包头前 21 字节与整个（protobuf 编码后的）payload。
     pub fn encode(&self) -> Result<Vec<u8>, NetError> {
         if self.payload.len() > MAX_PAYLOAD {
             return Err(NetError::Malformed(format!(
@@ -175,349 +184,10 @@ fn read_u64(bytes: &[u8], at: usize) -> u64 {
     ])
 }
 
-// ---- payload 读写 ----
-
-#[derive(Default)]
-struct Buf(Vec<u8>);
-
-impl Buf {
-    fn u8(&mut self, value: u8) {
-        self.0.push(value);
-    }
-    fn u16(&mut self, value: u16) {
-        self.0.extend_from_slice(&value.to_le_bytes());
-    }
-    fn u32(&mut self, value: u32) {
-        self.0.extend_from_slice(&value.to_le_bytes());
-    }
-    fn u64(&mut self, value: u64) {
-        self.0.extend_from_slice(&value.to_le_bytes());
-    }
-    fn i32(&mut self, value: i32) {
-        self.0.extend_from_slice(&value.to_le_bytes());
-    }
-    fn i64(&mut self, value: i64) {
-        self.0.extend_from_slice(&value.to_le_bytes());
-    }
-    fn bytes(&mut self, value: &[u8]) {
-        self.0.extend_from_slice(value);
-    }
-    fn finish(self) -> Vec<u8> {
-        self.0
-    }
-}
-
-struct Reader<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, at: 0 }
-    }
-
-    fn take(&mut self, count: usize) -> Result<&'a [u8], NetError> {
-        let end = self
-            .at
-            .checked_add(count)
-            .ok_or_else(|| NetError::Malformed("offset overflow".into()))?;
-        if end > self.bytes.len() {
-            return Err(NetError::Malformed(format!(
-                "truncated payload: at={} need={} len={}",
-                self.at,
-                count,
-                self.bytes.len()
-            )));
-        }
-        let slice = &self.bytes[self.at..end];
-        self.at = end;
-        Ok(slice)
-    }
-
-    fn u8(&mut self) -> Result<u8, NetError> {
-        Ok(self.take(1)?[0])
-    }
-    fn u16(&mut self) -> Result<u16, NetError> {
-        let s = self.take(2)?;
-        Ok(u16::from_le_bytes([s[0], s[1]]))
-    }
-    fn u32(&mut self) -> Result<u32, NetError> {
-        let s = self.take(4)?;
-        Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-    }
-    fn u64(&mut self) -> Result<u64, NetError> {
-        let s = self.take(8)?;
-        Ok(u64::from_le_bytes([
-            s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
-        ]))
-    }
-    fn i32(&mut self) -> Result<i32, NetError> {
-        let s = self.take(4)?;
-        Ok(i32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-    }
-    fn i64(&mut self) -> Result<i64, NetError> {
-        let s = self.take(8)?;
-        Ok(i64::from_le_bytes([
-            s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
-        ]))
-    }
-    fn finish(self) -> Result<(), NetError> {
-        if self.at != self.bytes.len() {
-            return Err(NetError::Malformed(format!(
-                "trailing bytes: consumed={} total={}",
-                self.at,
-                self.bytes.len()
-            )));
-        }
-        Ok(())
-    }
-}
-
-fn entity_from_raw(raw: u64) -> EntityId {
-    // 0 保留为"无实体"，与 `EntityId::NONE` 一致。
-    EntityId::new(raw).unwrap_or(EntityId::NONE)
-}
-
-/// 一个帧的完整命令集（relay 权威生成，客户端按序应用）。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FrameCommands {
-    pub frame: u64,
-    pub commands: Vec<Command>,
-}
-
-/// 编码一批命令；`arrival` 刻意不编码，由本地按稳定序提交时分配。
-pub fn encode_commands(commands: &[Command]) -> Result<Vec<u8>, NetError> {
-    if commands.len() > MAX_PAYLOAD {
-        return Err(NetError::Malformed(format!(
-            "too many commands: count={}",
-            commands.len()
-        )));
-    }
-    let mut buf = Buf::default();
-    buf.u16(commands.len() as u16);
-    for command in commands {
-        buf.u64(command.execute_frame.value());
-        buf.u8(command.player_id);
-        buf.u32(command.sequence);
-        encode_kind(&command.kind, &mut buf);
-    }
-    Ok(buf.finish())
-}
-
-fn encode_kind(kind: &CommandKind, buf: &mut Buf) {
-    match *kind {
-        CommandKind::Noop => buf.u8(0),
-        CommandKind::Spawn {
-            x,
-            y,
-            hp,
-            speed,
-            attack_damage,
-            attack_range,
-        } => {
-            buf.u8(1);
-            buf.i64(x.raw());
-            buf.i64(y.raw());
-            buf.i64(hp);
-            buf.i64(speed.raw());
-            buf.i64(attack_damage);
-            buf.i64(attack_range.raw());
-        }
-        CommandKind::Move {
-            entity,
-            x,
-            y,
-            group,
-            append,
-        } => {
-            buf.u8(2);
-            buf.u64(entity.value());
-            buf.i64(x.raw());
-            buf.i64(y.raw());
-            buf.u32(group);
-            buf.u8(u8::from(append));
-        }
-        CommandKind::Stop { entity } => {
-            buf.u8(3);
-            buf.u64(entity.value());
-        }
-        CommandKind::Attack { attacker, target } => {
-            buf.u8(4);
-            buf.u64(attacker.value());
-            buf.u64(target.value());
-        }
-        CommandKind::SetObstacle { id, x, y, w, h } => {
-            buf.u8(5);
-            buf.u64(id);
-            buf.i32(x);
-            buf.i32(y);
-            buf.i32(w);
-            buf.i32(h);
-        }
-        CommandKind::RemoveObstacle { id } => {
-            buf.u8(6);
-            buf.u64(id);
-        }
-    }
-}
-
-/// 解码一批命令；所有字段显式小端、长度严格校验。
-pub fn decode_commands(bytes: &[u8]) -> Result<Vec<Command>, NetError> {
-    let mut reader = Reader::new(bytes);
-    let count = reader.u16()? as usize;
-    let mut commands = Vec::with_capacity(count);
-    for _ in 0..count {
-        let frame = Frame::new(reader.u64()?);
-        let player_id = reader.u8()?;
-        let sequence = reader.u32()?;
-        let kind = decode_kind(&mut reader)?;
-        commands.push(Command::new(frame, player_id, sequence, kind));
-    }
-    reader.finish()?;
-    Ok(commands)
-}
-
-fn decode_kind(reader: &mut Reader<'_>) -> Result<CommandKind, NetError> {
-    let tag = reader.u8()?;
-    Ok(match tag {
-        0 => CommandKind::Noop,
-        1 => CommandKind::Spawn {
-            x: SimFixed::from_raw(reader.i64()?),
-            y: SimFixed::from_raw(reader.i64()?),
-            hp: reader.i64()?,
-            speed: SimFixed::from_raw(reader.i64()?),
-            attack_damage: reader.i64()?,
-            attack_range: SimFixed::from_raw(reader.i64()?),
-        },
-        2 => CommandKind::Move {
-            entity: entity_from_raw(reader.u64()?),
-            x: SimFixed::from_raw(reader.i64()?),
-            y: SimFixed::from_raw(reader.i64()?),
-            group: reader.u32()?,
-            append: reader.u8()? != 0,
-        },
-        3 => CommandKind::Stop {
-            entity: entity_from_raw(reader.u64()?),
-        },
-        4 => CommandKind::Attack {
-            attacker: entity_from_raw(reader.u64()?),
-            target: entity_from_raw(reader.u64()?),
-        },
-        5 => CommandKind::SetObstacle {
-            id: reader.u64()?,
-            x: reader.i32()?,
-            y: reader.i32()?,
-            w: reader.i32()?,
-            h: reader.i32()?,
-        },
-        6 => CommandKind::RemoveObstacle { id: reader.u64()? },
-        other => return Err(NetError::Malformed(format!("unknown command tag={other}"))),
-    })
-}
-
-// ---- 各类 payload 构造 / 解析 ----
-
-pub fn payload_welcome(player_id: u8, current_frame: u64) -> Vec<u8> {
-    let mut buf = Buf::default();
-    buf.u8(player_id);
-    buf.u64(current_frame);
-    buf.finish()
-}
-
-pub fn parse_welcome(bytes: &[u8]) -> Result<(u8, u64), NetError> {
-    let mut reader = Reader::new(bytes);
-    let player_id = reader.u8()?;
-    let current_frame = reader.u64()?;
-    reader.finish()?;
-    Ok((player_id, current_frame))
-}
-
-pub fn payload_ack(sequence: u32) -> Vec<u8> {
-    let mut buf = Buf::default();
-    buf.u32(sequence);
-    buf.finish()
-}
-
-pub fn parse_ack(bytes: &[u8]) -> Result<u32, NetError> {
-    let mut reader = Reader::new(bytes);
-    let sequence = reader.u32()?;
-    reader.finish()?;
-    Ok(sequence)
-}
-
-pub fn payload_checksum(hash: u64) -> Vec<u8> {
-    hash.to_le_bytes().to_vec()
-}
-
-pub fn parse_checksum(bytes: &[u8]) -> Result<u64, NetError> {
-    let mut reader = Reader::new(bytes);
-    let hash = reader.u64()?;
-    reader.finish()?;
-    Ok(hash)
-}
-
-/// `from_frame` 为重连补发的起始帧号（客户端下一个待应用帧）。
-pub fn payload_resync_request(player_id: u8, from_frame: u64) -> Vec<u8> {
-    let mut buf = Buf::default();
-    buf.u8(player_id);
-    buf.u64(from_frame);
-    buf.finish()
-}
-
-pub fn parse_resync_request(bytes: &[u8]) -> Result<(u8, u64), NetError> {
-    let mut reader = Reader::new(bytes);
-    let player_id = reader.u8()?;
-    let from_frame = reader.u64()?;
-    reader.finish()?;
-    Ok((player_id, from_frame))
-}
-
-/// 补发多帧命令流（断线重连追帧用）。
-pub fn payload_resync_replay(frames: &[FrameCommands]) -> Result<Vec<u8>, NetError> {
-    if frames.len() > MAX_PAYLOAD {
-        return Err(NetError::Malformed(format!(
-            "too many replay frames: count={}",
-            frames.len()
-        )));
-    }
-    let mut buf = Buf::default();
-    buf.u16(frames.len() as u16);
-    for frame in frames {
-        buf.u64(frame.frame);
-        let commands = encode_commands(&frame.commands)?;
-        buf.u16(commands.len() as u16);
-        buf.bytes(&commands);
-    }
-    Ok(buf.finish())
-}
-
-pub fn parse_resync_replay(bytes: &[u8]) -> Result<Vec<FrameCommands>, NetError> {
-    let mut reader = Reader::new(bytes);
-    let count = reader.u16()? as usize;
-    let mut frames = Vec::with_capacity(count);
-    for _ in 0..count {
-        let frame = reader.u64()?;
-        let len = reader.u16()? as usize;
-        let commands = decode_commands(reader.take(len)?)?;
-        frames.push(FrameCommands { frame, commands });
-    }
-    reader.finish()?;
-    Ok(frames)
-}
-
-pub fn payload_reject(reason: &str) -> Vec<u8> {
-    reason.as_bytes().to_vec()
-}
-
-pub fn parse_reject(bytes: &[u8]) -> Result<String, NetError> {
-    String::from_utf8(bytes.to_vec())
-        .map_err(|e| NetError::Malformed(format!("reject reason not utf8: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use w3_core::{Command, CommandKind, EntityId, Frame, SimFixed};
 
     fn sample_commands() -> Vec<Command> {
         vec![
@@ -616,6 +286,7 @@ mod tests {
         assert_eq!(bytes[5], PacketKind::Ack.tag());
         assert_eq!(&bytes[7..11], &[1, 2, 3, 4]);
         assert_eq!(&bytes[11..19], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(bytes.len(), HEADER_LEN);
     }
 
     #[test]
@@ -713,5 +384,22 @@ mod tests {
             parse_reject(&payload_reject("version mismatch")).unwrap(),
             "version mismatch"
         );
+    }
+
+    #[test]
+    fn frame_header_unchanged_for_protobuf_payload() {
+        let payload = encode_commands(&sample_commands()).unwrap();
+        let bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload.clone())
+            .encode()
+            .unwrap();
+        assert_eq!(&bytes[..4], &MAGIC);
+        assert_eq!(
+            bytes[4], 2,
+            "PROTOCOL_VERSION bumped for breaking payload change"
+        );
+        assert_eq!(&bytes[7..11], &7u32.to_le_bytes());
+        assert_eq!(&bytes[11..19], &4u64.to_le_bytes());
+        assert_eq!(&bytes[19..21], &(payload.len() as u16).to_le_bytes());
+        assert_eq!(&bytes[HEADER_LEN..], &payload[..]);
     }
 }

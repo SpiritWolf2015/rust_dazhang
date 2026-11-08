@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""检查仓库跟踪文件的编码基线：UTF-8 无 BOM、LF 换行。
+"""检查仓库文本文件的编码基线：UTF-8 无 BOM、LF 换行。
 
 用法：python tools/check_encoding.py
-只检查 git 跟踪的文本文件；二进制文件按扩展名跳过。
+检查 git 跟踪与未跟踪（排除 gitignore）的文本文件；二进制文件按扩展名跳过。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 # 需要检查编码的文本后缀。
 TEXT_SUFFIXES = {
     ".rs", ".toml", ".json", ".yaml", ".yml", ".md", ".py", ".sh",
-    ".ps1", ".xml", ".txt", ".cfg", ".example", ".wgsl", ".js", ".mjs",
+    ".ps1", ".xml", ".txt", ".cfg", ".example", ".wgsl", ".proto", ".js", ".mjs",
     ".ts", ".gitignore", ".gitattributes", ".editorconfig",
 }
 
@@ -35,9 +35,14 @@ BOMS = (
 
 
 def tracked_files() -> list[Path]:
-    """返回 git 跟踪的文件列表。"""
+    """返回 git 跟踪与未跟踪（排除 gitignore）的文本文件列表。
+
+    加入未跟踪文件，避免新增但尚未 `git add` 的源码 / schema 绕过编码门禁。
+    """
     result = subprocess.run(
-        ["git", "ls-files", "-z"], capture_output=True, check=True
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        capture_output=True,
+        check=True,
     )
     return [
         Path(raw.decode("utf-8"))

@@ -1,0 +1,107 @@
+// W3N1 网络包的 payload 层（自有 25B 帧头保持不变，见 packet.rs / ADR 0005）。
+//
+// canonical 约束（ADR 0005 §3 / protobuf-payload spec）：
+// - 禁止 map 字段（集合一律 repeated + 显式顺序）。
+// - 字段编号只追加、不复用、不改名；删除字段保留 reserved。
+// - 禁止 float / double；定点数值用 int64 承载 SimFixed::raw()。
+// - 禁止 unknown fields 透传 / 回显：prost 解码默认丢弃未知字段，不存储、不回显。
+// - schema 变更必须同步 bump packet.rs 的 PROTOCOL_VERSION。
+// - 每个消息显式 reserved 若干编号，提示后续只追加。
+
+syntax = "proto3";
+package w3net;
+
+// 一批输入命令（Input / Frame / ResyncReplay 内的命令集）。
+message CommandBatch {
+  repeated Command commands = 1;
+  reserved 2 to 8;
+}
+
+message Command {
+  uint64 execute_frame = 1;
+  uint32 player_id = 2;
+  uint32 sequence = 3;
+  oneof kind {
+    Noop noop = 4;
+    Spawn spawn = 5;
+    MoveCommand move_cmd = 6;
+    Stop stop = 7;
+    Attack attack = 8;
+    SetObstacle set_obstacle = 9;
+    RemoveObstacle remove_obstacle = 10;
+  }
+  reserved 11 to 16;
+}
+
+message Noop {}
+message Spawn {
+  int64 x = 1;
+  int64 y = 2;
+  int64 hp = 3;
+  int64 speed = 4;
+  int64 attack_damage = 5;
+  int64 attack_range = 6;
+  reserved 7 to 10;
+}
+message MoveCommand {
+  uint64 entity = 1;
+  int64 x = 2;
+  int64 y = 3;
+  uint32 group = 4;
+  bool append = 5;
+  reserved 6 to 10;
+}
+message Stop {
+  uint64 entity = 1;
+  reserved 2 to 6;
+}
+message Attack {
+  uint64 attacker = 1;
+  uint64 target = 2;
+  reserved 3 to 6;
+}
+message SetObstacle {
+  uint64 id = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 w = 4;
+  int32 h = 5;
+  reserved 6 to 10;
+}
+message RemoveObstacle {
+  uint64 id = 1;
+  reserved 2 to 6;
+}
+
+// 控制包 payload。
+message Welcome {
+  uint32 player_id = 1;
+  uint64 current_frame = 2;
+  reserved 3 to 6;
+}
+message Ack {
+  uint32 sequence = 1;
+  reserved 2 to 6;
+}
+message Checksum {
+  uint64 hash = 1;
+  reserved 2 to 6;
+}
+message ResyncRequest {
+  uint32 player_id = 1;
+  uint64 from_frame = 2;
+  reserved 3 to 6;
+}
+message FrameCommands {
+  uint64 frame = 1;
+  CommandBatch commands = 2;
+  reserved 3 to 6;
+}
+message ResyncReplay {
+  repeated FrameCommands frames = 1;
+  reserved 2 to 6;
+}
+message Reject {
+  string reason = 1;
+  reserved 2 to 6;
+}

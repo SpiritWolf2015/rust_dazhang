@@ -23,6 +23,7 @@ tools:
 5. **Git 边界**：改动是否涉及 push / fetch / pull / clone 或权限配置；提交信息是否符合 Conventional Commits（英文 type 前缀 + 中文描述）。
 6. **测试与门禁（提交前必查）**：`cargo fmt --all -- --check` 必须通过（Rust 源码一律 rustfmt 默认风格，写完须先 `cargo fmt --all`）；`cargo test --workspace`、`python tools/verify_all.py`、`openspec validate` 是否通过；改动 `w3-core` 时 determinism 测试是否跑过。
 7. **规范一致性**：ADR 与 OpenSpec spec 是否互相矛盾；spec 是否引用 ADR 编号。
+8. **工具脚本跨平台**：是否引入 `.ps1` / `.sh` / `.bat` / `.cmd` 等平台专属脚本；工具入口是否为 `python tools/xxx.py` / `node tools/xxx.mjs`；平台差异是否在脚本内（`os.name` / `process.platform`）判断而非维护两套脚本。
 
 ## 输出格式
 

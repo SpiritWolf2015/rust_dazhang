@@ -15,6 +15,8 @@
 - 检查命令：`python tools/check_encoding.py`（本地 pre-commit 与 CI 都执行）。
 - **Rust 源码格式一律遵循 Rust 官方 `rustfmt` 默认风格**（仓库无 `rustfmt.toml` / `.rustfmt.toml`）。所有写 Rust 源码的 subagent 写完后 MUST 运行 `cargo fmt --all` 格式化；提交前 MUST 运行 `cargo fmt --all -- --check` 校验，不通过不得提交。
 - Windows 注意：PowerShell 5.1 的 `-Encoding utf8` **会写入 BOM**，默认更是 UTF-16 LE；**禁止用 PowerShell 生成源码或配置文件**，改用 Write 工具、Node 或 Python（写文件时用 `UTF8Encoding($false)`）。终端使用 Windows Terminal 或 `chcp 65001`。
+- **工具脚本一律用跨平台运行时**：需要写工具 / 校验 / 生成脚本时，优先 Python（`tools/*.py`）或 Node（`tools/*.mjs`），**不写 Windows PowerShell（`.ps1`）或平台专属 shell 脚本（`.sh` / `.bat` / `.cmd`）**；入口统一为 `python tools/xxx.py` / `node tools/xxx.mjs`。这样既支持 Windows / Linux 跨平台使用，也避开上一条 PowerShell 5.x 无法输出 UTF-8 无 BOM 的编码坑。需要平台差异时在脚本内用 `os.name` / `process.platform` 判断，不维护两套脚本（现有 `verify_all.py::openspec_command()` 即为例）。
+- 本条只约束**工具链**跨平台；[ADR 0002](docs/decisions/0002-determinism.md) 的「模拟内核跨平台确定性」仍是待验证项，不得据本条声称已达成。
 - 中文注释本身不会乱码；乱码的根因是编码/换行不一致，不靠改变注释语言解决。注释语言是团队约定，编码基线才是防乱码手段。
 
 ## 3. 注释、日志与文案
@@ -93,6 +95,7 @@
 - 串联：`/opsx:propose` → `spec-steward` → `/opsx:apply`（对应 owner）→ `critic` → 本地 commit → **人工 push** → `/opsx:archive`。
 - **Rust 源码格式化门禁（所有写 Rust 的 subagent）**：写代码时即按 `rustfmt` 默认风格组织；写完后先 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`；`critic` 在提交前 review MUST 复跑该校验，不通过不得提交。提交信息描述按第 3 节用中文。
 - **只读参考项目共四个**（见第 1 节 / `docs/references/UPSTREAM.md`）：`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考；四个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。
+- **工具脚本跨平台（所有 subagent）**：需要脚本时用 Python（`tools/*.py`）或 Node（`tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断，不维护两套。规则与理由见第 2 节。
 
 ## 10. AI 与人工的责任边界
 

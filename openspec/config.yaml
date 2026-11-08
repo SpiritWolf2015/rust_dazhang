@@ -31,6 +31,7 @@ context: |
   git 提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）；
   日志与错误信息一律英文；Rust 源码遵循官方 rustfmt 默认风格，
   写完 cargo fmt --all、提交前 cargo fmt --all -- --check；
+  工具脚本一律用跨平台 Python / Node，不写 .ps1 / .sh / .bat / .cmd；
   所有文件 UTF-8 无 BOM、LF；
   AI 不得执行 git push / fetch / pull / clone 等远端同步命令。
 

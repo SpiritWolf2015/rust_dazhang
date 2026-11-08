@@ -34,6 +34,7 @@ tools:
 - 一个 change 一个 owner；不要同时改多个 owner 的文件。
 - **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
 - 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
+- 工具脚本一律用跨平台的 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断（见 CODEBUDDY.md 第 2 节）。
 
 ## 禁止
 

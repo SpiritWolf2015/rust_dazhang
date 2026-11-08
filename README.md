@@ -2,7 +2,7 @@
 
 用 Rust 从零复刻经典 RTS（即时战略）玩法的开源项目。第一期目标是**确定性模拟内核 + 命令帧同步联机**，玩法范围限定为 Melee 对战。
 
-> **状态：P0 早期开发。** 当前仓库只有工程骨架、配置模板与设计决策，尚无可运行的游戏。
+> **状态：P0 / P1 已实现并归档，P2 模拟竖切已实现并归档；P3–P5 为 active OpenSpec changes（见 ADR 0003）。** 仓库已有可编译运行的确定性内核、内容读取器与 app 注入层；3D 渲染、联机与完整玩法尚未实现。
 
 ## 许可证
 
@@ -55,39 +55,53 @@ GPLv3 保证的是：任何分发的修改版都必须以同协议提供源码�
 cp config.toml.example config.toml
 #    按需修改其中的 wc3_dir / wc3_exported 路径
 
-# 2. 单元测试与确定性验收（P0）
+# 2. 单元测试与确定性验收
 cargo test -p w3-core --lib
 cargo test -p w3-core --test determinism -- --nocapture
 
-# 3. P1 内容读取器
+# 3. 内容读取器与 app 注入层
 cargo test -p w3-content
+cargo test -p w3-app
+
+# 4. 全量测试与统一门禁
+cargo test --workspace
+python tools/verify_all.py
 ```
 
-Rust 版本见 `rust-toolchain.toml`。`--lib` 跑各模块的单元测试；确定性验收是 `w3-core` 的集成测试，位于 `crates/w3-core/tests/determinism.rs`。P0 共 19 个单元测试 + 5 个确定性测试；P1 的 `w3-content` 用合成 fixture 测试，不依赖真实导出数据。
+Rust 版本见 `rust-toolchain.toml`。`--lib` 跑各模块的单元测试；确定性验收是 `w3-core` 的集成测试，位于 `crates/w3-core/tests/determinism.rs`，覆盖双实例一致性、快照往返、回放，以及 P2 的移动 / 编队 / 障碍重规划 / 同帧死亡场景。`w3-content` 与 `w3-app` 用合成 fixture 测试，不依赖真实导出数据；全量测试与统一门禁见 `cargo test --workspace` / `python tools/verify_all.py`。
 
-## 目录（P0–P1）
+## 目录（P0–P2）
 
 ```text
 rust_dazhang/
-├─ Cargo.toml              workspace：w3-core（P0）+ w3-content（P1）
+├─ Cargo.toml              workspace：w3-core（P0）+ w3-content（P1）+ w3-app（P2）
 ├─ Cargo.lock              提交（应用项目）
 ├─ LICENSE                 GPLv3 全文
-├─ NOTICE.md / CONTRIBUTING.md
+├─ NOTICE.md / CONTRIBUTING.md / CODEBUDDY.md
 ├─ rust-toolchain.toml     stable
 ├─ config.toml.example     本机路径模板
 ├─ crates/w3-core/         确定性模拟内核（零依赖）
-│   ├─ src/{fixed,frame,entity,command,state_hash,snapshot,sim_match}.rs
-│   └─ tests/determinism.rs  双实例一致性 / 快照往返 / 回放
+│   ├─ src/{lib,fixed,frame,entity,command,state_hash,snapshot,sim_match,angle,nav,world}.rs
+│   └─ tests/determinism.rs  双实例 / 快照往返 / 回放 / P2 玩法场景
 ├─ crates/w3-content/      P1：只读上游导出 JSON（serde / serde_json）
-│   ├─ src/{heightfield,placements,table,load}.rs
-│   └─ tests/fixtures/      合成 JSON，不含任何游戏派生资产
-├─ docs/decisions/         ADR 0001–0003
+│   ├─ src/{lib,heightfield,placements,table,load}.rs
+│   ├─ tests/load_test.rs 与 tests/fixtures/  合成 JSON，不含任何游戏派生资产
+│   └─ examples/load_export.rs  端到端加载
+├─ crates/w3-app/          P2：冻结地图数据注入 w3-core
+│   ├─ src/{lib,freeze,inject}.rs
+│   ├─ tests/inject_test.rs  合成 fixture
+│   └─ examples/inject_export.rs  端到端注入
+├─ tools/                  跨平台 Python 工具脚本（门禁 / hook）
+│   ├─ check_encoding.py   编码 / 换行基线
+│   ├─ guard_git_remote.py 远端命令兜底 hook
+│   └─ verify_all.py       统一门禁
+├─ docs/decisions/         ADR 0001–0004
 └─ docs/references/UPSTREAM.md
 ```
 
-P0 只建 `w3-core` 一个 crate；P1 才增加 `w3-content`，因为出现了真实消费者（内容读取）。**过渡期不写 MPQ / SLK / MDX / W3X 原生解析器**——真实导出数据由上游 `godot_warcraft3` 的 Node 工具在本机生成，运行时通过 `config.toml` 的路径读取，绝不入库。本机已生成 42 张 SLK 表与 Echo Isles 地图 JSON，并用 `w3-content/examples/load_export.rs` 完成端到端加载验证（129×97 顶点 / 97 单位 / 2491 装饰物 / UnitBalance 836 行）；导出命令与绕过方式见 [`docs/references/UPSTREAM.md`](docs/references/UPSTREAM.md)。
+P0 只建 `w3-core` 一个 crate；P1 增加 `w3-content`（内容读取），P2 增加 `w3-app`（把冻结地图数据注入内核；`w3-core` 仍不反向依赖内容层）。**过渡期不写 MPQ / SLK / MDX / W3X 原生解析器**——真实导出数据由上游 `godot_warcraft3` 的 Node 工具在本机生成，运行时通过 `config.toml` 的路径读取，绝不入库。本机已生成 42 张 SLK 表与 Echo Isles 地图 JSON，并用 `w3-content/examples/load_export.rs` 完成端到端加载验证（129×97 顶点 / 97 单位 / 2491 装饰物 / UnitBalance 836 行）；导出命令与绕过方式见 [`docs/references/UPSTREAM.md`](docs/references/UPSTREAM.md)。
 
-内核模块名为 `sim_match` 而非 `match`（Rust 关键字）；`RtsMatch` 已由 `lib.rs` 重导出，调用方直接用 `w3_core::RtsMatch`。`w3-content` 的坐标是上游 JSON 的原始 `f64`，属于冻结输入，不进权威状态 / 快照 / 哈希；P2 进入模拟前须按 ADR 0002 冻结定点转换规则。
+内核模块名为 `sim_match` 而非 `match`（Rust 关键字）；`RtsMatch` 已由 `lib.rs` 重导出，调用方直接用 `w3_core::RtsMatch`。`w3-content` 的坐标是上游 JSON 的原始 `f64`，属于冻结输入，不进权威状态 / 快照 / 哈希；P2 已按 [ADR 0004](docs/decisions/0004-frozen-coordinates.md) 冻结 `f64 → SimFixed` 的转换与舍入规则，并由 `w3-app` 注入。工具脚本一律用跨平台的 Python / Node，不写平台专属 shell 脚本（见 `CODEBUDDY.md` 第 2 节）。
 
 ## 参考的上游项目
 
@@ -104,4 +118,4 @@ P0 只建 `w3-core` 一个 crate；P1 才增加 `w3-content`，因为出现了�
 
 ## 贡献
 
-贡献代码即表示按 **GPLv3** 授权（详见 `CONTRIBUTING.md`，待补）。请勿提交任何游戏资产、从资产解包或导出的文件、或专有名词与美术素材。
+贡献代码即表示按 **GPLv3** 授权（详见 `CONTRIBUTING.md` 与 `CODEBUDDY.md`）。请勿提交任何游戏资产、从资产解包或导出的文件、或专有名词与美术素材。

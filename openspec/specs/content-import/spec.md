@@ -2,6 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change p1-content-import. Update Purpose after archive.
+
+> 相关 ADR：ADR 0001（资产合规）、ADR 0003（项目范围与分期）。
+
 ## Requirements
 ### Requirement: Load terrain heightfield with validation
 

@@ -2,6 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change p0-deterministic-kernel. Update Purpose after archive.
+
+> 相关 ADR：ADR 0002（确定性契约）、ADR 0004（冻结坐标与定点单位）。
+
 ## Requirements
 ### Requirement: Fixed-point arithmetic in authoritative state
 
@@ -37,7 +40,7 @@ TBD - created by archiving change p0-deterministic-kernel. Update Purpose after 
 
 ### Requirement: State hashing and snapshot
 
-系统 SHALL 用显式小端字节编码与稳定 `EntityId` 顺序计算全状态哈希；快照 SHALL 是帧 N 提交完成后的完整状态，含 RNG 流、下一 ID 计数器与已接受但未执行的命令；版本、`sim_version` 或内容哈希不匹配 MUST 被拒绝。
+系统 SHALL 用显式小端字节编码与稳定 `EntityId` 顺序计算全状态哈希；快照 SHALL 是帧 N 提交完成后的完整状态，含 RNG 流、下一 ID 计数器、已接受但未执行的命令、**所有单位订单、移动进度、朝向、寻路状态与动态障碍预约**；版本、`sim_version` 或内容哈希不匹配 MUST 被拒绝。
 
 #### Scenario: 双实例一致性
 
@@ -54,3 +57,7 @@ TBD - created by archiving change p0-deterministic-kernel. Update Purpose after 
 - **WHEN** 用与快照不同的 `content_hash` 调用 `restore_snapshot`
 - **THEN** 返回 `ContentMismatch`，不产生部分恢复的对局
 
+#### Scenario: 新增状态遗漏进入哈希
+
+- **WHEN** 新增一个权威状态字段但未加入哈希或快照
+- **THEN** 确定性验收测试失败，阻止合并

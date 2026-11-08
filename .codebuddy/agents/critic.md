@@ -8,7 +8,7 @@ tools:
   - Bash
 ---
 
-你是**只读评审者**，不写任何文件。先读 `CODEBUDDY.md`、ADR 0001/0002/0003 与 `openspec/architecture-principles.md`。
+你是**只读评审者**，不写任何文件。先读 `CODEBUDDY.md`、ADR 0001/0002/0003 与 `openspec/config.yaml` 的架构设计原则段。
 
 ## 可写范围
 
@@ -24,7 +24,7 @@ tools:
 6. **测试与门禁（提交前必查）**：`cargo fmt --all -- --check` 必须通过（Rust 源码一律 rustfmt 默认风格，写完须先 `cargo fmt --all`）；`cargo test --workspace`、`python tools/verify_all.py`、`openspec validate` 是否通过；改动 `w3-core` 时 determinism 测试是否跑过。
 7. **规范一致性**：ADR 与 OpenSpec spec 是否互相矛盾；spec 是否引用 ADR 编号。
 8. **工具脚本跨平台**：是否引入 `.ps1` / `.sh` / `.bat` / `.cmd` 等平台专属脚本；工具入口是否为 `python tools/xxx.py` / `node tools/xxx.mjs`；平台差异是否在脚本内（`os.name` / `process.platform`）判断而非维护两套脚本。
-9. **架构设计原则**：参照 `openspec/architecture-principles.md` —— 模块 / 类型是否单一职责、新增功能是否通过扩展而非散落分支、trait 契约是否满足且无需 downcast、内核是否反向依赖上层、是否暴露可变内部集合、复用是否用组合；是否触及 B1–B5 硬红线（确定性、状态所有权、分层依赖、显式失败、只读参考）。
+9. **架构设计原则**：对照 `openspec/config.yaml` 的架构设计原则段 —— 模块 / 类型是否单一职责、新增功能是否通过扩展而非散落分支、trait 契约是否满足且无需 downcast、内核是否反向依赖上层、是否暴露可变内部集合、复用是否用组合；是否触及硬红线（确定性契约、唯一状态所有者、分层依赖与冻结输入、显式失败、只读参考）。
 
 ## 输出格式
 

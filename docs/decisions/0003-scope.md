@@ -25,8 +25,8 @@
 | 阶段 | 交付 | 状态 |
 |---|---|---|
 | P0 | 定点数、整数帧、实体 ID、命令队列、状态哈希、快照、三类确定性验收 | **已完成**（commit `d7a4e19`） |
-| P1 | 读 `godot_warcraft3` 导出的 `slk-exported/` 与 `map-parsed/` JSON，加载一张地图的地形与摆放；**过渡期不写 Rust 原生 MPQ / SLK / MDX 解析器** | 未开始 |
-| P2 | 模拟竖切：选中 → 移动 → 攻击；移植八方向寻路、动态障碍、朝向 / 坡度、群体编队语义，并换成 [ADR 0002](0002-determinism.md) 的定点数学 | 未开始 |
+| P1 | 读 `godot_warcraft3` 导出的 `slk-exported/` 与 `map-parsed/` JSON，加载一张地图的地形与摆放；**过渡期不写 Rust 原生 MPQ / SLK / MDX 解析器** | **已完成**（归档 `2026-11-07-p1-content-import`） |
+| P2 | 模拟竖切：选中 → 移动 → 攻击；移植八方向寻路、动态障碍、朝向 / 坡度、群体编队语义，并换成 [ADR 0002](0002-determinism.md) 的定点数学 | **已完成**（归档 `2026-11-08-p2-simulation-vertical-slice`；坐标契约见 [ADR 0004](0004-frozen-coordinates.md)） |
 | P3 | wgpu 3D 渲染：glTF / MDX 骨骼动画、高度场地形、队伍色、粒子 / 挂点（转换规格取自 `godot_warcraft3/docs/design/asset-convert/`） | 未开始 |
 | P4 | 移植 lockstep + UDP 可靠层 + 自建 lobby / relay；双客户端同图对战、逐帧 checksum 对比 | 未开始 |
 | P5 | 技能 / 英雄 / 物品 / 科技 / 经济 / 采集 / 建造 / 生产 / 胜负（契约参考 `RTS_ABILITY_SYSTEM.md` 的三层模板 + 效果组合） | 未开始 |

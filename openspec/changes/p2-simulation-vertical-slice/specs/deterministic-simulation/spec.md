@@ -1,3 +1,5 @@
+> 相关 ADR：ADR 0002（确定性契约）、ADR 0004（冻结坐标与定点单位）。
+
 ## MODIFIED Requirements
 
 ### Requirement: State hashing and snapshot

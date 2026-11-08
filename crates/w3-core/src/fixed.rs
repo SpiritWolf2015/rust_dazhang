@@ -2,6 +2,9 @@
 //!
 //! 基于 `i64` 的 Q47.16，中间量使用 `i128`。全部运算均为整数运算，
 //! 因此在所有平台与 CPU 上位级一致。`f32` / `f64` 不得进入模拟状态。
+//!
+//! P2 追加（见 ADR 0004）：整数平方根与编译期比例常量，供转向 / 坡度 /
+//! 八方向寻路使用，避免引入浮点超越函数或外部数值依赖。
 
 pub const FRACTIONAL_BITS: u32 = 16;
 pub const SCALE: i64 = 1i64 << FRACTIONAL_BITS;
@@ -33,6 +36,13 @@ impl SimFixed {
             .checked_mul(SCALE)
             .map(Self)
             .ok_or(FixedError::Overflow)
+    }
+
+    /// 由整数比例构造定点常量，如 `from_ratio(12, 100)` 表示 0.12。
+    /// 仅用于编译期常量，分母必须非零；内部走 i128 避免中间溢出。
+    pub const fn from_ratio(numerator: i64, denominator: i64) -> Self {
+        let scaled = (numerator as i128) * (SCALE as i128) / (denominator as i128);
+        Self(scaled as i64)
     }
 
     pub fn checked_add(self, rhs: Self) -> Result<Self, FixedError> {
@@ -71,9 +81,31 @@ impl SimFixed {
             .map_err(|_| FixedError::Overflow)
     }
 
+    /// 绝对值；`i64::MIN` 饱和到 `i64::MAX`，不触发回绕。
+    pub fn saturating_abs(self) -> Self {
+        Self(self.0.saturating_abs())
+    }
+
     pub fn floor_to_i64(self) -> i64 {
         self.0 >> FRACTIONAL_BITS
     }
+}
+
+/// 纯整数平方根（Newton 迭代，i128 中间量）。
+///
+/// 返回 `floor(sqrt(value))`；`value <= 0` 返回 0。这是跨平台一致的整数
+/// 算法，不调用宿主数学库，也不是浮点超越函数（见 ADR 0004）。
+pub fn isqrt(value: i128) -> i128 {
+    if value <= 0 {
+        return 0;
+    }
+    let mut x = value;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + value / x) / 2;
+    }
+    x
 }
 
 #[cfg(test)]
@@ -120,5 +152,25 @@ mod tests {
         for _ in 0..32 {
             assert_eq!(a.checked_mul(b).unwrap().checked_div(a).unwrap(), first);
         }
+    }
+
+    #[test]
+    fn from_ratio_builds_deterministic_constants() {
+        assert_eq!(SimFixed::from_ratio(12, 100).raw(), 7864);
+        assert_eq!(SimFixed::from_ratio(1, 2).raw(), SCALE / 2);
+        assert_eq!(SimFixed::from_ratio(-3, 4).raw(), -3 * SCALE / 4);
+    }
+
+    #[test]
+    fn isqrt_is_exact_for_squares_and_floors_others() {
+        assert_eq!(isqrt(0), 0);
+        assert_eq!(isqrt(1), 1);
+        assert_eq!(isqrt(4), 2);
+        assert_eq!(isqrt(15), 3);
+        assert_eq!(isqrt(16), 4);
+        assert_eq!(isqrt(1_000_000), 1000);
+        // 大坐标平方仍精确（Q16 raw 域）。
+        let raw = 8192i128 * SCALE as i128;
+        assert_eq!(isqrt(raw * raw), raw);
     }
 }

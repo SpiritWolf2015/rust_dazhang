@@ -1,0 +1,13 @@
+[package]
+name = "w3-app"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "App-layer injection of frozen WC3 map data into the deterministic kernel"
+
+[dependencies]
+w3-core = { path = "../w3-core" }
+w3-content = { path = "../w3-content" }
+
+[dev-dependencies]
+serde_json = "1"

@@ -10,14 +10,41 @@ use crate::frame::Frame;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CommandKind {
     Noop,
-    Spawn,
+    /// 生成一个单位；归属取命令的 `player_id`，其余参数为冻结的权威初值。
+    Spawn {
+        x: SimFixed,
+        y: SimFixed,
+        hp: i64,
+        speed: SimFixed,
+        attack_damage: i64,
+        attack_range: SimFixed,
+    },
     Move {
         entity: EntityId,
         x: SimFixed,
         y: SimFixed,
+        /// 非 0 表示同帧同组群体移动，按稳定 ID 分配落点。
+        group: u32,
+        /// true 表示追加到待执行队列，不改变当前订单。
+        append: bool,
     },
     Stop {
         entity: EntityId,
+    },
+    Attack {
+        attacker: EntityId,
+        target: EntityId,
+    },
+    /// 新增 / 替换动态占地（相同 ID 替换旧矩形）。
+    SetObstacle {
+        id: u64,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+    },
+    RemoveObstacle {
+        id: u64,
     },
 }
 
@@ -56,6 +83,8 @@ impl Command {
 pub enum CommandError {
     InvalidEntity,
     FrameInPast,
+    InvalidObstacle,
+    InvalidSpawn,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,16 +99,41 @@ impl CommandQueue {
     }
 
     /// 校验、冻结到达序号并入队。被接收不等于最终执行成功，
-    /// `step()` 会在执行时重新校验。
+    /// `step()` 会在执行时重新校验存活 / 归属 / 地图边界。
     pub fn submit(&mut self, command: Command) -> Result<u64, CommandError> {
-        let invalid_entity = match command.kind {
+        match command.kind {
             CommandKind::Move { entity, .. } | CommandKind::Stop { entity } => {
-                entity == EntityId::NONE
+                if entity == EntityId::NONE {
+                    return Err(CommandError::InvalidEntity);
+                }
             }
-            CommandKind::Noop | CommandKind::Spawn => false,
-        };
-        if invalid_entity {
-            return Err(CommandError::InvalidEntity);
+            CommandKind::Attack { attacker, target } => {
+                if attacker == EntityId::NONE || target == EntityId::NONE {
+                    return Err(CommandError::InvalidEntity);
+                }
+            }
+            CommandKind::SetObstacle { id, x, y, w, h } => {
+                if id == 0 || w <= 0 || h <= 0 || x < 0 || y < 0 {
+                    return Err(CommandError::InvalidObstacle);
+                }
+            }
+            CommandKind::RemoveObstacle { id } => {
+                if id == 0 {
+                    return Err(CommandError::InvalidObstacle);
+                }
+            }
+            CommandKind::Spawn {
+                hp,
+                speed,
+                attack_damage,
+                attack_range,
+                ..
+            } => {
+                if hp <= 0 || speed.raw() <= 0 || attack_damage < 0 || attack_range.raw() < 0 {
+                    return Err(CommandError::InvalidSpawn);
+                }
+            }
+            CommandKind::Noop => {}
         }
 
         let arrival = self.next_arrival;
@@ -189,5 +243,42 @@ mod tests {
             },
         );
         assert_eq!(queue.submit(bad), Err(CommandError::InvalidEntity));
+    }
+
+    #[test]
+    fn invalid_obstacle_is_rejected() {
+        let mut queue = CommandQueue::new();
+        let bad = Command::new(
+            Frame::new(0),
+            1,
+            1,
+            CommandKind::SetObstacle {
+                id: 0,
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            },
+        );
+        assert_eq!(queue.submit(bad), Err(CommandError::InvalidObstacle));
+    }
+
+    #[test]
+    fn invalid_spawn_is_rejected() {
+        let mut queue = CommandQueue::new();
+        let bad = Command::new(
+            Frame::new(0),
+            1,
+            1,
+            CommandKind::Spawn {
+                x: SimFixed::ZERO,
+                y: SimFixed::ZERO,
+                hp: 0,
+                speed: SimFixed::ONE,
+                attack_damage: 1,
+                attack_range: SimFixed::ONE,
+            },
+        );
+        assert_eq!(queue.submit(bad), Err(CommandError::InvalidSpawn));
     }
 }

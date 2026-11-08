@@ -23,6 +23,27 @@
 
 MIT 条款要求保留版权与许可声明；`WarsmashModEngine` 为 AGPLv3，与本项目 GPLv3 组合有条件，未经 ADR 0001 复核不得引入其代码。若将来引入其中任一项目的代码片段，须在对应文件保留其原始版权头，并在此处登记来源与许可证。
 
+## 第三方 crate 依赖（P3 w3-render）
+
+P3 新增 `crates/w3-render`（wgpu 3D 渲染层）引入以下 crates.io 依赖；许可证结论已逐一核对各 crate 的 `Cargo.toml`：
+
+| crate | 版本 | 许可证 |
+|---|---|---|
+| `wgpu` | 30.0.1 | MIT OR Apache-2.0 |
+| `winit` | 0.30.13 | Apache-2.0 |
+| `glam` | 0.29.3 | MIT OR Apache-2.0 |
+| `bytemuck` | 1.25.0 | Zlib OR Apache-2.0 OR MIT |
+| `serde` / `serde_json` | 1.0.229 / 1.0.154 | MIT OR Apache-2.0 |
+| `thiserror` | 2.0.18 | MIT OR Apache-2.0 |
+| `log` | 0.4.29 | MIT OR Apache-2.0 |
+| `naga`（`wgpu` 传递依赖） | 30.0.1 | MIT OR Apache-2.0 |
+
+- 上述均为 MIT / Apache-2.0 / Zlib 宽松许可，与本项目 GPLv3 兼容；均为 crates.io 依赖，版本由 `Cargo.lock` 锁定，**未复制任何上游源码进仓库**，沿用「本项目为独立从零编写」的声明。
+- `winit` 在本项目禁用默认 wayland / x11 features（本机离线缓存缺 `ab_glyph`），仅启用 `rwh_06`；不影响许可证结论。
+- 其余传递依赖未逐一核验，`Cargo.lock` 为依赖图权威清单。
+- `WarsmashModEngine`（AGPLv3）仍仅为只读参考，**未引入其代码**。
+- 资产边界不变：导出 JSON / PNG / GLB 等资产留在本机，绝不入库（见 [ADR 0001](docs/decisions/0001-license.md)）。
+
 ## 第三方资产与商标
 
 Warcraft、Warcraft III、The Frozen Throne 及相关名称、美术、音乐与游戏内容归其各自权利人所有。本项目与暴雪娱乐无关联、未获其授权或背书。玩家须自备合法获得的经典客户端；仓库不分发任何资产或由资产派生的文件。

@@ -1,0 +1,24 @@
+[package]
+name = "w3-render"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Read-only wgpu 3D presentation layer consuming the deterministic simulation view"
+
+[lib]
+name = "w3_render"
+path = "src/lib.rs"
+
+[dependencies]
+w3-core = { path = "../w3-core" }
+w3-content = { path = "../w3-content" }
+wgpu = "30"
+# 只启用 raw-window-handle；Windows 走 win32 后端，避免 wayland/x11 的
+# adwaita 装饰依赖（ab_glyph）在本机离线缓存中缺失。
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+glam = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"

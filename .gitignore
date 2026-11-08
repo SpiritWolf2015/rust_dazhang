@@ -62,3 +62,4 @@ config.toml
 .DS_Store
 Thumbs.db
 .idea/
+.vscode

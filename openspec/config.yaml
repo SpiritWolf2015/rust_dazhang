@@ -35,6 +35,12 @@ context: |
   所有文件 UTF-8 无 BOM、LF；
   AI 不得执行 git push / fetch / pull / clone 等远端同步命令。
 
+  架构原则层见 openspec/architecture-principles.md（只补充「为什么 / 评审判定」，
+  不另立规则；冲突以 CODEBUDDY.md 与 ADR 为准）：SRP / OCP / LSP / DIP / ISP /
+  LoD / CARP 按 Rust 语境（模块 / trait / 组合 / 所有权）判定；正确性 / 确定性优先；
+  硬红线 B1–B6 覆盖确定性契约、唯一状态所有者、分层依赖方向、显式失败、
+  只读参考与工具链规范。
+
 rules:
   proposal:
     - 引用相关 ADR 编号并标明路线图阶段（P0-P5）。
@@ -45,6 +51,7 @@ rules:
   design:
     - 每个决策都要关联 ADR 0002，并说明对跨平台确定性的影响。
     - 每个决策列出考虑过的备选方案。
+    - 关联 openspec/architecture-principles.md 的对应原则，并说明对确定性契约与分层依赖的影响。
   tasks:
     - 每条任务必须是复选框 `- [ ] X.Y ...`。
     - 涉及确定性代码的改动必须包含重跑 tests/determinism.rs 的任务。

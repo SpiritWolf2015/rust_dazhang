@@ -7,6 +7,7 @@
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
 - 阶段：P0 / P1 已实现并归档，P2–P5 为 active OpenSpec changes（见 ADR 0003）。主 specs：`deterministic-simulation`、`content-import`。
 - 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
+- 架构原则层见 `openspec/architecture-principles.md`（只补充「为什么 / 评审判定」，**不另立规则**；冲突时以本文件与 ADR 为准）。
 
 ## 2. 编码与换行（硬性基线）
 

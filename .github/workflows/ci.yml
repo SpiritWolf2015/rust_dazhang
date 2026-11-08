@@ -1,4 +1,6 @@
 # 统一门禁流水线：编码、格式、测试、OpenSpec 校验、资产扫描。
+# Windows / Linux 双平台跑同一 python 入口，验证工具链跨平台。
+# run 只写单行命令、不含 shell 语法；平台差异由 tools/verify_all.py 内部（os.name）处理。
 # 若托管平台不使用 GitHub Actions，把 python tools/verify_all.py 配到其 CI 即可。
 name: CI
 
@@ -8,7 +10,11 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 

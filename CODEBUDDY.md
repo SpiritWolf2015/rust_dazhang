@@ -40,7 +40,7 @@
 - 三层技术强制：
   1. **文档约定**：本文件 + `CONTRIBUTING.md`。
   2. **工具层**：`.codebuddy/settings.json` 的 `permissions.deny`（优先级最高，`bypassPermissions` 也不能绕过）+ `PreToolUse` hook `tools/guard_git_remote.py`（正则兜底，防止规则语法漏匹配）。
-  3. **CI / 本地门禁**：`tools/verify_all.py` + `.github/workflows/ci.yml`（若托管平台非 GitHub，把同一命令配到其流水线）。
+  3. **CI / 本地门禁**：`tools/verify_all.py` + `.github/workflows/ci.yml`；CI 用 matrix 在 `ubuntu-latest` 与 `windows-latest` **双平台跑同一 `python tools/verify_all.py` 入口**，验证工具链跨平台（`run` 只写单行命令、不含 shell 语法，平台差异由 `verify_all.py` 内部 `os.name` 处理）。这**不等于** ADR 0002 模拟内核跨平台确定性已验证；若托管平台非 GitHub，把同一命令配到其流水线。
 - 提交规范：Conventional Commits（英文 type 前缀 `feat:` / `fix:` / `docs:` / `chore:` 保留）、**中文描述首行 ≤ 72 字符**（语言规则见第 3 节）、一个改动一个 commit / PR、PR 描述约 15 行。
 
 ## 5. 确定性硬门禁（ADR 0002）
@@ -92,7 +92,7 @@
 | `docs-owner` | README / NOTICE / CONTRIBUTING / UPSTREAM 同步 | 文档文件 |
 
 - 定义文件在 `.codebuddy/agents/`；每个 subagent 声明 own files 与 tools，继承 `permissions.deny`；critic 只读；Agent Team 的 leader 只编排不写。
-- 串联：`/opsx:propose` → `spec-steward` → `/opsx:apply`（对应 owner）→ `critic` → 本地 commit → **人工 push** → `/opsx:archive`。
+- 串联：`/opsx:propose` → `spec-steward` → `/opsx:apply`（对应 owner）→ `critic` → 本地 commit → **人工 push** → CI 在 Windows / Linux 双平台跑 `python tools/verify_all.py` 门禁 → `/opsx:archive`。
 - **Rust 源码格式化门禁（所有写 Rust 的 subagent）**：写代码时即按 `rustfmt` 默认风格组织；写完后先 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`；`critic` 在提交前 review MUST 复跑该校验，不通过不得提交。提交信息描述按第 3 节用中文。
 - **只读参考项目共四个**（见第 1 节 / `docs/references/UPSTREAM.md`）：`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考；四个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。
 - **工具脚本跨平台（所有 subagent）**：需要脚本时用 Python（`tools/*.py`）或 Node（`tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断，不维护两套。规则与理由见第 2 节。

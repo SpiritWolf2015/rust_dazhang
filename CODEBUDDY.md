@@ -89,6 +89,7 @@
 | `sim-owner` | `w3-core` 唯一实现所有者，守 ADR 0002 | `crates/w3-core/` |
 | `content-owner` | `w3-content`，守资产合规 | `crates/w3-content/` |
 | `client-owner` | P6 可玩客户端集成层唯一实现所有者，守 ADR 0002 与只读表现边界 | `crates/w3-client/`、`crates/w3-render/` |
+| `net-owner` | `w3-net` / `w3-relay` 网络传输层唯一实现所有者，守 ADR 0002 与 ADR 0005 canonical 约束 | `crates/w3-net/`、`crates/w3-relay/` |
 | `asset-pipeline` | 跑上游 dev-setup、验证导出、记录 schema 变化 | 只读上游仓库，产物留本机 |
 | `critic` | 审查确定性、所有权、许可证、编码、资产入库 | **只读，不写任何文件** |
 | `docs-owner` | README / NOTICE / CONTRIBUTING / UPSTREAM 同步 | 文档文件 |

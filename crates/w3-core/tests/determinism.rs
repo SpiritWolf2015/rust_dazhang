@@ -2,8 +2,9 @@
 //! 这些测试是 ADR 0002 / 0004 与三个 spec delta 的门禁。
 
 use w3_core::{
-    Command, CommandKind, EntityId, EventKind, Frame, GroupPlanRecord, MatchConfig, RtsMatch,
-    SimFixed, SnapshotError, StaticWorld,
+    AbilityDef, Command, CommandKind, EffectDef, EffectKind, EntityId, EventKind, Frame,
+    FrozenDefinitions, GameplayCommand, GameplayCommandKind, GroupPlanRecord, ItemDef, MatchConfig,
+    RtsMatch, SimFixed, SnapshotError, StaticWorld, UnitDef, UpgradeDef,
 };
 
 fn config() -> MatchConfig {
@@ -506,4 +507,610 @@ fn snapshot_roundtrip_during_group_planning() {
         restored.step();
         assert_eq!(original.compute_state_hash(), restored.compute_state_hash());
     }
+}
+
+// ---------------------------------------------------------------------------
+// P5 玩法系统确定性场景（施法 / Buff 到期 / 同帧死亡 / 生产取消 / AI 重放）
+// ---------------------------------------------------------------------------
+
+fn unit_def() -> UnitDef {
+    UnitDef {
+        hp: 100,
+        mana: 100,
+        speed_raw: SimFixed::from_int(3).unwrap().raw(),
+        damage: 10,
+        range_raw: SimFixed::from_int(10).unwrap().raw(),
+        supply: 1,
+        train_frames: 4,
+    }
+}
+
+fn gameplay_defs() -> FrozenDefinitions {
+    FrozenDefinitions::new(
+        vec![(1, unit_def())],
+        vec![
+            (
+                10,
+                AbilityDef {
+                    mana_cost: 10,
+                    cooldown_frames: 5,
+                    cast_frames: 3,
+                    behavior: 0,
+                    effects: vec![
+                        EffectDef {
+                            kind: EffectKind::Damage,
+                            amount: 30,
+                            duration_frames: 0,
+                        },
+                        EffectDef {
+                            kind: EffectKind::BuffStat,
+                            amount: 5,
+                            duration_frames: 3,
+                        },
+                    ],
+                },
+            ),
+            (
+                11,
+                AbilityDef {
+                    mana_cost: 5,
+                    cooldown_frames: 0,
+                    cast_frames: 0,
+                    behavior: 99,
+                    effects: vec![EffectDef {
+                        kind: EffectKind::Heal,
+                        amount: 20,
+                        duration_frames: 0,
+                    }],
+                },
+            ),
+            (
+                12,
+                AbilityDef {
+                    mana_cost: 0,
+                    cooldown_frames: 0,
+                    cast_frames: 0,
+                    behavior: 0,
+                    effects: vec![
+                        EffectDef {
+                            kind: EffectKind::Damage,
+                            amount: 200,
+                            duration_frames: 0,
+                        },
+                        EffectDef {
+                            kind: EffectKind::BuffStat,
+                            amount: 99,
+                            duration_frames: 5,
+                        },
+                    ],
+                },
+            ),
+            (
+                13,
+                AbilityDef {
+                    mana_cost: 0,
+                    cooldown_frames: 0,
+                    cast_frames: 0,
+                    behavior: 0,
+                    effects: vec![EffectDef {
+                        kind: EffectKind::Stun,
+                        amount: 1,
+                        duration_frames: 10,
+                    }],
+                },
+            ),
+        ],
+        vec![(
+            20,
+            ItemDef {
+                hp_mod: 10,
+                damage_mod: 5,
+            },
+        )],
+        vec![(
+            30,
+            UpgradeDef {
+                damage_mod: 3,
+                hp_mod: 5,
+                research_frames: 4,
+            },
+        )],
+    )
+    .unwrap()
+}
+
+fn gameplay_config(defs: &FrozenDefinitions) -> MatchConfig {
+    MatchConfig {
+        seed: 0x5eed,
+        logic_fps: 30,
+        content_hash: defs.content_hash(),
+    }
+}
+
+fn gp(frame: u64, player: u8, sequence: u32, kind: GameplayCommandKind) -> GameplayCommand {
+    GameplayCommand::new(Frame::new(frame), player, sequence, kind)
+}
+
+#[test]
+fn casting_buff_expiry_and_restore_are_deterministic() {
+    let defs = gameplay_defs();
+    let content = defs.content_hash();
+    let cfg = gameplay_config(&defs);
+    let spawn_a = Command::new(Frame::new(0), 1, 1, spawn(0, 0));
+    let spawn_b = Command::new(Frame::new(0), 2, 1, spawn(0, 0));
+    let cast = gp(
+        1,
+        1,
+        1,
+        GameplayCommandKind::Cast {
+            caster: EntityId::new(1).unwrap(),
+            ability: 10,
+            target: EntityId::new(2).unwrap(),
+        },
+    );
+
+    let build = || {
+        let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+        sim.submit_command(spawn_a).unwrap();
+        sim.submit_command(spawn_b).unwrap();
+        sim.submit_gameplay_command(cast).unwrap();
+        sim
+    };
+    let mut a = build();
+    let mut b = build();
+
+    // 推进到引导进行中（帧 2），捕获含施法运行态的快照。
+    for _ in 0..2 {
+        a.step();
+        b.step();
+        assert_eq!(a.compute_state_hash(), b.compute_state_hash());
+    }
+    let snap = a.capture_snapshot();
+    let caster = snap.positions.iter().find(|p| p.entity == 1).unwrap();
+    assert!(
+        caster.gameplay.cast.is_some(),
+        "cast runtime must enter snapshot"
+    );
+    let mana_at_capture = caster.gameplay.mana;
+
+    let mut restored = RtsMatch::restore_snapshot(snap, StaticWorld::default(), content).unwrap();
+    assert_eq!(a.compute_state_hash(), restored.compute_state_hash());
+    let restored_snap = restored.capture_snapshot();
+    let restored_caster = restored_snap
+        .positions
+        .iter()
+        .find(|p| p.entity == 1)
+        .unwrap();
+    assert_eq!(
+        restored_caster.gameplay.mana, mana_at_capture,
+        "restore must not re-charge mana or re-cast"
+    );
+
+    // 施法完成、冷却递减、Buff 到期后三者仍逐帧一致。
+    for frame in 2..24 {
+        a.step();
+        b.step();
+        restored.step();
+        assert_eq!(
+            a.compute_state_hash(),
+            b.compute_state_hash(),
+            "frame {frame}"
+        );
+        assert_eq!(
+            a.compute_state_hash(),
+            restored.compute_state_hash(),
+            "restore frame {frame}"
+        );
+        assert_eq!(a.first_difference(&b), None);
+        assert_eq!(a.first_difference(&restored), None);
+    }
+}
+
+#[test]
+fn effects_after_target_death_return_no_effect() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let cast = gp(
+        1,
+        1,
+        1,
+        GameplayCommandKind::Cast {
+            caster: EntityId::new(1).unwrap(),
+            ability: 12,
+            target: EntityId::new(2).unwrap(),
+        },
+    );
+    let build = || {
+        let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+        sim.submit_command(Command::new(Frame::new(0), 1, 1, spawn(0, 0)))
+            .unwrap();
+        sim.submit_command(Command::new(Frame::new(0), 2, 1, spawn(0, 0)))
+            .unwrap();
+        sim.submit_gameplay_command(cast).unwrap();
+        sim
+    };
+    let mut a = build();
+    let mut b = build();
+    for _ in 0..3 {
+        a.step();
+        b.step();
+    }
+    assert_eq!(a.compute_state_hash(), b.compute_state_hash());
+    let snap = a.capture_snapshot();
+    let target = snap.positions.iter().find(|p| p.entity == 2).unwrap();
+    assert!(!target.alive, "lethal damage must kill the target");
+    assert!(
+        target.gameplay.buffs.is_empty(),
+        "subsequent effects must be NoEffect after death"
+    );
+}
+
+#[test]
+fn production_cancel_is_deterministic() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let producer = EntityId::new(1).unwrap();
+    let train = gp(
+        1,
+        1,
+        1,
+        GameplayCommandKind::Train {
+            producer,
+            unit_def: 1,
+            is_building: false,
+        },
+    );
+    let cancel = gp(
+        2,
+        1,
+        2,
+        GameplayCommandKind::CancelTrain { producer, index: 0 },
+    );
+    let spawn_cmd = Command::new(Frame::new(0), 1, 1, spawn(0, 0));
+
+    let build = |with_cancel: bool| {
+        let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+        sim.submit_command(spawn_cmd).unwrap();
+        sim.submit_gameplay_command(train).unwrap();
+        if with_cancel {
+            sim.submit_gameplay_command(cancel).unwrap();
+        }
+        sim
+    };
+    let mut a = build(true);
+    let mut b = build(true);
+    let mut uncancelled = build(false);
+
+    for _ in 0..14 {
+        a.step();
+        b.step();
+        uncancelled.step();
+    }
+    assert_eq!(a.compute_state_hash(), b.compute_state_hash());
+    assert_eq!(a.first_difference(&b), None);
+    let snap_a = a.capture_snapshot();
+    let snap_c = uncancelled.capture_snapshot();
+    assert!(
+        snap_a
+            .positions
+            .iter()
+            .find(|p| p.entity == 1)
+            .unwrap()
+            .gameplay
+            .production
+            .is_empty()
+    );
+    assert_eq!(
+        snap_a.alive_entities.len(),
+        1,
+        "cancelled production must not spawn"
+    );
+    assert_eq!(
+        snap_c.alive_entities.len(),
+        2,
+        "completed production must spawn a unit"
+    );
+}
+
+#[test]
+fn ai_replay_does_not_double_execute() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let set_ai = gp(1, 1, 1, GameplayCommandKind::SetAi { enabled: true });
+    let external = [
+        Command::new(Frame::new(0), 1, 1, spawn(0, 0)),
+        Command::new(Frame::new(0), 2, 1, spawn(1, 0)),
+    ];
+
+    let build = |with_ai: bool| {
+        let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+        for command in &external {
+            sim.submit_command(*command).unwrap();
+        }
+        if with_ai {
+            sim.submit_gameplay_command(set_ai).unwrap();
+        }
+        sim
+    };
+    let mut original = build(true);
+    let mut replay = build(true);
+    let mut no_ai = build(false);
+
+    // 重放只注入相同的外部命令，AI 每帧确定性重算。
+    let expected: Vec<u64> = (0..30)
+        .map(|_| {
+            original.step();
+            original.compute_state_hash()
+        })
+        .collect();
+    for (frame, hash) in expected.iter().enumerate() {
+        replay.step();
+        assert_eq!(replay.compute_state_hash(), *hash, "frame {frame}");
+    }
+    for _ in 0..30 {
+        no_ai.step();
+    }
+    assert_ne!(
+        original.compute_state_hash(),
+        no_ai.compute_state_hash(),
+        "AI must affect authoritative state"
+    );
+    let snap = replay.capture_snapshot();
+    assert!(
+        snap.gameplay.commands.pending().is_empty(),
+        "internal AI commands must never enter the command queue"
+    );
+}
+
+#[test]
+fn new_gameplay_fields_are_hashed_and_snapshot_safe() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let spawn_cmd = Command::new(Frame::new(0), 1, 1, spawn(0, 0));
+    let producer = EntityId::new(1).unwrap();
+    let research = gp(0, 1, 1, GameplayCommandKind::Research { upgrade: 30 });
+
+    let mut a = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+    let mut b = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+    a.submit_command(spawn_cmd).unwrap();
+    b.submit_command(spawn_cmd).unwrap();
+    a.submit_gameplay_command(research).unwrap();
+    // 等量不改变状态的命令对齐玩法命令计数器，隔离出世界玩法状态差异。
+    let noop_kind = GameplayCommandKind::CancelTrain {
+        producer,
+        index: u32::MAX,
+    };
+    a.submit_gameplay_command(gp(0, 1, 2, noop_kind)).unwrap();
+    b.submit_gameplay_command(gp(0, 1, 1, noop_kind)).unwrap();
+    b.submit_gameplay_command(gp(0, 1, 2, noop_kind)).unwrap();
+
+    a.step();
+    b.step();
+    assert_ne!(a.compute_state_hash(), b.compute_state_hash());
+    assert_eq!(a.first_difference(&b), Some("gameplay_players"));
+
+    let snap = a.capture_snapshot();
+    let restored =
+        RtsMatch::restore_snapshot(snap, StaticWorld::default(), defs.content_hash()).unwrap();
+    assert_eq!(a.compute_state_hash(), restored.compute_state_hash());
+    assert_eq!(a.first_difference(&restored), None);
+}
+
+#[test]
+fn frozen_definitions_are_hashed_and_content_validated() {
+    let full = gameplay_defs();
+    let empty = FrozenDefinitions::empty();
+    // 两份配置 content_hash 相同，只让冻结定义本身不同。
+    let cfg = MatchConfig {
+        seed: 1,
+        logic_fps: 30,
+        content_hash: 0xABCD,
+    };
+    let a = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), full.clone());
+    let b = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), empty);
+    assert_ne!(a.compute_state_hash(), b.compute_state_hash());
+    assert_eq!(a.first_difference(&b), Some("frozen_definitions"));
+    // 只读视图：没有运行期热更新入口。
+    assert_eq!(a.definitions().content_hash(), full.content_hash());
+
+    let mut sim = RtsMatch::create_with_definitions(
+        MatchConfig {
+            seed: 1,
+            logic_fps: 30,
+            content_hash: full.content_hash(),
+        },
+        StaticWorld::default(),
+        full.clone(),
+    );
+    sim.step();
+    let snap = sim.capture_snapshot();
+    assert_eq!(snap.content_hash, full.content_hash());
+    assert_eq!(snap.defs.content_hash(), full.content_hash());
+    assert!(matches!(
+        RtsMatch::restore_snapshot(
+            snap,
+            StaticWorld::default(),
+            full.content_hash().wrapping_add(1)
+        ),
+        Err(SnapshotError::ContentMismatch)
+    ));
+}
+
+#[test]
+fn registered_behavior_extends_the_effect_chain() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let target = EntityId::new(2).unwrap();
+    let register = gp(
+        0,
+        1,
+        1,
+        GameplayCommandKind::RegisterBehavior {
+            id: 99,
+            effect: EffectDef {
+                kind: EffectKind::BuffStat,
+                amount: 1,
+                duration_frames: 4,
+            },
+        },
+    );
+    let cast = gp(
+        1,
+        1,
+        2,
+        GameplayCommandKind::Cast {
+            caster: EntityId::new(1).unwrap(),
+            ability: 11,
+            target,
+        },
+    );
+    let build = |with_register: bool| {
+        let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+        sim.submit_command(Command::new(Frame::new(0), 1, 1, spawn(0, 0)))
+            .unwrap();
+        sim.submit_command(Command::new(Frame::new(0), 2, 1, spawn(0, 0)))
+            .unwrap();
+        if with_register {
+            sim.submit_gameplay_command(register).unwrap();
+        }
+        sim.submit_gameplay_command(cast).unwrap();
+        sim
+    };
+    let mut a = build(true);
+    let mut b = build(false);
+    for _ in 0..3 {
+        a.step();
+        b.step();
+    }
+    let snap_a = a.capture_snapshot();
+    let snap_b = b.capture_snapshot();
+    let ta = snap_a.positions.iter().find(|p| p.entity == 2).unwrap();
+    let tb = snap_b.positions.iter().find(|p| p.entity == 2).unwrap();
+    assert_eq!(
+        ta.gameplay.buffs.len(),
+        1,
+        "registered behavior adds an effect"
+    );
+    assert!(
+        tb.gameplay.buffs.is_empty(),
+        "no registration means no extra effect"
+    );
+    assert_eq!(
+        ta.gameplay.stat_mods.damage, 1,
+        "BuffStat must actually modify authoritative stats"
+    );
+    assert_ne!(a.compute_state_hash(), b.compute_state_hash());
+}
+
+#[test]
+fn snapshot_rejects_tampered_definitions() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs.clone());
+    sim.step();
+    let mut snap = sim.capture_snapshot();
+    // 替换冻结定义但保留 defs_hash 头部，恢复必须明确拒绝。
+    snap.defs = FrozenDefinitions::empty();
+    assert!(matches!(
+        RtsMatch::restore_snapshot(snap, StaticWorld::default(), defs.content_hash()),
+        Err(SnapshotError::DefsMismatch)
+    ));
+}
+
+#[test]
+fn snapshot_rejects_pre_p5_versions() {
+    let mut sim = RtsMatch::create(config());
+    sim.step();
+    let base = sim.capture_snapshot();
+
+    let mut old_version = base.clone();
+    old_version.version = 2;
+    assert!(matches!(
+        RtsMatch::restore_snapshot(old_version, StaticWorld::default(), config().content_hash),
+        Err(SnapshotError::UnsupportedVersion { found: 2 })
+    ));
+
+    let mut old_sim = base;
+    old_sim.sim_version = 2;
+    assert!(matches!(
+        RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), config().content_hash),
+        Err(SnapshotError::SimVersionMismatch {
+            found: 2,
+            expected: 3
+        })
+    ));
+}
+
+#[test]
+fn victory_winner_option_is_hashed_with_a_tag() {
+    let mut sim = RtsMatch::create(config());
+    sim.step();
+    let base = sim.capture_snapshot();
+
+    let mut none_winner = base.clone();
+    none_winner.gameplay.victory.resolved = true;
+    none_winner.gameplay.victory.winner = None;
+    let mut zero_winner = base;
+    zero_winner.gameplay.victory.resolved = true;
+    zero_winner.gameplay.victory.winner = Some(0);
+
+    let a = RtsMatch::restore_snapshot(none_winner, StaticWorld::default(), config().content_hash)
+        .unwrap();
+    let b = RtsMatch::restore_snapshot(zero_winner, StaticWorld::default(), config().content_hash)
+        .unwrap();
+    // `None` 与 `Some(0)` 必须编码不同，避免哈希相同而差异诊断报不一致。
+    assert_ne!(a.compute_state_hash(), b.compute_state_hash());
+    assert_eq!(a.first_difference(&b), Some("victory"));
+}
+
+#[test]
+fn stun_buff_blocks_player_actions() {
+    let defs = gameplay_defs();
+    let cfg = gameplay_config(&defs);
+    let stun = gp(
+        1,
+        1,
+        1,
+        GameplayCommandKind::Cast {
+            caster: EntityId::new(1).unwrap(),
+            ability: 13,
+            target: EntityId::new(2).unwrap(),
+        },
+    );
+    let move_cmd = Command::new(
+        Frame::new(2),
+        2,
+        2,
+        CommandKind::Move {
+            entity: EntityId::new(2).unwrap(),
+            x: SimFixed::from_int(5).unwrap(),
+            y: SimFixed::ZERO,
+            group: 0,
+            append: false,
+        },
+    );
+    let mut sim = RtsMatch::create_with_definitions(cfg, StaticWorld::default(), defs);
+    sim.submit_command(Command::new(Frame::new(0), 1, 1, spawn(0, 0)))
+        .unwrap();
+    sim.submit_command(Command::new(Frame::new(0), 2, 1, spawn(0, 0)))
+        .unwrap();
+    sim.submit_gameplay_command(stun).unwrap();
+    sim.submit_command(move_cmd).unwrap();
+    for _ in 0..3 {
+        sim.step();
+    }
+    let snap = sim.capture_snapshot();
+    let target = snap.positions.iter().find(|p| p.entity == 2).unwrap();
+    assert!(
+        target
+            .gameplay
+            .buffs
+            .iter()
+            .any(|buff| buff.kind == EffectKind::Stun),
+        "stun buff must be present"
+    );
+    assert!(
+        target.goal.is_none(),
+        "stunned unit must reject the player Move command"
+    );
 }

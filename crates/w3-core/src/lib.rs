@@ -22,6 +22,7 @@ pub mod command;
 pub mod entity;
 pub mod fixed;
 pub mod frame;
+pub mod gameplay;
 pub mod nav;
 pub mod sim_match;
 pub mod snapshot;
@@ -33,6 +34,13 @@ pub use command::{Command, CommandError, CommandKind, CommandQueue};
 pub use entity::{EntityId, EntityStore};
 pub use fixed::{FRACTIONAL_BITS, FixedError, SCALE, SimFixed, isqrt};
 pub use frame::{Frame, FrameClock};
+pub use gameplay::{
+    AbilityDef, AiState, AuraState, BehaviorSpec, BuffInstance, CONTENT_HASH_SCHEMA, CastRuntime,
+    DefId, DefinitionError, EffectDef, EffectKind, EffectOutcome, FrozenDefinitions,
+    GameplayCommand, GameplayCommandError, GameplayCommandKind, GameplayCommandQueue, HeroState,
+    ItemDef, PlayerEconomy, ProductionItem, StatMods, UnitDef, UnitGameplayState, UpgradeDef,
+    VictoryState, WaveState, WorldGameplayState, resolve_effects,
+};
 pub use nav::{DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 pub use sim_match::{EntityView, Event, EventKind, MatchConfig, RtsMatch, WorldView};
 pub use snapshot::{

@@ -13,6 +13,12 @@ use crate::command::{Command, CommandError, CommandKind, CommandQueue};
 use crate::entity::{EntityId, EntityStore};
 use crate::fixed::{SimFixed, isqrt};
 use crate::frame::{Frame, FrameClock};
+use crate::gameplay::{
+    AuraState, BehaviorSpec, CastRuntime, DefId, EffectDef, EffectKind, EffectOutcome,
+    FrozenDefinitions, GameplayCommand, GameplayCommandError, GameplayCommandKind, ProductionItem,
+    Settlement, UnitGameplayState, VictoryState, Vitals, WaveState, WorldGameplayState,
+    resolve_effects, validate_gameplay_entities,
+};
 use crate::nav::{self, DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 use crate::snapshot::{
     GroupPlanRecord, ObstacleRecord, OrderRecord, PositionRecord, SIM_VERSION, SNAPSHOT_VERSION,
@@ -27,6 +33,8 @@ const PLAN_BUDGET: usize = 64;
 const CONGESTION_TIMEOUT_FRAMES: u32 = 90;
 /// 每单位待执行订单上限。
 const MAX_PENDING_ORDERS: usize = 64;
+/// 出生单位的冻结初始法力（`Spawn` 命令不携带法力，见 P2 内联初值口径）。
+const DEFAULT_UNIT_MANA: i64 = 100;
 /// 默认每帧转向增量（1/16 圈）。
 const DEFAULT_TURN_RATE: i64 = 1 << 12;
 
@@ -103,6 +111,8 @@ struct UnitState {
     path_index: usize,
     blocked_frames: u32,
     group: u32,
+    /// P5 玩法运行态（法力 / Buff / 施法 / 冷却 / 英雄 / 背包 / 生产队列）。
+    gameplay: UnitGameplayState,
 }
 
 impl UnitState {
@@ -134,6 +144,7 @@ impl UnitState {
             path_index: 0,
             blocked_frames: 0,
             group: 0,
+            gameplay: UnitGameplayState::default(),
         }
     }
 }
@@ -197,6 +208,10 @@ pub struct RtsMatch {
     rng: u64,
     events: Vec<Event>,
     next_event_seq: u64,
+    /// 冻结内容定义（创建后无可变 API，拒绝运行期热更新）。
+    defs: FrozenDefinitions,
+    /// 全局玩法运行态（经济 / 胜负 / AI / 光环 / 波次 / 行为注册 / 玩法命令）。
+    gameplay: WorldGameplayState,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -360,6 +375,7 @@ fn hash_unit(hasher: &mut StateHasher, unit: &UnitState) {
     hasher.write_u64(unit.path_index as u64);
     hasher.write_u32(unit.blocked_frames);
     hasher.write_u32(unit.group);
+    unit.gameplay.hash(hasher);
 }
 
 impl RtsMatch {
@@ -382,7 +398,25 @@ impl RtsMatch {
             rng: config.seed,
             events: Vec::new(),
             next_event_seq: 0,
+            defs: FrozenDefinitions::empty(),
+            gameplay: WorldGameplayState::default(),
         }
+    }
+
+    /// 注入冻结内容定义；创建后不提供任何运行期热更新入口。
+    pub fn create_with_definitions(
+        config: MatchConfig,
+        world: StaticWorld,
+        defs: FrozenDefinitions,
+    ) -> Self {
+        let mut sim = Self::create_with_world(config, world);
+        sim.defs = defs;
+        sim
+    }
+
+    /// 冻结定义的只读视图。
+    pub fn definitions(&self) -> &FrozenDefinitions {
+        &self.defs
     }
 
     pub fn config(&self) -> MatchConfig {
@@ -394,6 +428,26 @@ impl RtsMatch {
             return Err(CommandError::FrameInPast);
         }
         self.commands.submit(command)
+    }
+
+    /// 玩家与 AI 命令共用的校验入口（帧窗口 + 实体合法性）。
+    fn validate_gameplay_command(
+        &self,
+        command: &GameplayCommand,
+    ) -> Result<(), GameplayCommandError> {
+        if command.execute_frame.value() < self.clock.current().value() {
+            return Err(GameplayCommandError::FrameInPast);
+        }
+        validate_gameplay_entities(&command.kind)
+    }
+
+    /// 玩家与 AI 共用的玩法命令提交入口（与 `submit_command` 同源校验）。
+    pub fn submit_gameplay_command(
+        &mut self,
+        command: GameplayCommand,
+    ) -> Result<u64, GameplayCommandError> {
+        self.validate_gameplay_command(&command)?;
+        self.gameplay.commands.submit(command)
     }
 
     /// 完整推进一个逻辑帧；不接受调用方传入的 delta，也不读取墙钟。
@@ -436,10 +490,25 @@ impl RtsMatch {
         // 6. 同帧攻击结算，按稳定顺序、带存活复核。
         self.resolve_attacks(frame, &attacks);
 
-        // 7. 每帧消耗一次随机流；该流属于权威状态。
+        // 7. 冻结本帧玩法命令并执行（费用事务提交 + 效果链，统一结算）。
+        let due_gameplay = self.gameplay.commands.freeze_frame(frame);
+        for command in due_gameplay {
+            self.apply_gameplay(command, frame);
+        }
+
+        // 8. 推进玩法运行态（施法 / 引导、冷却、Buff 到期、光环 / 波次、生产 / 研究）。
+        self.advance_gameplay_timers();
+
+        // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
+        self.resolve_victory(frame);
+
+        // 10. 确定性 AI：每帧重算，内部命令不写回命令队列、不注入重放。
+        self.run_ai(frame);
+
+        // 11. 每帧消耗一次随机流；该流属于权威状态。
         self.rng = next_rng(self.rng);
 
-        // 8. 提交本帧。
+        // 12. 提交本帧。
         self.clock.advance();
     }
 
@@ -462,18 +531,18 @@ impl RtsMatch {
                 attack_range,
             } => {
                 let id = self.entities.spawn();
-                self.units.insert(
-                    id,
-                    UnitState::new(
-                        x,
-                        y,
-                        command.player_id,
-                        hp,
-                        speed,
-                        attack_damage,
-                        attack_range,
-                    ),
+                let mut unit = UnitState::new(
+                    x,
+                    y,
+                    command.player_id,
+                    hp,
+                    speed,
+                    attack_damage,
+                    attack_range,
                 );
+                unit.gameplay.mana = DEFAULT_UNIT_MANA;
+                unit.gameplay.max_mana = DEFAULT_UNIT_MANA;
+                self.units.insert(id, unit);
                 self.push_event(frame, id, EventKind::Spawned);
             }
             CommandKind::Move {
@@ -547,12 +616,18 @@ impl RtsMatch {
         self.entities.contains(entity) && self.units.get(&entity).is_some_and(|unit| unit.alive)
     }
 
+    /// 可操作校验：存活、归属匹配，且未被眩晕（`Stun` Buff 仍在生效）。
     fn is_actionable(&self, entity: EntityId, player_id: u8) -> bool {
         self.entities.contains(entity)
-            && self
-                .units
-                .get(&entity)
-                .is_some_and(|unit| unit.alive && unit.owner == player_id)
+            && self.units.get(&entity).is_some_and(|unit| {
+                unit.alive
+                    && unit.owner == player_id
+                    && !unit
+                        .gameplay
+                        .buffs
+                        .iter()
+                        .any(|buff| buff.kind == EffectKind::Stun && buff.remaining > 0)
+            })
     }
 
     fn obstacle_in_bounds(&self, area: GridArea) -> bool {
@@ -849,28 +924,34 @@ impl RtsMatch {
             let (damage, range, ax, ay) = {
                 let unit = self.units.get(&attacker).expect("checked above");
                 (
-                    unit.attack_damage,
+                    unit.attack_damage
+                        .saturating_add(unit.gameplay.stat_mods.damage),
                     unit.attack_range.raw(),
                     unit.x.raw(),
                     unit.y.raw(),
                 )
             };
-            let (tx, ty, hp) = {
+            let (tx, ty) = {
                 let unit = self.units.get(&target).expect("checked above");
-                (unit.x.raw(), unit.y.raw(), unit.hp)
+                (unit.x.raw(), unit.y.raw())
             };
             let dx = tx.saturating_sub(ax);
             let dy = ty.saturating_sub(ay);
             if isqrt((dx as i128) * (dx as i128) + (dy as i128) * (dy as i128)) > range as i128 {
                 continue;
             }
-            let remaining = hp - damage;
-            let died = remaining <= 0;
-            {
-                let unit = self.units.get_mut(&target).expect("checked above");
-                if died {
-                    unit.hp = 0;
-                    unit.alive = false;
+            // 单一结算所有者：攻击不得绕过 Settlement 直接改权威生命值。
+            let outcome = self.apply_effect(
+                target,
+                &EffectDef {
+                    kind: EffectKind::Damage,
+                    amount: damage,
+                    duration_frames: 0,
+                },
+            );
+            let died = !self.is_alive(target);
+            if died {
+                if let Some(unit) = self.units.get_mut(&target) {
                     unit.order = Order::Idle;
                     unit.pending.clear();
                     unit.goal = None;
@@ -878,11 +959,11 @@ impl RtsMatch {
                     unit.path_index = 0;
                     unit.blocked_frames = 0;
                     unit.group = 0;
-                } else {
-                    unit.hp = remaining;
                 }
             }
-            self.push_event(frame, target, EventKind::AttackHit);
+            if outcome == EffectOutcome::Applied {
+                self.push_event(frame, target, EventKind::AttackHit);
+            }
             if died {
                 self.push_event(frame, target, EventKind::Died);
             }
@@ -897,6 +978,440 @@ impl RtsMatch {
             kind,
         });
         self.next_event_seq += 1;
+    }
+
+    /// 从 `UnitState` 构造结算视图；上限字段先复制，避免借用冲突。
+    fn make_vitals(unit: &mut UnitState) -> Vitals<'_> {
+        let max_hp = unit.max_hp;
+        Vitals {
+            hp: &mut unit.hp,
+            max_hp,
+            alive: &mut unit.alive,
+            mana: &mut unit.gameplay.mana,
+            buffs: &mut unit.gameplay.buffs,
+            stat_mods: &mut unit.gameplay.stat_mods,
+        }
+    }
+
+    /// 单个效果经统一结算服务落到目标；目标死亡后后续效果返回 `NoEffect`。
+    fn apply_effect(&mut self, target: EntityId, effect: &EffectDef) -> EffectOutcome {
+        let Some(unit) = self.units.get_mut(&target) else {
+            return EffectOutcome::NoEffect;
+        };
+        let mut vitals = Self::make_vitals(unit);
+        match effect.kind {
+            EffectKind::Damage => Settlement::damage(&mut vitals, effect.amount),
+            EffectKind::Heal => Settlement::heal(&mut vitals, effect.amount),
+            // BuffStat 经结算同时改属性修正并登记短期 Buff；Stun 登记眩晕 Buff。
+            EffectKind::BuffStat => Settlement::stat_mod(&mut vitals, effect),
+            EffectKind::Stun => Settlement::buff(&mut vitals, effect),
+        }
+    }
+
+    /// 法力费用提交事务：与效果执行链分离，失败不产生任何改动。
+    fn commit_mana_cost(&mut self, caster: EntityId, cost: i64) -> bool {
+        let Some(unit) = self.units.get_mut(&caster) else {
+            return false;
+        };
+        Settlement::commit_cost(&mut Self::make_vitals(unit), cost)
+    }
+
+    /// 效果链：顺序执行；目标中途死亡后由 `Settlement` 自然返回 `NoEffect`，
+    /// 已提交的效果不回滚、不重复扣费。
+    fn apply_effects(&mut self, target: EntityId, ability: DefId) {
+        let effects = resolve_effects(&self.defs, &self.gameplay, ability);
+        for effect in effects {
+            self.apply_effect(target, &effect);
+        }
+    }
+
+    /// 施法（玩家命令与 AI 共用入口）：同源校验 → 费用事务 → 运行态 / 效果链。
+    fn execute_cast(&mut self, caster: EntityId, ability: DefId, target: EntityId, player: u8) {
+        if !self.is_actionable(caster, player) || !self.is_alive(target) {
+            return;
+        }
+        let Some(def) = self.defs.abilities().get(&ability).cloned() else {
+            return;
+        };
+        let on_cooldown = self
+            .units
+            .get(&caster)
+            .and_then(|unit| unit.gameplay.cooldowns.get(&ability))
+            .is_some();
+        if on_cooldown || !self.commit_mana_cost(caster, def.mana_cost) {
+            return;
+        }
+        if def.cooldown_frames > 0 {
+            if let Some(unit) = self.units.get_mut(&caster) {
+                unit.gameplay.cooldowns.insert(ability, def.cooldown_frames);
+            }
+        }
+        if def.cast_frames > 0 {
+            if let Some(unit) = self.units.get_mut(&caster) {
+                unit.gameplay.cast = Some(CastRuntime {
+                    ability,
+                    target,
+                    remaining_frames: def.cast_frames,
+                    channel: true,
+                });
+            }
+            if def.behavior != 0 {
+                self.gameplay.auras.insert(
+                    caster.value() as u32,
+                    AuraState {
+                        source: caster,
+                        ability,
+                        remaining: def.cast_frames,
+                    },
+                );
+            }
+        } else {
+            self.apply_effects(target, ability);
+        }
+    }
+
+    fn enqueue_production(
+        &mut self,
+        producer: EntityId,
+        unit_def: DefId,
+        is_building: bool,
+        player: u8,
+    ) {
+        if !self.is_actionable(producer, player) {
+            return;
+        }
+        let frames = self
+            .defs
+            .units()
+            .get(&unit_def)
+            .map(|def| def.train_frames)
+            .unwrap_or(0);
+        if let Some(unit) = self.units.get_mut(&producer) {
+            unit.gameplay.production.push(ProductionItem {
+                unit_def,
+                remaining_frames: frames.max(1),
+                is_building,
+            });
+        }
+        self.gameplay.players.entry(player).or_default();
+    }
+
+    fn cancel_train(&mut self, producer: EntityId, index: u32) {
+        if let Some(unit) = self.units.get_mut(&producer) {
+            let index = index as usize;
+            if index < unit.gameplay.production.len() {
+                unit.gameplay.production.remove(index);
+            }
+        }
+    }
+
+    fn research(&mut self, player: u8, upgrade: DefId) {
+        let frames = self
+            .defs
+            .upgrades()
+            .get(&upgrade)
+            .map(|def| def.research_frames)
+            .unwrap_or(0);
+        let economy = self.gameplay.players.entry(player).or_default();
+        economy.research = Some((upgrade, frames.max(1)));
+    }
+
+    fn buy_item(&mut self, unit: EntityId, item: DefId) {
+        let Some(def) = self.defs.items().get(&item).copied() else {
+            return;
+        };
+        if let Some(state) = self.units.get_mut(&unit) {
+            state.gameplay.bag.push(item);
+            // 属性修正统一走结算服务，不直接改权威字段。
+            Settlement::apply_stat_mod(&mut Self::make_vitals(state), def.damage_mod, def.hp_mod);
+        }
+    }
+
+    fn gather(&mut self, unit: EntityId, player: u8) {
+        if !self.is_actionable(unit, player) {
+            return;
+        }
+        if let Some(state) = self.units.get_mut(&unit) {
+            state.gameplay.gathered = state.gameplay.gathered.saturating_add(1);
+        }
+        let economy = self.gameplay.players.entry(player).or_default();
+        economy.gold = economy.gold.saturating_add(1);
+    }
+
+    fn register_behavior(&mut self, id: DefId, effect: EffectDef) {
+        self.gameplay.behaviors.insert(
+            id,
+            BehaviorSpec {
+                id,
+                extra_effect: effect,
+            },
+        );
+    }
+
+    fn spawn_wave(&mut self, id: u32, period: u32) {
+        let period = period.max(1);
+        self.gameplay.waves.insert(
+            id,
+            WaveState {
+                period,
+                remaining: period,
+                count: 0,
+            },
+        );
+    }
+
+    fn set_ai(&mut self, enabled: bool, frame: Frame) {
+        self.gameplay.ai.enabled = enabled;
+        self.gameplay.ai.decision_period = 10;
+        self.gameplay.ai.next_decision_frame = frame.value().saturating_add(10);
+    }
+
+    /// 离开 / House 销毁清理的唯一所有者，不产生竞争状态。
+    fn leave(&mut self, player: u8) {
+        let economy = self.gameplay.players.entry(player).or_default();
+        economy.active = false;
+        economy.research = None;
+    }
+
+    /// 队列命令与 AI 共用的执行入口。
+    fn apply_gameplay(&mut self, command: GameplayCommand, frame: Frame) {
+        let player = command.player_id;
+        match command.kind {
+            GameplayCommandKind::Cast {
+                caster,
+                ability,
+                target,
+            } => self.execute_cast(caster, ability, target, player),
+            GameplayCommandKind::Train {
+                producer,
+                unit_def,
+                is_building,
+            } => self.enqueue_production(producer, unit_def, is_building, player),
+            GameplayCommandKind::CancelTrain { producer, index } => {
+                self.cancel_train(producer, index)
+            }
+            GameplayCommandKind::Research { upgrade } => self.research(player, upgrade),
+            GameplayCommandKind::BuyItem { unit, item } => self.buy_item(unit, item),
+            GameplayCommandKind::Gather { unit } => self.gather(unit, player),
+            GameplayCommandKind::RegisterBehavior { id, effect } => {
+                self.register_behavior(id, effect)
+            }
+            GameplayCommandKind::SpawnWave { id, period } => self.spawn_wave(id, period),
+            GameplayCommandKind::SetAi { enabled } => self.set_ai(enabled, frame),
+            GameplayCommandKind::Leave { player } => self.leave(player),
+        }
+    }
+
+    /// 推进全部可保存运行态；完成项在稳定顺序下统一提交。
+    fn advance_gameplay_timers(&mut self) {
+        let ids: Vec<EntityId> = self.units.keys().copied().collect();
+        let mut finished_casts: Vec<(DefId, EntityId)> = Vec::new();
+        let mut finished_production: Vec<(EntityId, u8, DefId, bool)> = Vec::new();
+
+        for &id in &ids {
+            let Some(unit) = self.units.get_mut(&id) else {
+                continue;
+            };
+            // 施法 / 引导完成。
+            let cast_done = match unit.gameplay.cast.as_mut() {
+                Some(cast) => {
+                    cast.remaining_frames = cast.remaining_frames.saturating_sub(1);
+                    (cast.remaining_frames == 0).then_some((cast.ability, cast.target))
+                }
+                None => None,
+            };
+            if let Some((ability, target)) = cast_done {
+                unit.gameplay.cast = None;
+                finished_casts.push((ability, target));
+            }
+            // 冷却递减。
+            let cooldowns: Vec<DefId> = unit.gameplay.cooldowns.keys().copied().collect();
+            for ability in cooldowns {
+                let expired = unit
+                    .gameplay
+                    .cooldowns
+                    .get_mut(&ability)
+                    .is_some_and(|remaining| {
+                        *remaining = remaining.saturating_sub(1);
+                        *remaining == 0
+                    });
+                if expired {
+                    unit.gameplay.cooldowns.remove(&ability);
+                }
+            }
+            // Buff 到期。
+            for buff in &mut unit.gameplay.buffs {
+                buff.remaining = buff.remaining.saturating_sub(1);
+            }
+            unit.gameplay.buffs.retain(|buff| buff.remaining > 0);
+            // 生产 / 建造队列。
+            let owner = unit.owner;
+            let mut produced = Vec::new();
+            for item in &mut unit.gameplay.production {
+                item.remaining_frames = item.remaining_frames.saturating_sub(1);
+                if item.remaining_frames == 0 {
+                    produced.push((item.unit_def, item.is_building));
+                }
+            }
+            unit.gameplay
+                .production
+                .retain(|item| item.remaining_frames > 0);
+            for (unit_def, is_building) in produced {
+                finished_production.push((id, owner, unit_def, is_building));
+            }
+        }
+
+        // 施法完成 → 效果链（统一结算，不重复扣费）。
+        for (ability, target) in finished_casts {
+            self.apply_effects(target, ability);
+        }
+        // 生产完成 → 生成单位（稳定 ID 顺序）。
+        for (producer, owner, unit_def, is_building) in finished_production {
+            self.complete_production(producer, owner, unit_def, is_building);
+        }
+
+        // 科技研究推进（按稳定玩家顺序）。
+        let players: Vec<u8> = self.gameplay.players.keys().copied().collect();
+        let mut completed_upgrades: Vec<(u8, DefId)> = Vec::new();
+        for player in players {
+            if let Some(economy) = self.gameplay.players.get_mut(&player) {
+                if let Some((upgrade, remaining)) = economy.research {
+                    let remaining = remaining.saturating_sub(1);
+                    if remaining == 0 {
+                        economy.research = None;
+                        economy.upgrades.insert(upgrade, true);
+                        completed_upgrades.push((player, upgrade));
+                    } else {
+                        economy.research = Some((upgrade, remaining));
+                    }
+                }
+            }
+        }
+        for (player, upgrade) in completed_upgrades {
+            self.apply_upgrade(player, upgrade);
+        }
+
+        // 波次与光环（稳定 ID 顺序）。
+        let wave_ids: Vec<u32> = self.gameplay.waves.keys().copied().collect();
+        for id in wave_ids {
+            if let Some(wave) = self.gameplay.waves.get_mut(&id) {
+                wave.remaining = wave.remaining.saturating_sub(1);
+                if wave.remaining == 0 {
+                    wave.remaining = wave.period;
+                    wave.count = wave.count.saturating_add(1);
+                }
+            }
+        }
+        self.gameplay.auras.retain(|_, aura| {
+            aura.remaining = aura.remaining.saturating_sub(1);
+            aura.remaining > 0
+        });
+    }
+
+    fn complete_production(
+        &mut self,
+        producer: EntityId,
+        owner: u8,
+        unit_def: DefId,
+        is_building: bool,
+    ) {
+        let Some(def) = self.defs.units().get(&unit_def).copied() else {
+            return;
+        };
+        let (x, y) = self
+            .units
+            .get(&producer)
+            .map(|unit| (unit.x, unit.y))
+            .unwrap_or((SimFixed::ZERO, SimFixed::ZERO));
+        let id = self.entities.spawn();
+        let mut unit = UnitState::new(
+            x,
+            y,
+            owner,
+            def.hp,
+            SimFixed::from_raw(def.speed_raw),
+            def.damage,
+            SimFixed::from_raw(def.range_raw),
+        );
+        unit.gameplay.max_mana = def.mana;
+        unit.gameplay.mana = def.mana;
+        self.units.insert(id, unit);
+        let economy = self.gameplay.players.entry(owner).or_default();
+        economy.produced = economy.produced.saturating_add(1);
+        economy.supply_used = economy.supply_used.saturating_add(def.supply);
+        if !is_building {
+            economy.supply_cap = economy.supply_cap.saturating_add(def.supply);
+        }
+    }
+
+    fn apply_upgrade(&mut self, player: u8, upgrade: DefId) {
+        let Some(def) = self.defs.upgrades().get(&upgrade).copied() else {
+            return;
+        };
+        let ids: Vec<EntityId> = self.units.keys().copied().collect();
+        for id in ids {
+            let Some(unit) = self.units.get_mut(&id) else {
+                continue;
+            };
+            if unit.owner != player || !unit.alive {
+                continue;
+            }
+            // 属性修正统一走结算服务，不直接改权威字段。
+            Settlement::apply_stat_mod(&mut Self::make_vitals(unit), def.damage_mod, def.hp_mod);
+        }
+    }
+
+    /// 胜负在既定帧阶段按稳定顺序只结算一次。
+    fn resolve_victory(&mut self, frame: Frame) {
+        if self.gameplay.victory.resolved || self.gameplay.players.len() < 2 {
+            return;
+        }
+        let active: Vec<u8> = self
+            .gameplay
+            .players
+            .iter()
+            .filter(|(_, economy)| economy.active)
+            .map(|(player, _)| *player)
+            .collect();
+        if active.len() == 1 {
+            self.gameplay.victory = VictoryState {
+                resolved: true,
+                winner: Some(active[0]),
+                resolved_frame: frame.value(),
+            };
+        }
+    }
+
+    /// 确定性 AI：只作用于仍空闲单位，不覆盖仍有效的玩家命令；
+    /// AI 命令经与玩家相同的 `validate_gameplay_command` 校验入口，但绝不写回
+    /// 命令队列，因此完整重放只注入外部命令、不会双重执行内部 AI 命令。
+    fn run_ai(&mut self, frame: Frame) {
+        if !self.gameplay.ai.enabled || frame.value() < self.gameplay.ai.next_decision_frame {
+            return;
+        }
+        let period = self.gameplay.ai.decision_period.max(1) as u64;
+        self.gameplay.ai.next_decision_frame = frame.value().saturating_add(period);
+
+        let ids: Vec<EntityId> = self.units.keys().copied().collect();
+        // 目标过滤同样走统一结算服务。
+        let alive = Settlement::filter_targets(&ids, |id| self.is_alive(id));
+        let idle: Vec<(EntityId, u8)> = alive
+            .into_iter()
+            .filter_map(|id| {
+                self.units
+                    .get(&id)
+                    .filter(|unit| unit.order == Order::Idle)
+                    .map(|unit| (id, unit.owner))
+            })
+            .collect();
+        for (id, owner) in idle {
+            let command =
+                GameplayCommand::new(frame, owner, 0, GameplayCommandKind::Gather { unit: id });
+            // 与 `submit_gameplay_command` 共用同一校验入口，只是不入队、不注入重放。
+            if self.validate_gameplay_command(&command).is_ok() {
+                self.apply_gameplay(command, frame);
+            }
+        }
     }
 
     pub fn read_view(&self) -> WorldView {
@@ -981,6 +1496,9 @@ impl RtsMatch {
         for command in self.commands.pending() {
             hash_command(&mut hasher, command);
         }
+        // P5：冻结定义的内容哈希与全部玩法运行态进入权威状态哈希。
+        hasher.write_u64(self.defs.content_hash());
+        self.gameplay.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -1031,6 +1549,12 @@ impl RtsMatch {
         if self.commands.pending() != other.commands.pending() {
             return Some("pending_commands");
         }
+        if self.defs != other.defs {
+            return Some("frozen_definitions");
+        }
+        if let Some(field) = self.gameplay.first_difference(&other.gameplay) {
+            return Some(field);
+        }
         None
     }
 
@@ -1041,6 +1565,7 @@ impl RtsMatch {
             sim_version: SIM_VERSION,
             seed: self.config.seed,
             content_hash: self.config.content_hash,
+            defs_hash: self.defs.content_hash(),
             logic_fps: self.config.logic_fps,
             tick: self.clock.current().value(),
             rng: self.rng,
@@ -1075,6 +1600,7 @@ impl RtsMatch {
                         path_index: unit.path_index as u32,
                         blocked_frames: unit.blocked_frames,
                         group: unit.group,
+                        gameplay: unit.gameplay.clone(),
                     }
                 })
                 .collect(),
@@ -1108,6 +1634,8 @@ impl RtsMatch {
                     progress: plan.progress as u32,
                 })
                 .collect(),
+            defs: self.defs.clone(),
+            gameplay: self.gameplay.clone(),
         }
     }
 
@@ -1131,6 +1659,11 @@ impl RtsMatch {
         }
         if snapshot.content_hash != expected_content_hash {
             return Err(SnapshotError::ContentMismatch);
+        }
+        // 冻结定义的内容哈希进快照头；定义被替换或篡改时明确拒绝，
+        // 不产生「哈希相同而定义不同」的半初始化对局。
+        if snapshot.defs_hash != snapshot.defs.content_hash() {
+            return Err(SnapshotError::DefsMismatch);
         }
         if snapshot.world_identity != world.identity() {
             return Err(SnapshotError::WorldMismatch);
@@ -1181,6 +1714,7 @@ impl RtsMatch {
                     path_index: record.path_index as usize,
                     blocked_frames: record.blocked_frames,
                     group: record.group,
+                    gameplay: record.gameplay.clone(),
                 },
             );
         }
@@ -1249,6 +1783,8 @@ impl RtsMatch {
             rng: snapshot.rng,
             events: Vec::new(),
             next_event_seq: snapshot.next_event_seq,
+            defs: snapshot.defs.clone(),
+            gameplay: snapshot.gameplay.clone(),
         })
     }
 }

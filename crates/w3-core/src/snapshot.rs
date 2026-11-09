@@ -5,14 +5,15 @@
 //! 动态占地与群体规划进度。行为由 ID 与显式数据重建，绝不来自闭包、
 //! 任务或活动对象。静态地图不嵌入快照，只记录其身份用于恢复校验。
 //!
-//! v2 由本 change 引入，开发期内静态地图身份编码（含 `origin`）定稿；
-//! 未发布过其它 v2 快照，恢复时 `world_identity` 校验会拒绝编码不一致的
-//! 世界，不提供跨版本迁移。
+//! v3 由 P5 引入：在 v2 基础上追加冻结内容定义、内容哈希头与全部玩法
+//! 运行态。未发布过其它 v3 快照，恢复时 `world_identity` / `defs_hash` /
+//! `content_hash` 校验会拒绝编码不一致或被篡改的状态，不提供跨版本迁移。
 
 use crate::command::Command;
+use crate::gameplay::{FrozenDefinitions, UnitGameplayState, WorldGameplayState};
 
-pub const SNAPSHOT_VERSION: u32 = 2;
-pub const SIM_VERSION: u32 = 2;
+pub const SNAPSHOT_VERSION: u32 = 3;
+pub const SIM_VERSION: u32 = 3;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,6 +66,8 @@ pub struct PositionRecord {
     pub path_index: u32,
     pub blocked_frames: u32,
     pub group: u32,
+    /// 单位玩法运行态（法力 / Buff / 施法 / 冷却 / 英雄 / 背包 / 生产队列）。
+    pub gameplay: UnitGameplayState,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -72,7 +75,10 @@ pub struct Snapshot {
     pub version: u32,
     pub sim_version: u32,
     pub seed: u64,
+    /// 对局配置的内容身份（P2 既有字段，由 app 层提供）。
     pub content_hash: u64,
+    /// 冻结内容定义的内容哈希，恢复时与 `defs` 重新计算的结果比对。
+    pub defs_hash: u64,
     pub logic_fps: u32,
     pub tick: u64,
     pub rng: u64,
@@ -86,6 +92,10 @@ pub struct Snapshot {
     pub world_identity: u64,
     pub obstacles: Vec<ObstacleRecord>,
     pub group_plans: Vec<GroupPlanRecord>,
+    /// 冻结内容定义（恢复时据此重建，不依赖内容层）。
+    pub defs: FrozenDefinitions,
+    /// 全局玩法运行态（经济 / 胜负 / AI / 光环 / 波次 / 行为注册 / 玩法命令）。
+    pub gameplay: WorldGameplayState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -93,6 +103,7 @@ pub enum SnapshotError {
     UnsupportedVersion { found: u32 },
     SimVersionMismatch { found: u32, expected: u32 },
     ContentMismatch,
+    DefsMismatch,
     WorldMismatch,
     UnknownEntity(u64),
     MissingMotion,

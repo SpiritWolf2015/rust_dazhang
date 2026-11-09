@@ -168,3 +168,95 @@ fn non_positive_tile_size_is_rejected() {
         Err(w3_app::InjectError::InvalidCellSize)
     ));
 }
+
+#[test]
+fn slk_definitions_are_injected_and_settle_in_a_real_match() {
+    use w3_app::{combine_content_hash, definition_id, inject_map_with_definitions};
+    use w3_content::{DefinitionTables, SlkTable, from_slk_tables};
+    use w3_core::{GameplayCommand, GameplayCommandKind};
+
+    // 合成 SLK 表（不含任何真实导出数据）。
+    let units: SlkTable = serde_json::from_str(
+        r#"{
+            "columns": 2, "rows": 1, "headers": ["unitID", "hitPoints"],
+            "recordCount": 1,
+            "records": [{"unitID": "H001", "hitPoints": 100, "manaPoints": 20}]
+        }"#,
+    )
+    .unwrap();
+    let abilities: SlkTable = serde_json::from_str(
+        r#"{
+            "columns": 3, "rows": 1, "headers": ["abilityID", "manaCost", "cooldown"],
+            "recordCount": 1,
+            "records": [{"abilityID": "A001", "manaCost": 5, "cooldown": 2}]
+        }"#,
+    )
+    .unwrap();
+    let content_defs = from_slk_tables(&DefinitionTables {
+        units: Some(&units),
+        abilities: Some(&abilities),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let injection = inject_map_with_definitions(&synthetic_map(), &content_defs).unwrap();
+    let expected = combine_content_hash(
+        injection.world.identity(),
+        injection.definitions.content_hash(),
+    );
+    assert_eq!(injection.content_hash, expected);
+    assert_eq!(injection.definitions.units().len(), 1);
+    assert_eq!(injection.definitions.abilities().len(), 1);
+
+    let mut sim = create_match(&injection, 7);
+    sim.step(); // 第 0 帧出生。
+    let before = sim.capture_snapshot();
+    // 冻结定义的内容哈希进入快照头，且定义确实来自 SLK 转换。
+    assert_eq!(before.defs_hash, injection.definitions.content_hash());
+    assert_eq!(before.defs.abilities().len(), 1);
+    assert_eq!(sim.definitions().content_hash(), before.defs_hash);
+
+    // 注入的技能在真实对局中可结算：施法后目标生命下降。
+    let ability = definition_id("A001");
+    let cast = GameplayCommand::new(
+        Frame::new(1),
+        1,
+        1,
+        GameplayCommandKind::Cast {
+            caster: EntityId::new(1).unwrap(),
+            ability,
+            target: EntityId::new(2).unwrap(),
+        },
+    );
+    sim.submit_gameplay_command(cast).unwrap();
+    sim.step(); // 第 1 帧执行施法。
+    let after = sim.capture_snapshot();
+    let target = after.positions.iter().find(|p| p.entity == 2).unwrap();
+    assert!(target.hp < 100, "injected ability must settle damage");
+
+    // 快照往返：内容身份同时锚定地图与定义，恢复逐帧哈希一致。
+    let mut restored =
+        RtsMatch::restore_snapshot(after, injection.world.clone(), injection.content_hash).unwrap();
+    assert_eq!(sim.compute_state_hash(), restored.compute_state_hash());
+    sim.step();
+    restored.step();
+    assert_eq!(sim.compute_state_hash(), restored.compute_state_hash());
+
+    // 换一套内容定义（内容哈希变化）必须被恢复拒绝。
+    let other_defs = from_slk_tables(&DefinitionTables {
+        units: Some(&units),
+        ..Default::default()
+    })
+    .unwrap();
+    let other_injection = inject_map_with_definitions(&synthetic_map(), &other_defs).unwrap();
+    assert_ne!(other_injection.content_hash, injection.content_hash);
+    let mismatched = sim.capture_snapshot();
+    assert!(
+        RtsMatch::restore_snapshot(
+            mismatched,
+            injection.world.clone(),
+            other_injection.content_hash,
+        )
+        .is_err()
+    );
+}

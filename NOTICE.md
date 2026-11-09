@@ -35,7 +35,7 @@ P3 新增 `crates/w3-render`（wgpu 3D 渲染层）引入以下 crates.io 依赖
 | `bytemuck` | 1.25.0 | Zlib OR Apache-2.0 OR MIT |
 | `serde` / `serde_json` | 1.0.229 / 1.0.154 | MIT OR Apache-2.0 |
 | `thiserror` | 2.0.18 | MIT OR Apache-2.0 |
-| `log` | 0.4.29 | MIT OR Apache-2.0 |
+| `log` | 0.4.35 | MIT OR Apache-2.0 |
 | `naga`（`wgpu` 传递依赖） | 30.0.1 | MIT OR Apache-2.0 |
 
 - 上述均为 MIT / Apache-2.0 / Zlib 宽松许可，与本项目 GPLv3 兼容；均为 crates.io 依赖，版本由 `Cargo.lock` 锁定，**未复制任何上游源码进仓库**，沿用「本项目为独立从零编写」的声明。
@@ -59,6 +59,25 @@ P3 新增 `crates/w3-render`（wgpu 3D 渲染层）引入以下 crates.io 依赖
 - 生成代码由 `build.rs` 调用 `protoc` 在构建期产生，不属于提交进仓库的第三方源码；CI 双平台须安装同版本 protoc 以保证生成结果一致。
 - `W3N1` 帧头仍为本项目自有实现（显式小端 + FNV-1a），未引入第三方线格式代码（见 [ADR 0002](docs/decisions/0002-determinism.md)）。
 - 其余传递依赖未逐一核验，`Cargo.lock` 为依赖图权威清单。
+
+## 第三方 crate 依赖（P6 / playable-client）
+
+P6 `p6-playable-client` change 新增 `crates/w3-client`（可玩客户端集成层），引入以下 crates.io 依赖；许可证结论已由 `client-owner` 逐一核对各 crate 的 `Cargo.toml`：
+
+| crate | 版本 | 许可证 |
+|---|---|---|
+| `egui`（直接依赖） | 0.37.0 | MIT OR Apache-2.0（本项目取 MIT 一侧） |
+| `egui-wgpu`（直接依赖） | 0.37.0 | MIT OR Apache-2.0（本项目取 MIT 一侧） |
+| `egui-winit`（直接依赖） | 0.37.0 | MIT OR Apache-2.0（本项目取 MIT 一侧） |
+| `self_cell`（传递依赖） | 1.3.0 | Apache-2.0 OR GPL-2.0-only（本项目取 Apache-2.0 一侧） |
+
+- 兼容性结论：`egui` 家族明确取 MIT 一侧、`self_cell` 明确取 Apache-2.0 一侧，均与本项目 GPLv3 兼容；均为 crates.io 依赖，版本由 `Cargo.lock` 锁定，**未复制任何上游源码进仓库**，沿用「本项目为独立从零编写」的声明。
+- `self_cell` 为双许可（`Apache-2.0 OR GPL-2.0-only`）：`GPL-2.0-only` 一侧与 GPLv3 不兼容，本项目明确选择 `Apache-2.0` 一侧以消除合规争议。它是 egui / epaint 文本栅格化链路（`vello_cpu` / `skrifa` / `read-fonts`）的传递依赖，非直接依赖。
+- `egui-winit` 以 `default-features = false` 引入，避免拉入 `ab_glyph` / wayland / x11 等平台装饰依赖，与 `w3-render` 保持最小 `winit` feature 集（`rwh_06`）一致；不影响许可证结论。
+- `egui` 的 `default_fonts` feature **未启用**：该 feature 会引入 `epaint_default_fonts`（许可证 `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`，含非 MIT 字体许可证），属 `CODEBUDDY.md` 第 10 节所列人工独占的许可证变更，本轮不启用，故本文件不登记字体许可证。
+- 待复核：另有 4 个新增包（`objc2-app-kit` / `objc2-ui-kit` / `wgpu-core-deps-wasm` 属其他平台 target，另一个为本地 `w3-client` crate 自身）本机未逐一核验许可证，建议 CI 双平台时由 `docs-owner` 补齐；本轮不编造其许可证。
+- 其余传递依赖未逐一核验，`Cargo.lock` 为依赖图权威清单。
+- 资产边界不变：导出 JSON / PNG / GLB 等资产留在本机，绝不入库（见 [ADR 0001](docs/decisions/0001-license.md)）。
 
 ## 第三方资产与商标
 

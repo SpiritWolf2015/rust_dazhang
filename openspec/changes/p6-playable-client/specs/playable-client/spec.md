@@ -61,7 +61,7 @@
 
 ### Requirement: HUD rendered from read-only view
 
-HUD SHALL 只从只读 `WorldView` 与事实事件绘制选中框、血条、资源、生产队列与（可选）技能栏；MUST NOT 反写模拟状态（ADR 0002 §5）。UI 文案 SHALL 走 i18n（可用中文），MUST NOT 进入日志、权威状态或状态哈希（CODEBUDDY.md §3）。UI 字体 / 图标 MUST NOT 为 MPQ 派生数据或任何暴雪资产，且 MUST NOT 被提交进仓库（ADR 0001）。资源或字体加载失败 MUST 以英文日志明确报告并降级为不绘制对应元素，MUST NOT 改变模拟推进。
+HUD SHALL 只从只读 `WorldView`、事实事件与只读 `Snapshot`（`capture_snapshot()` 公开只读 API）派生绘制选中框、血条、资源、生产队列与（可选）技能栏；MUST NOT 反写模拟状态（ADR 0002 §5）。`WorldView` 字段仅 `tick` / `rng` / `entities`，经济 / 人口 / 生产队列 / `max_hp` 等由 `HudModel::collect` 经只读 `Snapshot` 的 `gameplay` 字段派生；此只读派生不扩展 `WorldView`、不改动 `w3-core`（零改动）、不反写权威状态，也不进入 FNV-1a 状态哈希或由 `SNAPSHOT_VERSION`（当前 3，含 `defs_hash` 头）定义的快照，权威状态哈希与快照字节保持不变（`tests/interaction.rs` 的 `hud_lifecycle_keeps_state_hash_and_snapshot_bytes` 已验证）。UI 文案 SHALL 走 i18n（可用中文），MUST NOT 进入日志、权威状态或状态哈希（CODEBUDDY.md §3）。UI 字体 / 图标 MUST NOT 为 MPQ 派生数据或任何暴雪资产，且 MUST NOT 被提交进仓库（ADR 0001）。资源或字体加载失败 MUST 以英文日志明确报告并降级为不绘制对应元素，MUST NOT 改变模拟推进。
 
 #### Scenario: HUD 只读
 
@@ -118,7 +118,7 @@ HUD SHALL 只从只读 `WorldView` 与事实事件绘制选中框、血条、资
 
 ### Requirement: Single presentation pipeline seam
 
-`FrameProducer` SHALL 是本地与联机对局唯一的呈现管线接缝；两种模式 MUST 复用同一 `RendererApp::run()` / `Scene::consume` / `Scene::interpolate_all` / `GpuContext` 路径，且 MUST 只有一个 `RtsMatch` 权威写入者（ADR 0002 §5、ADR 0005）。联机模式 SHALL 由 `ClientSession` 提供已冻结帧的命令，MUST NOT 让网络包到达、抖动或断线重连驱动 30 Hz 累加器或改变逻辑帧序（ADR 0002 §2、§3）。
+`FrameProducer` SHALL 是本地与联机对局唯一的呈现管线接缝；两种模式 MUST 复用同一 `FrameProducer` / `StepDriver` 接缝与 `Scene::consume` / `Scene::interpolate_all` / `build_vertices` / `GpuContext::render_frame_with_overlay` / `Camera::matrix` 呈现管线，事件循环由 `w3-client::ClientApp<P: StepDriver>` 装配（本地 `FixedStepClient` 与联机 `NetSessionDriver` 都实现同一 `StepDriver: FrameProducer` 接缝；`RendererApp::run()` 仍保留在 `w3-render` 作为简易只读循环，完整客户端不调用它），且 MUST 只有一个 `RtsMatch` 权威写入者、不出现第二套呈现代码或第二份 `RtsMatch`（ADR 0002 §5、ADR 0005）。联机模式 SHALL 由 `ClientSession` 提供已冻结帧的命令，MUST NOT 让网络包到达、抖动或断线重连驱动 30 Hz 累加器或改变逻辑帧序（ADR 0002 §2、§3）。
 
 #### Scenario: 模式切换同管线
 

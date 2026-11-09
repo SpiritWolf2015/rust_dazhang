@@ -49,24 +49,96 @@ impl HasDisplayHandle for SharedWindow {
     }
 }
 
-/// 只读帧源：由 app 层实现（持有 `RtsMatch` 并逐帧 step），只向渲染层
-/// 交付 owned `WorldView` 与事件拷贝。渲染层由此无法反写权威状态。
+/// 只读帧源：本地与联机对局共用的唯一呈现管线接缝。
+///
+/// 实现者持有唯一 `RtsMatch`，但 [`FrameProducer::next_frame`] 只交出
+/// **当前**只读 `WorldView` 与事件拷贝，MUST NOT 调用 `RtsMatch::step()`；
+/// 逻辑帧推进由客户端固定 30 Hz 整数帧累加器独立驱动（ADR 0002 §2、
+/// design D2）。[`FrameProducer::interpolation_alpha`] 把累加器余数作为
+/// 表现层插值系数送入渲染帧：默认 1.0 表示不插值，便于现有实现者零改动
+/// 迁移；该系数只存在于表现层，MUST NOT 写回权威状态、状态哈希或快照。
 pub trait FrameProducer {
+    /// 只交出当前只读视图与事件拷贝，MUST NOT 推进模拟。
     fn next_frame(&mut self) -> (WorldView, Vec<Event>);
+
+    /// 表现层插值系数，来自固定累加器的整数余数；默认不插值。
+    fn interpolation_alpha(&self) -> f32 {
+        1.0
+    }
 }
 
-/// 表现层相机：按地形范围生成固定视角的 MVP（WebGPU 深度 0..1）。
+/// 表现层相机：按地形范围生成 MVP（WebGPU 深度 0..1），支持平移 / 缩放 / 旋转。
+///
+/// 全部字段都是**表现层专属**的 `f32` 状态，MUST NOT 反写 `RtsMatch`、
+/// 进入 FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 3）快照（design D5）。
+/// 默认参数（pan 为零、zoom 为 1、yaw 为 0）生成与 P3 既有验收一致的固定视角，
+/// 因此扩展后已有呈现基线不变。
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
+    /// 视口宽高比。
     pub aspect: f32,
+    /// 观察目标相对地形中心的 XZ 平移（世界单位）。
+    pub pan: [f32; 2],
+    /// 缩放倍率（> 0，1.0 为默认距离）。
+    pub zoom: f32,
+    /// 绕 Y 轴旋转（弧度）。
+    pub yaw: f32,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self {
+            aspect: 1.0,
+            pan: [0.0; 2],
+            zoom: 1.0,
+            yaw: 0.0,
+        }
+    }
 }
 
 impl Camera {
+    /// 按视口宽高比构造默认相机，收窄 `Camera { aspect }` 字面量的 BREAKING 破坏面。
+    pub fn new(aspect: f32) -> Self {
+        Self {
+            aspect,
+            ..Self::default()
+        }
+    }
+
+    /// 设置平移（表现层输入映射专用，链式构造）。
+    pub fn with_pan(mut self, pan: [f32; 2]) -> Self {
+        self.pan = pan;
+        self
+    }
+
+    /// 设置缩放，非法值钳到正值，避免矩阵退化。
+    pub fn with_zoom(mut self, zoom: f32) -> Self {
+        self.zoom = if zoom.is_finite() && zoom > 0.0 {
+            zoom
+        } else {
+            1.0
+        };
+        self
+    }
+
+    /// 设置绕 Y 轴旋转（弧度）。
+    pub fn with_yaw(mut self, yaw: f32) -> Self {
+        self.yaw = if yaw.is_finite() { yaw } else { 0.0 };
+        self
+    }
+
+    /// 生成 MVP；`pan` / `zoom` / `yaw` 只影响观察矩阵，不触碰任何权威状态。
     pub fn matrix(self, terrain: &TerrainMesh) -> glam::Mat4 {
         let extent = (terrain.columns.max(terrain.rows) as f32 * terrain.cell_size).max(1.0);
-        let cx = terrain.origin[0] + terrain.columns as f32 * terrain.cell_size * 0.5;
-        let cz = terrain.origin[1] + terrain.rows as f32 * terrain.cell_size * 0.5;
-        let eye = glam::Vec3::new(cx + extent * 0.7, extent * 1.1, cz + extent * 0.9);
+        let cx = terrain.origin[0] + terrain.columns as f32 * terrain.cell_size * 0.5 + self.pan[0];
+        let cz = terrain.origin[1] + terrain.rows as f32 * terrain.cell_size * 0.5 + self.pan[1];
+        let distance = extent / self.zoom.max(0.05);
+        let (sin, cos) = self.yaw.sin_cos();
+        let eye = glam::Vec3::new(
+            cx + distance * (0.7 * cos + 0.9 * sin),
+            distance * 1.1,
+            cz + distance * (-0.7 * sin + 0.9 * cos),
+        );
         let target = glam::Vec3::new(cx, 0.0, cz);
         let view = glam::Mat4::look_at_rh(eye, target, glam::Vec3::Y);
         let proj = glam::Mat4::perspective_rh(0.9, self.aspect.max(0.001), 1.0, extent * 8.0);
@@ -315,11 +387,41 @@ impl GpuContext {
     }
 
     /// 渲染一帧到交换链并 present。顶点与 MVP 都是只读表现层数据。
+    ///
+    /// 这是对 [`GpuContext::render_frame_with_overlay`] 的无 overlay 便捷封装，
+    /// 保持既有 `RendererApp` / 呈现验收调用点零改动。
     pub fn render_frame(
         &self,
         vertices: &[SceneVertex],
         view_proj: &glam::Mat4,
     ) -> Result<(), RenderError> {
+        self.render_frame_with_overlay(vertices, view_proj, |_, _, _, _, _| {})
+    }
+
+    /// 渲染 3D 场景后，把同一交换链纹理的只读 GPU 句柄交给 `overlay` 叠加 2D 表现层。
+    ///
+    /// `overlay` 只接收 `wgpu` 原生类型（设备 / 队列 / 颜色视图 / 格式 / 命令编码器），
+    /// 不引用任何 UI 库：客户端可在同一张纹理上以 `LoadOp::Load` 追加 HUD pass，
+    /// 从而复用既有 surface / device / queue / 深度纹理与场景管线（design D4 CARP、
+    /// DIP）。该回调在 `record_scene` 之后、`submit` / `present` 之前执行，
+    /// 纯表现层，MUST NOT 触碰 `RtsMatch`、状态哈希或快照；回调 MUST NOT
+    /// 访问或修改任何非呈现资源或权威模拟状态，只用于在同一交换链纹理上
+    /// 追加呈现 pass。
+    pub fn render_frame_with_overlay<F>(
+        &self,
+        vertices: &[SceneVertex],
+        view_proj: &glam::Mat4,
+        overlay: F,
+    ) -> Result<(), RenderError>
+    where
+        F: FnOnce(
+            &wgpu::Device,
+            &wgpu::Queue,
+            &wgpu::TextureView,
+            wgpu::TextureFormat,
+            &mut wgpu::CommandEncoder,
+        ),
+    {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -349,6 +451,7 @@ impl GpuContext {
             &vertex_buffer,
             vertices.len() as u32,
         );
+        overlay(&self.device, &self.queue, &view, self.format, &mut encoder);
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(frame);
         Ok(())
@@ -504,6 +607,8 @@ impl<P: FrameProducer> RendererApp<P> {
     }
 
     fn render_one(&mut self) -> Result<(), RenderError> {
+        // alpha 只来自接缝提供的累加器余数，仅存在于表现层。
+        let alpha = self.producer.interpolation_alpha();
         let (view, events) = self.producer.next_frame();
         self.scene.consume(
             FrameInput {
@@ -512,14 +617,14 @@ impl<P: FrameProducer> RendererApp<P> {
             },
             &self.library,
         );
-        self.scene.interpolate_all(1.0);
+        self.scene.interpolate_all(alpha);
         let vertices = self.scene.build_vertices(&self.terrain);
         let gpu = self
             .gpu
             .as_ref()
             .ok_or_else(|| RenderError::GpuUnavailable("gpu context not ready".into()))?;
         let aspect = gpu.width as f32 / gpu.height as f32;
-        let view_proj = Camera { aspect }.matrix(&self.terrain);
+        let view_proj = Camera::new(aspect).matrix(&self.terrain);
         gpu.render_frame(&vertices, &view_proj)?;
         self.frames += 1;
         Ok(())
@@ -598,7 +703,15 @@ mod tests {
         )
         .unwrap();
         let terrain = TerrainMesh::from_heightfield(&hf).unwrap();
-        let matrix = Camera { aspect: 1.5 }.matrix(&terrain);
+        let matrix = Camera::new(1.5).matrix(&terrain);
         assert!(matrix.to_cols_array().iter().all(|v| v.is_finite()));
+        // 相机位姿是表现层专属：平移 / 缩放 / 旋转只改变 MVP，仍保持有限。
+        let moved = Camera::new(1.5)
+            .with_pan([16.0, -8.0])
+            .with_zoom(1.75)
+            .with_yaw(0.6)
+            .matrix(&terrain);
+        assert!(moved.to_cols_array().iter().all(|v| v.is_finite()));
+        assert_ne!(moved, matrix);
     }
 }

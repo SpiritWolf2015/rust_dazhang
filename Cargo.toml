@@ -10,5 +10,6 @@ members = [
     "crates/w3-render",
     "crates/w3-net",
     "crates/w3-relay",
+    "crates/w3-client",
 ]
 resolver = "3"

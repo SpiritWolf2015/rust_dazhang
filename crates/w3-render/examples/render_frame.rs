@@ -10,6 +10,12 @@
 //! 需要本机有 GPU 与显示设备；导出资产与截图都留在玩家机器，绝不入库
 //! （见 ADR 0001）。渲染层只读模拟视图，截图只用于呈现残差记录，不进入
 //! 状态哈希。
+//!
+//! 固定步进语义（P6 `playable-client`、ADR 0002 §2）：`FrameProducer::next_frame()`
+//! 只交出当前只读 `WorldView` 与事件拷贝，MUST NOT 调用 `RtsMatch::step()`。
+//! 本示例是人工截图验收，逻辑帧在装配期按**固定整数帧预算**显式预置，
+//! 与 `RedrawRequested` / 显示器刷新率 / 墙钟完全解耦；生产客户端的逻辑帧
+//! 由 `w3-client` 的固定 30 Hz 累加器驱动，不在此示例内。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,8 +33,15 @@ use winit::window::{Window, WindowId};
 /// 默认截图落在已 gitignored 的 `target/`，避免人工验收产物被 `git add -A` 误入库。
 const DEFAULT_OUTPUT: &str = "target/w3-render-frame.png";
 const MAX_FRAMES: u32 = 3;
+/// 装配期一次性预置的固定整数逻辑帧数；与重绘次数、刷新率、墙钟无关。
+/// `step()` 无参、不接受 delta，每次恰好推进一个整数帧。
+const PRESET_FRAMES: u32 = 3;
 
-/// app 层帧源：持有唯一权威状态 `RtsMatch`，每帧 step 后只交出只读拷贝。
+/// 示例帧源：持有唯一权威状态 `RtsMatch`。
+///
+/// `next_frame()` 只交出当前只读视图与事件拷贝，MUST NOT 推进模拟
+/// （BREAKING 语义，见 `playable-client` design D2）。逻辑帧推进只经
+/// [`SimProducer::advance_fixed_frames`] 以固定整数帧数显式完成。
 struct SimProducer {
     sim: RtsMatch,
 }
@@ -61,11 +74,20 @@ impl SimProducer {
         }
         Self { sim }
     }
+
+    /// 按固定整数帧数显式推进模拟：`step()` 不接受 delta、墙钟或刷新率，
+    /// 每次恰好推进一个整数帧。生产路径改由 `w3-client` 的固定 30 Hz
+    /// 累加器驱动；此处仅用于人工截图验收的静态预置，绝不绑到重绘。
+    fn advance_fixed_frames(&mut self, frames: u32) {
+        for _ in 0..frames {
+            self.sim.step();
+        }
+    }
 }
 
 impl FrameProducer for SimProducer {
     fn next_frame(&mut self) -> (WorldView, Vec<Event>) {
-        self.sim.step();
+        // 只交出当前只读视图与事件拷贝，绝不调用 step()。
         (self.sim.read_view(), self.sim.drain_events())
     }
 }
@@ -122,6 +144,9 @@ impl ScreenshotApp {
             .gpu
             .as_ref()
             .ok_or_else(|| RenderError::GpuUnavailable("gpu context not ready".into()))?;
+        // alpha 来自呈现接缝；本示例帧源用默认值 1.0（无累加器、不做插值），
+        // 生产路径由 w3-client 覆盖该方法提供固定累加器的整数余数。
+        let alpha = self.producer.interpolation_alpha();
         let (view, events) = self.producer.next_frame();
         self.scene.consume(
             FrameInput {
@@ -130,10 +155,10 @@ impl ScreenshotApp {
             },
             &self.library,
         );
-        self.scene.interpolate_all(1.0);
+        self.scene.interpolate_all(alpha);
         let vertices = self.scene.build_vertices(&self.terrain);
         let aspect = gpu.width as f32 / gpu.height as f32;
-        let view_proj = Camera { aspect }.matrix(&self.terrain);
+        let view_proj = Camera::new(aspect).matrix(&self.terrain);
 
         // 呈现到交换链。
         gpu.render_frame(&vertices, &view_proj)?;
@@ -188,6 +213,7 @@ impl ApplicationHandler<()> for ScreenshotApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // 只读取帧并呈现；逻辑帧推进绝不在 RedrawRequested 链路里发生。
                 if let Err(error) = self.render_once() {
                     log::error!(target: "w3_render", "render failed: frame={} error={}", self.frames, error);
                 }
@@ -234,8 +260,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // 资产缺失时单位降级为不显示，模拟照常推进（spec Scenario）。
 
+    let mut producer = SimProducer::new();
+    // 装配期固定整数帧预置：逻辑帧推进与 RedrawRequested / 刷新率解耦，
+    // 生产客户端改由 w3-client 的固定 30 Hz 累加器驱动。
+    producer.advance_fixed_frames(PRESET_FRAMES);
+
     let mut app = ScreenshotApp {
-        producer: SimProducer::new(),
+        producer,
         scene: Scene::default(),
         terrain,
         library,

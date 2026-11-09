@@ -4,7 +4,7 @@
 
 ### Requirement: Client session feeds the shared presentation pipeline
 
-联机对局 SHALL 通过把 `ClientSession` 适配为 `FrameProducer` 复用本地对局的同一 `RendererApp::run()` / `Scene` / `GpuContext` 呈现管线，MUST NOT 为联机模式建立第二套呈现代码或第二份 `RtsMatch` 权威状态（ADR 0002 §5、ADR 0005）。适配层 SHALL 只把已冻结帧的输入命令经 `submit_command` / `apply_frame` 提交，`w3-core` MUST 保持零改动且不反向依赖 `w3-net` / `w3-render` / `w3-client`。
+联机对局 SHALL 通过把 `ClientSession` 适配为 `FrameProducer` / `StepDriver`（`NetSessionDriver`）复用本地对局的同一 `FrameProducer` / `StepDriver` 接缝与 `Scene` / `GpuContext` 呈现管线（事件循环由 `w3-client::ClientApp` 装配；`RendererApp::run()` 仍保留在 `w3-render` 作为简易只读循环，完整客户端不调用它），MUST NOT 为联机模式建立第二套呈现代码或第二份 `RtsMatch` 权威状态（ADR 0002 §5、ADR 0005）。适配层 SHALL 只把已冻结帧的输入命令经 `submit_command` / `apply_frame` 提交，`w3-core` MUST 保持零改动且不反向依赖 `w3-net` / `w3-render` / `w3-client`。
 
 #### Scenario: 联机与本地同管线
 

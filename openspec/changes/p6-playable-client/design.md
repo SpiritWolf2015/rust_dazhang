@@ -63,6 +63,7 @@ P0–P5 已交付：`w3-core`（零依赖确定性内核，`RtsMatch` 唯一写�
 ### D4：UI / HUD 依赖选型（**已由用户拍板 a：定案 `egui` 家族**）
 
 - **决策（已定案）**：采用 `egui` + `egui-wgpu` + `egui-winit`，`egui` 取 `MIT OR Apache-2.0` 的 MIT 一侧（与 GPLv3 兼容，CODEBUDDY.md §6）；用户已按 CODEBUDDY.md §10 授权新增该 MIT 依赖与后续 `NOTICE.md` 登记（交 `docs-owner`，本 change 不自行编写）。风险：`egui-wgpu` / `egui-winit` 与 `wgpu 30` / `winit 0.30`（当前 `default-features = false, features = ["rwh_06"]`）的版本兼容性仍须在 apply 阶段核验；若不兼容，MUST 明确失败并回退自绘 2D overlay，MUST NOT 静默降级或强行升级 `wgpu` / `winit`（重大升级属人工独占，CODEBUDDY.md §10）。
+- **字体落地补记（不改变 D4 拍板结论，仍是 `egui` 家族）**：egui 0.37 默认不启用 `default_fonts`，`FontDefinitions::default()` 返回空 `font_data`；因此「优先用 egui 内置字体」不成立，运行时实际走 tasks 6.6 的降级路径（英文结构化日志 + 不绘制文字元素），中文上屏需启用 `default_fonts`，但会引入 OFL-1.1 / Ubuntu-font-1.0 字体许可证（属 CODEBUDDY.md §10 人工独占）且仍无 CJK 字形，故本轮不启用；文案层（`i18n.rs`）已实现。此为纯表现层事实，不改权威状态、状态哈希与模拟推进。
 - **备选方案（Alternatives considered）**：
   - *Bevy UI* — **否决**，理由同 D1；随 D1 一并记录为已否决备选。
   - *自绘 2D overlay（沿用现有 wgpu 管线，零新依赖）* — **保留为回退备选**（版本不兼容时启用）。许可证 / 版本风险最低，但 HUD 布局、文字排版、命中测试需自行实现，工作量最大。
@@ -84,7 +85,7 @@ P0–P5 已交付：`w3-core`（零依赖确定性内核，`RtsMatch` 唯一写�
 
 ### D6：把 `w3-net::ClientSession` 适配为 `FrameProducer`（**已由用户拍板 b：纳入本期**）
 
-- **决策（范围已定：纳入本期，不缩减范围）**：让联机对局通过 `FrameProducer` 适配复用同一 `RendererApp::run()` / `Scene` / `GpuContext` 管线；适配层只把已冻结帧的输入命令经 `submit_command` / `apply_frame` 提交，全程只有一个 `RtsMatch`。用户已拍板保留第 8 组任务与 `lockstep-networking` delta（含 MODIFIED 块与两条 ADDED requirement），不缩减范围。已冻结帧由 `ClientSession` 的 `FrameScheduler` / `FrameAssembler` / `pop_ready` 提供，`stabilize` / `apply_frame` 的排序语义不变。
+- **决策（范围已定：纳入本期，不缩减范围）**：让联机对局通过 `FrameProducer` / `StepDriver` 适配复用同一 `FrameProducer` / `StepDriver` 接缝与 `Scene::consume` / `Scene::interpolate_all` / `build_vertices` / `GpuContext::render_frame_with_overlay` / `Camera::matrix` 呈现管线；事件循环由 `w3-client::ClientApp<P: StepDriver>` 装配，本地 `FixedStepClient` 与联机 `NetSessionDriver` 都实现 `StepDriver: FrameProducer`，全程只有一个 `RtsMatch`，不出现第二套呈现代码或第二份 `RtsMatch` 的实质约束不变。`RendererApp::run()` 仍保留在 `w3-render` 作为简易只读循环，但完整客户端不调用它：它是消费 self 的封闭事件循环，没有累加器节拍源 / 输入 / 相机 / HUD 注入点，把客户端时钟概念塞回 `w3-render` 会违反 D2（时钟归客户端、呈现归 `w3-render`）与 D4（UI 严格隔离在 `w3-client`）。适配层只把已冻结帧的输入命令经 `submit_command` / `apply_frame` 提交。用户已拍板保留第 8 组任务与 `lockstep-networking` delta（含 MODIFIED 块与两条 ADDED requirement），不缩减范围。已冻结帧由 `ClientSession` 的 `FrameScheduler` / `FrameAssembler` / `pop_ready` 提供，`stabilize` / `apply_frame` 的排序语义不变。
 - **备选方案（Alternatives considered）**：
   - *联机单独写一套渲染循环* — **否决**。出现两套呈现代码与两个状态所有者，违反 SRP / CARP 与 ADR 0002 §5。
   - *让 `w3-net` 直接持有并推进 `RtsMatch`* — **否决**。造成 `w3-core` 被上层反向编排、帧序出现第二个来源，违反分层依赖与 ADR 0002 §2。
@@ -101,7 +102,7 @@ P0–P5 已交付：`w3-core`（零依赖确定性内核，`RtsMatch` 唯一写�
   - *复用现有 `w3-app`* — **否决**。`w3-app` 是「内容层 → 内核」的冻结注入适配层（`freeze` / `inject`），语义与交互客户端完全不同，混合会违反 SRP / ISP。
   - *命名 `w3-ui` / `w3-shell` / `w3-game`* — **未采纳**（用户拍板 c = `w3-client`）；语义偏窄或偏宽，`w3-client` 与 `lockstep_client` 示例、`ClientSession` 术语一致。
   - *新建 `w3-client`* — **已由用户拍板采纳**。
-- **关联 ADR 0002 与跨平台确定性影响**：新 crate 只依赖 `w3-core` / `w3-render` /（可选）`w3-net` / `w3-content`，`w3-core` 绝不反向依赖；所有新字段都是表现层专属，MUST NOT 进入 FNV-1a 状态哈希或快照 v3。crate 边界本身不改变任何可比较量，也不改变跨平台确定性的待验证状态。
+- **关联 ADR 0002 与跨平台确定性影响**：新 crate 的核心依赖为 `w3-core` / `w3-render` /（可选）`w3-net` / `w3-content`，`w3-core` 绝不反向依赖；所有新字段都是表现层专属，MUST NOT 进入 FNV-1a 状态哈希或快照 v3。crate 边界本身不改变任何可比较量，也不改变跨平台确定性的待验证状态。补充落地依赖方向（不改变 D7 决策结论，与 `client-owner.md` 及 `Cargo.toml` 一致）：实际应用还依赖 `w3-app`（仅用 `freeze_f64` / `FrozenError`，ADR 0004 要求所有 `f64 → SimFixed` 走该冻结边界，避免第二条浮点→权威状态路径）与 `winit` / `wgpu` / `log` / `egui` 家族；`w3-client → w3-app → w3-core` 为向下依赖、无环，`w3-core` 不反向依赖任何上层 crate。
 - **架构原则与分层依赖**：SRP / DIP / 唯一状态所有者 / `w3-core` 不反向依赖上层（硬红线）。**owner 归属**：实施 owner 已指定 `client-owner`，由编排者新建该 agent 定义（不在 `spec-steward` 可写范围），满足 CODEBUDDY.md §8「一个 change 一个 owner」；结案记录见 Open Questions。
 
 ### D8：归档顺序——先归档 P5，再 apply P6（**已由用户拍板 d**）
@@ -124,7 +125,7 @@ P0–P5 已交付：`w3-core`（零依赖确定性内核，`RtsMatch` 唯一写�
   - *顺手改写 `config.yaml` rules.proposal 的「（P0-P5）」* — **已由用户拍板保持「P0-P5」**：属规则本身的阶段枚举变更，超出「同步过期措辞」范围；用户按判断直接采纳，proposal 继续双标 P6 与 P3/P4/P5 能力面，不改为「P0–P6」。
   - *只改 `config.yaml` 第 12 行 context，不改 rules.specs 的「快照 v1」* — **否决**。两处是同一过期事实，若只改一处，rules.specs 会继续要求 specs 声明「进入快照 v1」，与本 change 的 specs（v3）打架；故两处一并同步为版本无关表述。
 - **关联 ADR 0002 与跨平台确定性影响**：纯文档一致性改动，不改变任何代码、帧序、哈希或快照字段；同步后 spec 与 config 对「快照版本由 `SNAPSHOT_VERSION` 定义」的口径统一，避免与 `crates/w3-core/src/snapshot.rs` 的事实及 P5 归档后的主 spec 冲突。
-- **架构原则与分层依赖**：单一权威（ADR 记「为什么决定」、OpenSpec 记「系统该做什么」、spec 引用 ADR 编号）。`CODEBUDDY.md:49`（「快照 v1」）与 `CODEBUDDY.md:8`（「P2–P5 active」「主 specs 仅两个」）同类过期措辞不在本 change 可写范围，仍列为建议交 `docs-owner` 同步。
+- **架构原则与分层依赖**：单一权威（ADR 记「为什么决定」、OpenSpec 记「系统该做什么」、spec 引用 ADR 编号）。`CODEBUDDY.md` 的「快照 v1」→ `SNAPSHOT_VERSION`（当前 3）、阶段 / 主 specs 描述与 §8 归档范围已由 `docs-owner` / 编排者同步完毕（tasks 1.9 已结案）。
 
 ## Risks / Trade-offs
 
@@ -137,6 +138,7 @@ P0–P5 已交付：`w3-core`（零依赖确定性内核，`RtsMatch` 唯一写�
 - [跨平台确定性被误宣称达成] → 明确：本 change 不引入新的可比较算术来源，但 Linux / macOS 仍属待验证项（ADR 0002）。
 - [owner 定义与「一个 change 一个 owner」] → 实施 owner 已指定 `client-owner`（由编排者新建 agent 定义，不在 `spec-steward` 可写范围），满足 CODEBUDDY.md §8，不再阻塞 `/opsx:apply`。
 - [UI 字体 / 图标误入库或含暴雪资产] → ADR 0001 边界 + CI 资产扫描；UI 资源自带许可证或程序化生成，仓库不含 MPQ 派生数据。
+- [已裁定·已知边界：联机模式不承载 `GameplayCommand`] → 缺口：`w3-net` 的 protobuf schema（`w3net.proto` / `payload.rs::to_pb_kind`）与 `FrameCommands` / `apply_frame` / `submit_input` 全链路只承载 `CommandKind`，不含 P5 的 `GameplayCommandKind`（`Cast` / `Train` / `CancelTrain`），故联机模式下施法 / 生产 / 取消生产不可用；本地模式完整覆盖（tasks 5.2）。当前处理：批次 C 的 `StepDriver::enqueue` 对 `ClientCommand::Gameplay(_)` 显式返回 `ClientError::GameplayUnsupportedOnline`，并记录英文日志 `gameplay command unsupported: reason=wire_format_command_only`，绝不静默降级、绝不本地 `submit_gameplay_command`（否则两端命令流不一致将导致 desync，违反 ADR 0002）。本 change 明确不改 `w3-net`（零改动红线），故不补齐：补齐需扩展 `w3-net` protobuf schema 并 bump `PROTOCOL_VERSION`（ADR 0005 要求 schema 变更须同步 bump），属 `w3-net` / ADR 0005 变更。建议另开独立 change 承接，且该 change 须同步 bump `PROTOCOL_VERSION` 并复核 ADR 0005；本记录仅为已裁定边界登记，不新增 requirement、不改 proposal 的 Capabilities / Impact 结构。
 
 ## Migration Plan
 
@@ -158,7 +160,7 @@ P0–P5 已交付：`w3-core`（零依赖确定性内核，`RtsMatch` 唯一写�
 - **（d）P5 归档与 P6 apply 的先后顺序 — 已由用户拍板**：先归档 P5、再 apply P6；`openspec archive p5-gameplay-systems -y` 由编排者随后执行，本 change 不自行归档、不预断 P5 已归档（见 D8）。
 - **（e）owner 归属 — 已指定 `client-owner`**：由编排者新建该 agent 定义（不在 `spec-steward` 可写范围），满足 CODEBUDDY.md §8「一个 change 一个 owner」。
 - **（f）`config.yaml` rules.proposal 的「（P0-P5）」— 已由用户拍板**：保持「P0-P5」不动，不改为「P0–P6」（P6 为集成收尾）；proposal 继续双标 P6 与 P3/P4/P5 能力面（见 D9）。
-- **（g）`CODEBUDDY.md:49` / `CODEBUDDY.md:8` 过期措辞 — 已由用户拍板**：仍列为建议交 `docs-owner` 同步（「快照 v1」→ `SNAPSHOT_VERSION`；「P2–P5 active」「主 specs 仅两个」→ 实际状态），本 change 不可写该文件。
+- **（g）`CODEBUDDY.md` 过期措辞 — 已结案**：「快照 v1」→ `SNAPSHOT_VERSION`（当前 3）、阶段 / 主 specs 描述与 §8 归档范围已由 `docs-owner` / 编排者同步完毕，见 tasks 1.9。
 
 **仍未定（实现细节，留给 `client-owner`，不阻塞 apply）：**
 - 累加器追帧上限的具体数值，以及超限是否暂停对局（D2 只要求「显式上限 + 明确报告」）。

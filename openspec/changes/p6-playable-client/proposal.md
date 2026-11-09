@@ -31,6 +31,6 @@ P0–P5 已交付确定性内核、内容导入、玩法竖切、wgpu 呈现、l
 - **资产与法律边界（ADR 0001）**：不提交任何 MPQ 派生数据、真实导出 JSON / PNG / GLB / 音效；UI 字体 / 图标须自带许可证或程序化生成，不含暴雪资产。新增依赖前 MUST 检查许可证与 GPLv3 兼容性（`egui` 取 MIT 一侧），`Cargo.lock` MUST 提交，第三方代码须在 `NOTICE.md` 登记（交 `docs-owner`，列为后续任务，本 change 不自行编写）。用户已按 CODEBUDDY.md §10 拍板授权新增 MIT 依赖与后续 `NOTICE.md` 登记；后续 `wgpu` / `winit` 的依赖重大升级 / 许可证变更仍属人工独占，须重新拍板后方可实施。
 - **分层依赖**：新增 crate `w3-client`（命名已由用户拍板定案）依赖 `w3-core` / `w3-render` /（可选）`w3-net` / `w3-content`；`w3-core` 绝不反向依赖上层；唯一权威写入者仍是 `RtsMatch`。
 - **依赖版本风险**：`egui-wgpu` / `egui-winit` 与 `wgpu 30` / `winit 0.30`（当前 `default-features = false, features = ["rwh_06"]`）的兼容性仍须在 apply 阶段核验，本提案不锁定版本；不兼容时 MUST 明确报告并回退「自绘 2D overlay（无新依赖）」，MUST NOT 静默降级或强行升级 `wgpu` / `winit`。
-- **待同步的一致性（不在本 change 可写范围）**：`CODEBUDDY.md:49` 的「快照 v1」过期措辞，以及 `CODEBUDDY.md:8` 的「P2–P5 为 active」「主 specs 仅两个」，建议交 `docs-owner` 同步（用户已确认保持为建议）。
+- **一致性（已同步）**：`CODEBUDDY.md` 的「快照 v1」→ `SNAPSHOT_VERSION`（当前 3）、阶段与主 specs 描述、§8 归档范围均已由 `docs-owner` / 编排者同步完毕（tasks 1.9 已结案）。
 - **owner 归属（已指定）**：实施 owner 已指定为 `client-owner`，由编排者新建该 agent 定义（不在 `spec-steward` 可写范围）；本 change 按 CODEBUDDY.md §8「一个 change 一个 owner」由 `client-owner` 承接，不再阻塞 `/opsx:apply`（见 `design.md` 的 Open Questions 结案记录）。
 - **代码范围**：`crates/w3-render/`、新增 `crates/w3-client/`、`crates/w3-net/` 的适配层；本轮仅写 `openspec/` 与 `docs/decisions/`，不碰 `crates/`、不 commit、不归档、不执行远端命令。

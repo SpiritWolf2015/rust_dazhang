@@ -9,7 +9,9 @@ context: |
   确定性是硬门禁（ADR 0002）：权威状态只使用 SimFixed Q47.16 整数数学；
   整数逻辑帧冻结为 30 Hz；命令按
   ExecuteFrame -> PlayerId -> Sequence -> Arrival 排序；稳定 EntityId 顺序；
-  FNV-1a 状态哈希；快照 v1 是帧提交完成后的完整状态。
+  FNV-1a 状态哈希；快照版本由 crates/w3-core/src/snapshot.rs 的
+  SNAPSHOT_VERSION 定义（当前 3，头部含 defs_hash / content_hash），
+  快照是帧提交完成后的完整状态。
   w3-content 的坐标只是冻结的 f64 输入，绝不能进入快照或状态哈希；
   P2 必须先冻结 SimFixed 的转换规则。
 
@@ -47,7 +49,7 @@ rules:
     - 声明对资产/法律边界与确定性的影响。
   specs:
     - 使用 SHALL/MUST；每条 requirement 至少一个 #### Scenario（WHEN/THEN）。
-    - 新增权威状态必须声明进入状态哈希与快照 v1。
+    - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 3）。
   design:
     - 每个决策都要关联 ADR 0002，并说明对跨平台确定性的影响。
     - 每个决策列出考虑过的备选方案。

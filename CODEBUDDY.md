@@ -5,7 +5,7 @@
 ## 1. 项目速览
 
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
-- 阶段：P0 / P1 已实现并归档，P2–P5 为 active OpenSpec changes（见 ADR 0003）。主 specs：`deterministic-simulation`、`content-import`。
+- 阶段：P0–P5 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-09-p5-gameplay-systems/`）；当前唯一 active OpenSpec change 是 `p6-playable-client`（可玩客户端集成层，实施中，9/55 tasks，已通过 `openspec validate --strict`）。主 specs 共 7 个：`3d-rendering`、`content-import`、`deterministic-simulation`、`gameplay-systems`、`lockstep-networking`、`pathfinding`、`unit-orders`。
 - 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 - 架构设计原则（SRP / OCP / LSP / DIP / ISP / LoD / CARP 与本项目硬红线）已内联到 `openspec/config.yaml` 的 context 与 `critic.md` 审查清单；本文件与 ADR 为单一权威，不另立独立原则文档。
 
@@ -46,7 +46,7 @@
 
 ## 5. 确定性硬门禁（ADR 0002）
 
-- `SimFixed` Q47.16 整数数学；整数帧、30 Hz 冻结；命令按 `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；稳定 `EntityId` 顺序；FNV-1a 状态哈希；快照 v1 是帧提交后的完整状态。
+- `SimFixed` Q47.16 整数数学；整数帧、30 Hz 冻结；命令按 `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；稳定 `EntityId` 顺序；FNV-1a 状态哈希；快照（`SNAPSHOT_VERSION`，当前 3）是帧提交后的完整状态，头部含 `defs_hash` / `content_hash`。
 - 任何改动 `crates/w3-core/` 的实现，必须通过 `cargo test -p w3-core --test determinism`；新增权威状态字段必须**同时**进入状态哈希与快照。
 - `w3-core` 不得依赖 `w3-content` / `render` / `ui` / `audio` / `net`；表现层不得反写模拟状态；`w3-content` 的原始 `f64` 坐标是冻结输入，不进快照与哈希。
 - 跨平台确定性目前仅在 Windows / rustc 1.91 实跑；Linux / macOS 属待验证项，不得声称已达成。
@@ -77,7 +77,7 @@
 
 - schema `spec-driven`，artifact 顺序 `proposal → specs → design → tasks`；项目上下文与 per-artifact 规则在 `openspec/config.yaml`。
 - 新建提案：`openspec new change <name>` → `openspec status --change <name> --json` → `openspec instructions <artifact> --change <name> --json` → 写文件 → `openspec validate <name>`；完成后 `/opsx:archive`。
-- 已归档的 P0 / P1 在 `openspec/changes/archive/`；主 specs 是 source of truth。
+- 已归档的 P0–P5 在 `openspec/changes/archive/`；主 specs 是 source of truth。
 - **ADR 记"为什么决定"，OpenSpec 记"系统该做什么"**；spec 必须引用 ADR 编号，避免两份规范打架。
 - 一个 change 一个 owner，配一个只读 critic；`mode` 不使用 `bypassPermissions`。
 
@@ -88,6 +88,7 @@
 | `spec-steward` | OpenSpec change 制作 / validate / archive，维护 ADR 与 spec 一致性 | `openspec/`、`docs/decisions/` |
 | `sim-owner` | `w3-core` 唯一实现所有者，守 ADR 0002 | `crates/w3-core/` |
 | `content-owner` | `w3-content`，守资产合规 | `crates/w3-content/` |
+| `client-owner` | P6 可玩客户端集成层唯一实现所有者，守 ADR 0002 与只读表现边界 | `crates/w3-client/`、`crates/w3-render/` |
 | `asset-pipeline` | 跑上游 dev-setup、验证导出、记录 schema 变化 | 只读上游仓库，产物留本机 |
 | `critic` | 审查确定性、所有权、许可证、编码、资产入库 | **只读，不写任何文件** |
 | `docs-owner` | README / NOTICE / CONTRIBUTING / UPSTREAM 同步 | 文档文件 |

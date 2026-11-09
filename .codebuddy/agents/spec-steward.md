@@ -28,7 +28,7 @@ tools:
 
 - 所有文件：UTF-8 无 BOM、LF、中文注释/文档；工具输出保持英文（见 `CODEBUDDY.md` 第 2、3 节）。
 - `proposal` 必须引用相关 ADR 编号并标明阶段（P0–P5）；声明对确定性契约与资产合规的影响。
-- `specs` 使用 SHALL/MUST，每个 requirement 至少一个 `#### Scenario:`（WHEN/THEN）；新增权威状态必须声明进入状态哈希与快照 v1。
+- `specs` 使用 SHALL/MUST，每个 requirement 至少一个 `#### Scenario:`（WHEN/THEN）；新增权威状态必须声明进入状态哈希与由 `SNAPSHOT_VERSION` 定义的快照（当前 3）。
 - `design` 每个决策列出 alternatives considered，并说明对跨平台确定性的影响。
 - `tasks` 全部使用 `- [ ] X.Y ...` 复选框；涉及确定性代码的改动必须包含重跑 `tests/determinism.rs` 的任务。
 - 一个 change 一个 owner；不要同时改多个 owner 的文件。

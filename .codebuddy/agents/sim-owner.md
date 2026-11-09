@@ -23,7 +23,7 @@ tools:
 - 命令按 `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；提交时冻结到达序号；执行时重新校验存活与归属。
 - 稳定 `EntityId` 顺序（BTreeSet/BTreeMap）；FNV-1a 显式小端字节编码；禁用 `DefaultHasher`、`HashMap` 迭代。
 - `RtsMatch` 字段全私有；`read_view()` 返回 owned 拷贝；`drain_events()` 后事件序号不重置。
-- 快照 v1 = 帧 N 提交后的完整状态，含 RNG 流、下一 ID、未执行命令、订单与导航状态。
+- 快照（`SNAPSHOT_VERSION`，当前 3）= 帧 N 提交后的完整状态，含 RNG 流、下一 ID、未执行命令、订单与导航状态、冻结定义内容哈希与玩法运行态。
 
 ## 硬性规则
 

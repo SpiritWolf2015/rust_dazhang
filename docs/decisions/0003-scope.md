@@ -29,10 +29,12 @@
 | P2 | 模拟竖切：选中 → 移动 → 攻击；移植八方向寻路、动态障碍、朝向 / 坡度、群体编队语义，并换成 [ADR 0002](0002-determinism.md) 的定点数学 | **已完成**（归档 `2026-11-08-p2-simulation-vertical-slice`；坐标契约见 [ADR 0004](0004-frozen-coordinates.md)） |
 | P3 | wgpu 3D 渲染：glTF / MDX 骨骼动画、高度场地形、队伍色、粒子 / 挂点（转换规格取自 `godot_warcraft3/docs/design/asset-convert/`） | **已完成并归档**（归档 `2026-11-08-p3-wgpu-3d-renderer`，主 `3d-rendering` spec 已更新） |
 | P4 | 移植 lockstep + UDP 可靠层 + 自建 lobby / relay；双客户端同图对战、逐帧 checksum 对比 | **已完成并归档**（归档 `2026-11-08-p4-lockstep-networking`；双客户端逐帧哈希一致，真实 UDP 双进程实机验收通过，主 `lockstep-networking` spec 已更新） |
-| P5 | 技能 / 英雄 / 物品 / 科技 / 经济 / 采集 / 建造 / 生产 / 胜负（契约参考 `RTS_ABILITY_SYSTEM.md` 的三层模板 + 效果组合） | 未开始 |
+| P5 | 技能 / 英雄 / 物品 / 科技 / 经济 / 采集 / 建造 / 生产 / 胜负（契约参考 `RTS_ABILITY_SYSTEM.md` 的三层模板 + 效果组合） | **已完成**（commit `d9f5321`，13/13 tasks，已 push；change `p5-gameplay-systems` 待归档） |
+| P6 | 可玩客户端集成层（交互 / UI / 固定 30 Hz 步进 / 联机 session 接入）：复用既有 `winit 0.30` + `wgpu 30` + `w3-render`，补齐输入→命令、HUD、交互相机与本地 / 联机共用呈现管线；**集成收尾，不新增玩法阶段**（见 change `p6-playable-client`） | 提案中（未实施） |
 
 ### 明确不做（第一版）
 
+- **不引入通用游戏引擎（Bevy 等）**：其 ECS 自动并行调度、异步系统完成顺序与 `f32` / `f64` `Transform` 会与 [ADR 0002](0002-determinism.md) 的整数帧、稳定 `EntityId` / 命令排序、定点权威状态（禁止浮点进入权威状态 / 快照 / 状态哈希）直接冲突；可玩客户端复用既有 `winit 0.30` + `wgpu 30` + `w3-render`，至多加一个轻量 UI 依赖（见 change `p6-playable-client` 的 D1）。
 - **JASS / wtg 触发器 VM、自定义地图、战役与过场**：三者皆无实现，属独立大工程；须单独立项后再开 ADR。
 - 战争迷雾 / 隐身反隐体系：后续单独机制，不挤进第一版。
 - Mod API、配置热更新、跨版本存档迁移、跨运行时（.NET / Godot）兼容。

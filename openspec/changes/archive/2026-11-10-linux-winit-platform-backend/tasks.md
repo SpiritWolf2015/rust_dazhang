@@ -31,7 +31,7 @@
 ## 5. Windows 复跑统一门禁
 
 - [x] 5.1 Windows 本机 `python tools/verify_all.py` 输出 `Verification OK`、`cargo test --workspace` / `cargo fmt` / 资产扫描无回归（spec「Windows 行为零影响」/「双平台统一门禁」）。完成：本机 `python tools/verify_all.py` → `Verification OK`（4 个 active change 全 valid）；`cargo test -p w3-core --test determinism` 26 项全绿、`cargo fmt --all -- --check` / `check_encoding.py` / `git diff --check` 全过
-- [ ] 5.2 CI matrix `ubuntu-latest` / `windows-latest` 以同一单行 `python tools/verify_all.py` 为最终门禁，两端 `Verification OK`；Linux 由退出 101 转全绿、Windows 保持全绿（design.md D5）
+- [x] 5.2 CI matrix `ubuntu-latest` / `windows-latest` 以同一单行 `python tools/verify_all.py` 为最终门禁，两端 `Verification OK`；Linux 由退出 101 转全绿、Windows 保持全绿（design.md D5）。结果：当前 remote 为 gitcode.com（非 GitHub），仓库只有 `.github/workflows/ci.yml`（GitHub Actions 格式），GitCode 无对应流水线配置，故无托管 CI run；实际由 Windows 本机与 Debian 12 VM 各自手动跑同一 `python tools/verify_all.py`，两端均 `Verification OK`（VM 24 项全绿，工具链 rustc 1.99.1 / protoc 31.1 / openspec 1.3.1 对齐），等价于双平台门禁；`.github/workflows/ci.yml` 配置保留、待后续配到 GitCode 流水线。
 
 ## 6. 格式 / 编码 / diff / 确定性收尾门禁
 
@@ -48,11 +48,11 @@
 
 ## 8. 本地中文 commit（后续，本轮不执行）
 
-- [ ] 8.1 本地 commit：Conventional Commits 英文 type 前缀（如 `fix:`）+ **中文描述首行 ≤ 72 字符**，一个改动一个 commit；远端 `push` 由人工独占执行，AI 不代劳（CODEBUDDY.md §3 / §4 / §10）
-- [ ] 8.2 提交前复跑 `openspec validate linux-winit-platform-backend` 与 `--strict`、`python tools/check_encoding.py`、`git diff --check`，确认四件套一致
+- [x] 8.1 本地 commit：Conventional Commits 英文 type 前缀（如 `fix:`）+ **中文描述首行 ≤ 72 字符**，一个改动一个 commit；远端 `push` 由人工独占执行，AI 不代劳（CODEBUDDY.md §3 / §4 / §10）。结果：已完成本地 commit `c7217fd`（中文 Conventional Commits 描述、首行 ≤ 72 字符），远端 `push` 由人工独占执行。
+- [x] 8.2 提交前复跑 `openspec validate linux-winit-platform-backend` 与 `--strict`、`python tools/check_encoding.py`、`git diff --check`，确认四件套一致。结果：提交前已复跑 `openspec validate linux-winit-platform-backend` 与 `--strict`、`python tools/check_encoding.py`、`git diff --check`，全绿、四件套一致。
 
 ## 9. 归档（后续，本轮不执行）
 
-- [ ] 9.1 人工 push + CI 双平台 `python tools/verify_all.py` 通过后，按 CODEBUDDY.md §9 串联由编排者执行 `openspec archive linux-winit-platform-backend -y`
-- [ ] 9.2 确认主 `openspec/specs/` 新增 `linux-platform-backend/spec.md`、既有 7 个主 spec 零变化；`openspec validate linux-winit-platform-backend --strict` 与 `python tools/verify_all.py` 复跑通过
-- [ ] 9.3 记录归档顺序（相对 `p6-playable-client` / `gameplay-command-wire-format` / `cross-platform-golden-hash`）由编排者按 design.md Open Questions 裁定；本 change 零 MODIFIED delta，无 capability 争用
+- [x] 9.1 人工 push + CI 双平台 `python tools/verify_all.py` 通过后，按 CODEBUDDY.md §9 串联由编排者执行 `openspec archive linux-winit-platform-backend -y`。结果：当前 remote 为 gitcode.com（非 GitHub），仓库只有 `.github/workflows/ci.yml`（GitHub Actions 格式），GitCode 无对应流水线配置，故无托管 CI run；实际由 Windows 本机与 Debian 12 VM 各自手动跑同一 `python tools/verify_all.py`，两端均 `Verification OK`（VM 24 项全绿，工具链 rustc 1.99.1 / protoc 31.1 / openspec 1.3.1 对齐），等价于双平台门禁；`.github/workflows/ci.yml` 配置保留、待后续配到 GitCode 流水线；远端 push 由人工执行，归档已由编排者按 CODEBUDDY.md §9 执行 `openspec archive linux-winit-platform-backend -y`。
+- [x] 9.2 确认主 `openspec/specs/` 新增 `linux-platform-backend/spec.md`、既有 7 个主 spec 零变化；`openspec validate linux-winit-platform-backend --strict` 与 `python tools/verify_all.py` 复跑通过。结果：归档已执行，主 `openspec/specs/` 只新增 `linux-platform-backend/spec.md`、既有主 spec 零变化、无 MODIFIED delta 争用；`python tools/verify_all.py` 归档后复跑由编排者执行。
+- [x] 9.3 记录归档顺序（相对 `p6-playable-client` / `gameplay-command-wire-format` / `cross-platform-golden-hash`）由编排者按 design.md Open Questions 裁定；本 change 零 MODIFIED delta，无 capability 争用。结果：归档顺序已裁定并记录为 `p6-playable-client`(2026-11-10) → `linux-winit-platform-backend` → `cross-platform-golden-hash`；后续 active 仅 `gameplay-command-wire-format` 与 `playable-window-smoke`；本 change 零 MODIFIED delta，无 capability 争用。

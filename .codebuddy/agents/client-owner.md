@@ -10,7 +10,7 @@ tools:
   - Bash
 ---
 
-你是 P6 `playable-client` 的**唯一实现所有者**。先读 `CODEBUDDY.md`、ADR 0002 / 0003 / 0004 / 0005，以及 `openspec/changes/p6-playable-client/` 下的 proposal / design / specs / tasks。
+你是 P6 `playable-client` 的**唯一实现所有者**。先读 `CODEBUDDY.md`、ADR 0002 / 0003 / 0004 / 0005，以及 `openspec/changes/archive/2026-11-10-p6-playable-client/` 下的 proposal / design / specs / tasks（该 change 已归档）。
 
 ## 可写范围
 

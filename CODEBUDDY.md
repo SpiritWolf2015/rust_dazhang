@@ -5,7 +5,7 @@
 ## 1. 项目速览
 
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
-- 阶段：P0–P6 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-10-p6-playable-client/`）；当前 4 个 active OpenSpec change：`gameplay-command-wire-format`（9/54）、`linux-winit-platform-backend`（24/30，已实施待归档）、`cross-platform-golden-hash`（36/41，已实施待归档）、`playable-window-smoke`（P6 窗口冒烟入口提案，提案中）。主 specs 共 8 个：`3d-rendering`、`content-import`、`deterministic-simulation`、`gameplay-systems`、`lockstep-networking`、`pathfinding`、`playable-client`、`unit-orders`。
+- 阶段：P0–P6 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-10-cross-platform-golden-hash/`）；当前 2 个 active OpenSpec change：`gameplay-command-wire-format`（9/54，未实施）、`playable-window-smoke`（0/35，P6 窗口冒烟入口提案，提案中）。主 specs 共 10 个：`3d-rendering`、`content-import`、`cross-platform-determinism`、`deterministic-simulation`、`gameplay-systems`、`linux-platform-backend`、`lockstep-networking`、`pathfinding`、`playable-client`、`unit-orders`。
 - 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 - 架构设计原则（SRP / OCP / LSP / DIP / ISP / LoD / CARP 与本项目硬红线）已内联到 `openspec/config.yaml` 的 context 与 `critic.md` 审查清单；本文件与 ADR 为单一权威，不另立独立原则文档。
 

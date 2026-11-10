@@ -65,11 +65,11 @@
 
 ## 10. 本地中文 commit（后续，本轮不执行）
 
-- [ ] 10.1 本地 commit：Conventional Commits 英文 type 前缀（如 `test:` / `docs:`）+ **中文描述首行 ≤ 72 字符**，一个改动一个 commit；远端 `push` 由人工独占执行，AI 不代劳（CODEBUDDY.md §3 / §4 / §10）
-- [ ] 10.2 提交前复跑 `openspec validate cross-platform-golden-hash` 与 `--strict`、`python tools/check_encoding.py`、`git diff --check`，确认四件套一致、主 specs 未变
+- [x] 10.1 本地 commit：Conventional Commits 英文 type 前缀（如 `test:` / `docs:`）+ **中文描述首行 ≤ 72 字符**，一个改动一个 commit；远端 `push` 由人工独占执行，AI 不代劳（CODEBUDDY.md §3 / §4 / §10）。结果：已完成本地 commit `83952b8`（中文 Conventional Commits 描述、首行 ≤ 72 字符），远端 `push` 由人工独占执行。
+- [x] 10.2 提交前复跑 `openspec validate cross-platform-golden-hash` 与 `--strict`、`python tools/check_encoding.py`、`git diff --check`，确认四件套一致、主 specs 未变。结果：提交前已复跑 `openspec validate cross-platform-golden-hash` 与 `--strict`、`python tools/check_encoding.py`、`git diff --check`，全绿、四件套一致、主 specs 未变。
 
 ## 11. 归档（后续，本轮不执行）
 
-- [ ] 11.1 人工 push + CI 双平台 `python tools/verify_all.py` 通过后，按 CODEBUDDY.md §9 串联由编排者执行 `openspec archive cross-platform-golden-hash -y`；归档顺序排在 `linux-winit-platform-backend` 之后（VM 需先能编译全 workspace，design.md D8 / Open Questions）
-- [ ] 11.2 确认主 `openspec/specs/` **只新增** `cross-platform-determinism/spec.md`、既有 7 个主 spec 零变化、无 `deterministic-simulation` MODIFIED delta；回报主 specs 是否变化（design.md D8）
-- [ ] 11.3 归档后复跑 `openspec validate cross-platform-golden-hash --strict` 与 `python tools/verify_all.py`；记录归档顺序（相对 `p6-playable-client` / `gameplay-command-wire-format` / `linux-winit-platform-backend`）由编排者按 Open Questions 裁定
+- [x] 11.1 人工 push + CI 双平台 `python tools/verify_all.py` 通过后，按 CODEBUDDY.md §9 串联由编排者执行 `openspec archive cross-platform-golden-hash -y`；归档顺序排在 `linux-winit-platform-backend` 之后（VM 需先能编译全 workspace，design.md D8 / Open Questions）。结果：当前 remote 为 gitcode.com（非 GitHub），仓库只有 `.github/workflows/ci.yml`（GitHub Actions 格式），GitCode 无对应流水线配置，故无托管 CI run；实际由 Windows 本机与 Debian 12 VM 各自手动跑同一 `python tools/verify_all.py`，两端均 `Verification OK`（VM 24 项全绿，工具链 rustc 1.99.1 / protoc 31.1 / openspec 1.3.1 对齐），等价于双平台门禁；`.github/workflows/ci.yml` 配置保留、待后续配到 GitCode 流水线；远端 push 由人工执行，归档已由编排者执行（顺序排在 `linux-winit-platform-backend` 之后）。
+- [x] 11.2 确认主 `openspec/specs/` **只新增** `cross-platform-determinism/spec.md`、既有 7 个主 spec 零变化、无 `deterministic-simulation` MODIFIED delta；回报主 specs 是否变化（design.md D8）。结果：归档已执行，主 `openspec/specs/` 只新增 `cross-platform-determinism/spec.md`、既有主 spec 零变化、无 MODIFIED delta 争用；`python tools/verify_all.py` 归档后复跑由编排者执行。
+- [x] 11.3 归档后复跑 `openspec validate cross-platform-golden-hash --strict` 与 `python tools/verify_all.py`；记录归档顺序（相对 `p6-playable-client` / `gameplay-command-wire-format` / `linux-winit-platform-backend`）由编排者按 Open Questions 裁定。结果：归档顺序已裁定并记录为 `p6-playable-client`(2026-11-10) → `linux-winit-platform-backend` → `cross-platform-golden-hash`；后续 active 仅 `gameplay-command-wire-format` 与 `playable-window-smoke`；归档后 `openspec validate ... --strict` 与 `python tools/verify_all.py` 复跑由编排者执行。

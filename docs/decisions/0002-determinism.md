@@ -96,3 +96,13 @@
 ## 复核点
 
 引入浮点或超越函数、修改 `logic_fps` 或帧阶段顺序、引入并行 / 异步仿真、提升规模目标（见 [ADR 0003](0003-scope.md)）、支持跨版本存档、在非 Windows 平台首次实跑。
+
+## 复核记录
+
+- **复核**：本段为本 ADR §「复核点」中「在非 Windows 平台首次实跑」的首次兑现记录，由 OpenSpec change `cross-platform-golden-hash` 的离线 golden-hash 工具完成；本段**只追加**，不改写 §1–§8 正文、第 94 行历史基线数值（`rustc 1.91.0`）、备选方案表与「复核点」原文。
+- **触发点**：命中 §「复核点」的「在非 Windows 平台首次实跑」；由 change `cross-platform-golden-hash` 新增的 `crates/w3-core/examples/golden_hash.rs`（独立 example，只调 `w3-core` 公开 API、`w3-core/src/` 零改动）完成离线验证。
+- **实测环境**：Windows 11 本机（`c:/open_rts/rust_dazhang`）与 Debian 12（bookworm，内核 `6.1.0-37-amd64`，x86_64）VM（`/srv/rust_dazhang`）；两端均 `rustc 1.99.1`、`protoc 31.1`；`crates/w3-core/examples/golden_hash.rs` 两端源码 sha256 一致（`524c8520...c758`）。
+- **方法**：固定 17 条命令脚本、`FRAME_COUNT = 40` 个整数帧，`MatchConfig { seed: 0x5eed, logic_fps: 30, content_hash: 0xC0FFEE }`、`StaticWorld::open_world(16, 16, SimFixed::ONE)`；每帧调用 `compute_state_hash()` 并输出定宽 `0x{:016x}` 的逐帧行，末尾一行汇总只含编译期常量（`frames` / `final_hash` / `schema=golden-hash/1`）；对**整份文本**（全部 40 个中间帧 + 汇总行）逐字节比对，**非只比最终 hash**；`rustc` 等工具链版本只在本记录等验证报告中记录，不进基线文本。
+- **结果**：两份输出 sha256 同为 `c6dc62b4b3f8718b7edc4b5ba9f90db44c146cdb068904c67d7898c4303b3775`，41 行 / 1371 字节逐字节 `MATCH`，`diff -u` 无输出，`final_hash=0x3d7e4312f63844e5`。
+- **结论边界**：据此把「Linux / Debian 12 x86_64、`rustc 1.99.1`」记为**已验证**（与 Windows 逐帧 hash 序列逐字节一致）；**macOS、其它 CPU 架构（ARM64 等）、其它 `rustc` 版本仍属待验证项**，不得扩大为「全平台 / 全 CPU 确定性已达成」。`logic_fps = 30`、`SimFixed` Q47.16、`ExecuteFrame → PlayerId → Sequence → Arrival` 命令稳定排序、FNV-1a 状态哈希、`SNAPSHOT_VERSION` v3 快照契约**零改动**；本次是**验证**而非改动，第 94 行历史基线数值 `rustc 1.91.0` 与本次实测 `rustc 1.99.1` 并存、不回改正文。
+- **关联 change**：`cross-platform-golden-hash`（离线 golden-hash 工具与双平台逐字节 diff）；`linux-winit-platform-backend`（正式修复 Linux 编译前提：为 `crates/w3-render/Cargo.toml` / `crates/w3-client/Cargo.toml` 追加 Linux target 条件依赖 `x11`，VM 上 `python3 tools/verify_all.py` → `Verification OK`、24 项全绿）。golden diff 按拍板**不纳入** CI / `tools/verify_all.py`，走人工比对。

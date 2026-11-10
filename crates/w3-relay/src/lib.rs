@@ -9,7 +9,6 @@
 use std::collections::BTreeMap;
 
 use thiserror::Error;
-use w3_core::Command;
 use w3_net::frame::FrameAssembler;
 use w3_net::packet::{
     FrameCommands, Packet, PacketKind, decode_commands, encode_commands, parse_ack,
@@ -204,8 +203,9 @@ impl<T: Transport> Relay<T> {
             }
             PacketKind::Input => {
                 if let Some(player_id) = self.lobby.player_for(&from) {
-                    let commands: Vec<Command> = decode_commands(&packet.payload)?;
-                    self.assembler.submit(player_id, commands);
+                    // Input 包同时承载普通命令与玩法命令，交给装配器一并收集。
+                    let (commands, gameplay) = decode_commands(&packet.payload)?;
+                    self.assembler.submit(player_id, commands, gameplay);
                     let ack = ack_packet(0, packet.sequence, packet.frame);
                     self.transport.send(&from, &ack.encode()?)?;
                 } else {
@@ -278,7 +278,9 @@ impl<T: Transport> Relay<T> {
 
     fn broadcast_frame(&mut self, frame: FrameCommands) -> Result<(), RelayError> {
         self.log.record(frame.clone());
-        let commands = encode_commands(&frame.commands)?;
+        // Frame 广播同时编码两类命令；CommandLog 与 ResyncReplay 补发沿用
+        // 同一份含两类命令的 FrameCommands，顺序与原始权威帧批一致。
+        let payload = encode_commands(&frame.commands, &frame.gameplay)?;
         for player_id in self.lobby.players() {
             let Some(endpoint) = self.lobby.endpoint_for(player_id).cloned() else {
                 continue;
@@ -287,7 +289,7 @@ impl<T: Transport> Relay<T> {
                 continue;
             };
             // sequence 由各玩家独立的 ReliableSender 分配。
-            let packet = Packet::new(PacketKind::Frame, 0, 0, frame.frame, commands.clone());
+            let packet = Packet::new(PacketKind::Frame, 0, 0, frame.frame, payload.clone());
             let (_, bytes) = sender.queue(packet)?;
             self.transport.send(&endpoint, &bytes)?;
         }
@@ -328,10 +330,12 @@ mod tests {
         log.record(FrameCommands {
             frame: 2,
             commands: vec![],
+            gameplay: vec![],
         });
         log.record(FrameCommands {
             frame: 1,
             commands: vec![],
+            gameplay: vec![],
         });
         log.record(FrameCommands {
             frame: 1,
@@ -341,6 +345,7 @@ mod tests {
                 1,
                 w3_core::CommandKind::Noop,
             )],
+            gameplay: vec![],
         });
         assert_eq!(log.len(), 2);
         let replay = log.from_frame(1);
@@ -353,6 +358,7 @@ mod tests {
 
     #[test]
     fn relay_welcomes_players_and_rejects_bad_version() {
+        assert_eq!(PROTOCOL_VERSION, 3);
         let bus = LoopbackBus::shared();
         let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
         let mut client = LoopbackTransport::new(1, &bus);
@@ -373,6 +379,121 @@ mod tests {
     }
 
     #[test]
+    fn relay_rejects_version_two_before_decoding_payload() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        let bus = LoopbackBus::shared();
+        let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+        let mut client = LoopbackTransport::new(1, &bus);
+
+        // 伪装成 v2 的 Input 包，载荷携带玩法命令字段；v3 relay 必须在
+        // 解码 payload 之前按版本回 Reject，玩法字段绝不被静默丢弃后进入命令流。
+        let gameplay = GameplayCommand::new(
+            w3_core::Frame::new(0),
+            1,
+            2,
+            GameplayCommandKind::SetAi { enabled: true },
+        );
+        let payload = encode_commands(&[], &[gameplay]).unwrap();
+        let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+            .encode()
+            .unwrap();
+        stale[4] = 2;
+
+        client.send(&Endpoint::Loopback(0), &stale).unwrap();
+        relay.poll().unwrap();
+        let (_, bytes) = client.recv().unwrap().unwrap();
+        let reject = Packet::decode(&bytes).unwrap();
+        assert_eq!(reject.kind, PacketKind::Reject);
+        assert!(
+            relay.log().is_empty(),
+            "stale payload must not enter command stream"
+        );
+    }
+
+    #[test]
+    fn relay_assembles_broadcasts_and_replays_both_command_types() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        let bus = LoopbackBus::shared();
+        let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+        let mut a = LoopbackTransport::new(1, &bus);
+        let mut b = LoopbackTransport::new(2, &bus);
+        a.send(&Endpoint::Loopback(0), &hello()).unwrap();
+        b.send(&Endpoint::Loopback(0), &hello()).unwrap();
+        relay.poll().unwrap();
+        a.recv().unwrap();
+        b.recv().unwrap();
+
+        let ordinary =
+            w3_core::Command::new(w3_core::Frame::new(0), 1, 1, w3_core::CommandKind::Noop);
+        let gameplay = GameplayCommand::new(
+            w3_core::Frame::new(0),
+            1,
+            2,
+            GameplayCommandKind::Cast {
+                caster: w3_core::EntityId::new(1).unwrap(),
+                ability: 7,
+                target: w3_core::EntityId::new(2).unwrap(),
+            },
+        );
+        // 两个端点都上行含两类命令的 Input；装配器按端点区分玩家。
+        let payload = encode_commands(&[ordinary], &[gameplay]).unwrap();
+        let input = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+            .encode()
+            .unwrap();
+        a.send(&Endpoint::Loopback(0), &input).unwrap();
+        b.send(&Endpoint::Loopback(0), &input).unwrap();
+        relay.poll().unwrap();
+        relay.tick().unwrap();
+
+        // 权威帧（CommandLog）同时含两类命令。
+        let recorded = relay.log().from_frame(0);
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].commands.len(), 2);
+        assert_eq!(recorded[0].gameplay.len(), 2);
+
+        // 广播 Frame 载荷可解出两类命令。
+        let mut frame = None;
+        while let Some((_, bytes)) = a.recv().unwrap() {
+            let packet = Packet::decode(&bytes).unwrap();
+            if packet.kind == PacketKind::Frame {
+                frame = Some(packet);
+                break;
+            }
+        }
+        let frame = frame.expect("frame broadcast missing");
+        let (commands, gameplay_decoded) = decode_commands(&frame.payload).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(gameplay_decoded.len(), 2);
+
+        // ResyncReplay 补发的帧与原始权威帧批逐字段一致（含两类命令顺序）。
+        let request = Packet::new(
+            PacketKind::ResyncRequest,
+            1,
+            0,
+            0,
+            payload_resync_request(1, 0),
+        )
+        .encode()
+        .unwrap();
+        a.send(&Endpoint::Loopback(0), &request).unwrap();
+        relay.poll().unwrap();
+        let mut replay = None;
+        while let Some((_, bytes)) = a.recv().unwrap() {
+            let packet = Packet::decode(&bytes).unwrap();
+            if packet.kind == PacketKind::ResyncReplay {
+                replay = Some(packet);
+                break;
+            }
+        }
+        let replay = replay.expect("resync replay missing");
+        let frames = parse_resync_replay(&replay.payload).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0], recorded[0]);
+    }
+
+    #[test]
     fn relay_broadcasts_frames_and_replays_from_cursor() {
         let bus = LoopbackBus::shared();
         let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
@@ -389,12 +510,15 @@ mod tests {
             1,
             7,
             0,
-            encode_commands(&[w3_core::Command::new(
-                w3_core::Frame::new(0),
-                1,
-                1,
-                w3_core::CommandKind::Noop,
-            )])
+            encode_commands(
+                &[w3_core::Command::new(
+                    w3_core::Frame::new(0),
+                    1,
+                    1,
+                    w3_core::CommandKind::Noop,
+                )],
+                &[],
+            )
             .unwrap(),
         )
         .encode()

@@ -50,8 +50,6 @@ pub enum ClientError {
     Gameplay(GameplayCommandError),
     /// 输入翻译前置条件不满足。
     Input(InputError),
-    /// 联机线格式不支持该命令（ADR 0005 protobuf 只承载 `CommandKind`）。
-    GameplayUnsupportedOnline,
     /// 网络提交 / 轮询失败（详情以英文结构化 `key=value` 日志输出）。
     Network,
 }
@@ -62,9 +60,6 @@ impl std::fmt::Display for ClientError {
             Self::Command(error) => write!(f, "command rejected: {error:?}"),
             Self::Gameplay(error) => write!(f, "gameplay command rejected: {error}"),
             Self::Input(error) => write!(f, "input rejected: {error}"),
-            Self::GameplayUnsupportedOnline => {
-                f.write_str("gameplay command is not supported by the lockstep wire format")
-            }
             Self::Network => f.write_str("network input failed"),
         }
     }

@@ -136,6 +136,7 @@ mod tests {
         FrameCommands {
             frame,
             commands: vec![command(frame, 1, sequence)],
+            gameplay: vec![],
         }
     }
 

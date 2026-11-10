@@ -7,14 +7,20 @@
 // - 禁止 unknown fields 透传 / 回显：prost 解码默认丢弃未知字段，不存储、不回显。
 // - schema 变更必须同步 bump packet.rs 的 PROTOCOL_VERSION。
 // - 每个消息显式 reserved 若干编号，提示后续只追加。
+//
+// PROTOCOL_VERSION 3：新增玩法命令线格式（ADR 0005 §3）。玩法命令用独立的
+// GameplayCommand 消息与 GameplayCommandBatch，只在顶层 CommandBatch 追加；
+// 既有 Command 的 oneof 与控制包字段编号、reserved 一律零改动。
 
 syntax = "proto3";
 package w3net;
 
 // 一批输入命令（Input / Frame / ResyncReplay 内的命令集）。
+// tag 9 的玩法命令批只追加在 reserved 2 to 8 之后；玩法命令为空时该字段不编码。
 message CommandBatch {
   repeated Command commands = 1;
   reserved 2 to 8;
+  GameplayCommandBatch gameplay = 9;
 }
 
 message Command {
@@ -104,4 +110,101 @@ message ResyncReplay {
 message Reject {
   string reason = 1;
   reserved 2 to 6;
+}
+
+// ---- 玩法命令线格式（PROTOCOL_VERSION 3，只追加，见 ADR 0005 §3）----
+
+// 效果定义（玩法命令参数）：EffectKind 用稳定码 uint32 承载，amount 用 int64。
+message EffectDef {
+  uint32 effect_kind = 1;
+  int64 amount = 2;
+  uint32 duration_frames = 3;
+  reserved 4 to 8;
+}
+
+// 玩法命令：execute_frame / player_id / sequence 与 w3_core::GameplayCommand 一一对应。
+// oneof kind 用 tag 4–13 覆盖全部 10 个玩法变体，reserved 14 to 32 留给后续只追加。
+// arrival 不编码，由各端提交时按稳定序本地分配。
+message GameplayCommand {
+  uint64 execute_frame = 1;
+  uint32 player_id = 2;
+  uint32 sequence = 3;
+  oneof kind {
+    GameplayCast cast = 4;
+    GameplayTrain train = 5;
+    GameplayCancelTrain cancel_train = 6;
+    GameplayResearch research = 7;
+    GameplayBuyItem buy_item = 8;
+    GameplayGather gather = 9;
+    GameplayRegisterBehavior register_behavior = 10;
+    GameplaySpawnWave spawn_wave = 11;
+    GameplaySetAi set_ai = 12;
+    GameplayLeave leave = 13;
+  }
+  reserved 14 to 32;
+}
+
+// 施法：EntityId 用 uint64 的 value()，DefId 用 uint32。
+message GameplayCast {
+  uint64 caster = 1;
+  uint32 ability = 2;
+  uint64 target = 3;
+  reserved 4 to 8;
+}
+// 生产 / 建造。
+message GameplayTrain {
+  uint64 producer = 1;
+  uint32 unit_def = 2;
+  bool is_building = 3;
+  reserved 4 to 8;
+}
+// 取消生产。
+message GameplayCancelTrain {
+  uint64 producer = 1;
+  uint32 index = 2;
+  reserved 3 to 8;
+}
+// 研究。
+message GameplayResearch {
+  uint32 upgrade = 1;
+  reserved 2 to 8;
+}
+// 购买物品。
+message GameplayBuyItem {
+  uint64 unit = 1;
+  uint32 item = 2;
+  reserved 3 to 8;
+}
+// 采集。
+message GameplayGather {
+  uint64 unit = 1;
+  reserved 2 to 8;
+}
+// 注册行为：EffectDef 作为独立消息承载（稳定码 / int64 / uint32）。
+message GameplayRegisterBehavior {
+  uint32 id = 1;
+  EffectDef effect = 2;
+  reserved 3 to 8;
+}
+// 波次。
+message GameplaySpawnWave {
+  uint32 id = 1;
+  uint32 period = 2;
+  reserved 3 to 8;
+}
+// AI 设置。
+message GameplaySetAi {
+  bool enabled = 1;
+  reserved 2 to 8;
+}
+// 离开：w3_core 的 u8 用 uint32 承载，解码时显式校验不溢出。
+message GameplayLeave {
+  uint32 player = 1;
+  reserved 2 to 8;
+}
+
+// 一批玩法命令；集合一律 repeated + 显式顺序，禁止 map。
+message GameplayCommandBatch {
+  repeated GameplayCommand commands = 1;
+  reserved 2 to 8;
 }

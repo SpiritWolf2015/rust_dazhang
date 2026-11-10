@@ -1,4 +1,4 @@
-//! 批次 C 验收：联机 `ClientSession` → `StepDriver` 适配（tasks 8.1–8.5）。
+//! 批次 C 验收：联机 `ClientSession` → `StepDriver` 适配（tasks 8.1–8.5、7.1–7.4）。
 //!
 //! 全部用内存回环 `LoopbackBus` 与合成命令，不依赖真实网络、墙钟、GPU 窗口
 //! 或导出资产。核心断言：
@@ -6,16 +6,22 @@
 //!   逐帧 `compute_state_hash()` 一致（spec「模式切换同管线」Scenario）；
 //! - 乱序 / 重传 / 重复包不改变帧号与哈希序列（spec「网络抖动不改帧序」）；
 //! - 网络包到达不驱动累加器：`advance_ticks(0)` 有大量包也不推进帧；
+//! - 联机玩法命令（施法 / 生产 / 取消生产）走上行广播、与本地同一权威状态，
+//!   上行失败显式返回错误（spec「本地与联机玩法命令一致」Scenario）；
 //! - 联机接入不新增权威状态，快照仍 v3 且头部含 `defs_hash` / `content_hash`；
 //! - ADR 0005 契约（W3N1 25B 头、protobuf 往返、checksum、first_difference）不变。
 
 use w3_client::{
-    ClientCommand, FixedStepClient, NetSessionDriver, StepDriver, TICKS_PER_LOGIC_FRAME,
+    ClientCommand, ClientError, FixedStepClient, NetSessionDriver, StepDriver,
+    TICKS_PER_LOGIC_FRAME,
 };
-use w3_core::{Command, CommandKind, Frame, SNAPSHOT_VERSION, SimFixed, StaticWorld};
+use w3_core::{
+    Command, CommandKind, EntityId, Frame, GameplayCommand, GameplayCommandKind, SNAPSHOT_VERSION,
+    SimFixed, StaticWorld,
+};
 use w3_net::packet::{HEADER_LEN, MAGIC, PROTOCOL_VERSION, Packet, PacketKind, encode_commands};
 use w3_net::transport::{Endpoint, LoopbackBus, LoopbackTransport, SharedBus};
-use w3_net::{ClientSession, Transport, apply_frame, stabilize};
+use w3_net::{ClientSession, NetError, Transport, apply_frame, stabilize};
 use w3_render::FrameProducer;
 
 const SEED: u64 = 0x5eed;
@@ -76,7 +82,23 @@ fn frame_commands(frame: u64) -> Vec<Command> {
 /// 把一帧冻结命令封成 `PacketKind::Frame` 并从伪 relay 注入客户端队列。
 /// `sequence` 供 `ReliableReceiver` 去重；重复包用相同 sequence 即被忽略。
 fn inject_frame(relay: &mut LoopbackTransport, frame: u64, sequence: u32, commands: &[Command]) {
-    let payload = encode_commands(commands).expect("protobuf encoding is deterministic");
+    let payload = encode_commands(commands, &[]).expect("protobuf encoding is deterministic");
+    let packet = Packet::new(PacketKind::Frame, RELAY_ID, sequence, frame, payload);
+    let bytes = packet.encode().expect("W3N1 header encoding succeeds");
+    relay
+        .send(&Endpoint::Loopback(CLIENT_ID), &bytes)
+        .expect("loopback send succeeds");
+}
+
+/// 把一帧玩法命令封成 `PacketKind::Frame` 并从伪 relay 注入客户端队列，
+/// 用于验证 `apply_frame` 消费含玩法命令的权威帧（tasks 7.4）。
+fn inject_gameplay_frame(
+    relay: &mut LoopbackTransport,
+    frame: u64,
+    sequence: u32,
+    gameplay: &[GameplayCommand],
+) {
+    let payload = encode_commands(&[], gameplay).expect("protobuf encoding is deterministic");
     let packet = Packet::new(PacketKind::Frame, RELAY_ID, sequence, frame, payload);
     let bytes = packet.encode().expect("W3N1 header encoding succeeds");
     relay
@@ -102,6 +124,64 @@ fn online() -> (
     );
     let driver = NetSessionDriver::new(SEED, CONTENT_HASH, world(), session);
     (driver, relay, bus)
+}
+
+/// 施法 / 生产 / 取消生产三类键鼠玩法命令，实体编号非 `EntityId::NONE`，
+/// 均可经 `validate_gameplay_entities` 同源校验。
+fn gameplay_kinds() -> [GameplayCommandKind; 3] {
+    let caster = EntityId::new(1).expect("entity id 1 is valid");
+    let target = EntityId::new(2).expect("entity id 2 is valid");
+    [
+        GameplayCommandKind::Cast {
+            caster,
+            ability: 10,
+            target,
+        },
+        GameplayCommandKind::Train {
+            producer: caster,
+            unit_def: 1,
+            is_building: false,
+        },
+        GameplayCommandKind::CancelTrain {
+            producer: caster,
+            index: 0,
+        },
+    ]
+}
+
+/// 由冻结帧号推导执行帧（下一帧），并携带 `PlayerId` / `Sequence` / `kind`。
+fn gameplay_command(sequence: u32, kind: GameplayCommandKind) -> GameplayCommand {
+    GameplayCommand::new(Frame::new(1), 1, sequence, kind)
+}
+
+/// 上行恒失败的传输层（测试用）：`send` 显式返回 `NetError`，用于验证
+/// `enqueue` 在 `submit_input` 失败时显式返回 `ClientError`、不本地代跑。
+struct FailingUplink;
+
+impl Transport for FailingUplink {
+    fn send(&mut self, _destination: &Endpoint, _bytes: &[u8]) -> Result<(), NetError> {
+        Err(NetError::Transport("injected uplink failure".into()))
+    }
+
+    fn recv(&mut self) -> Result<Option<(Endpoint, Vec<u8>)>, NetError> {
+        Ok(None)
+    }
+
+    fn local(&self) -> Endpoint {
+        Endpoint::Loopback(CLIENT_ID)
+    }
+}
+
+/// 构造一个上行恒失败的联机驱动，用于上行失败的显式错误验收。
+fn online_with_failing_uplink() -> NetSessionDriver<FailingUplink> {
+    let session = ClientSession::with_timeout(
+        FailingUplink,
+        Endpoint::Loopback(RELAY_ID),
+        1,
+        START_FRAME,
+        INPUT_TIMEOUT,
+    );
+    NetSessionDriver::new(SEED, CONTENT_HASH, world(), session)
 }
 
 /// 本地路径：每帧提交该帧命令，随后经累加器恰好 `step()` 一次。
@@ -294,11 +374,11 @@ fn jitter_reorder_and_retransmit_keep_frame_order_and_hashes() {
 }
 
 // ---------------------------------------------------------------------------
-// 8.2：联机键鼠走上行广播，Gameplay 命令显式拒绝
+// 7.4 / 8.2：联机键鼠与玩法命令走上行广播、本地与联机一致、上行失败显式报告
 // ---------------------------------------------------------------------------
 
 #[test]
-fn online_input_goes_uplink_and_gameplay_is_rejected_explicitly() {
+fn online_input_and_gameplay_commands_go_uplink() {
     let (mut driver, mut relay, _bus) = online();
     let command = Command::new(Frame::new(0), 1, 1, CommandKind::Noop);
     let tick = driver.view().tick;
@@ -316,21 +396,119 @@ fn online_input_goes_uplink_and_gameplay_is_rejected_explicitly() {
     let packet = Packet::decode(&bytes).expect("valid W3N1 header");
     assert_eq!(packet.kind, PacketKind::Input);
 
-    // `GameplayCommandKind` 不在 ADR 0005 protobuf schema 内：显式报错。
-    let gameplay = w3_core::GameplayCommand::new(
-        Frame::new(1),
-        1,
-        2,
-        w3_core::GameplayCommandKind::Train {
-            producer: w3_core::EntityId::new(1).unwrap(),
+    // 施法 / 生产 / 取消生产在联机可用：不再返回 `GameplayUnsupportedOnline`，
+    // 每类玩法命令都经 `submit_input` 上行广播，本地绝不静默提交。
+    for (index, kind) in gameplay_kinds().into_iter().enumerate() {
+        let gameplay = gameplay_command(index as u32 + 2, kind);
+        assert!(
+            driver.enqueue(ClientCommand::Gameplay(gameplay)).is_ok(),
+            "gameplay command must be accepted online",
+        );
+        let (_, bytes) = relay
+            .recv()
+            .expect("loopback recv succeeds")
+            .expect("gameplay input packet is broadcast to relay");
+        let packet = Packet::decode(&bytes).expect("valid W3N1 header");
+        assert_eq!(packet.kind, PacketKind::Input);
+        let (commands, decoded) =
+            w3_net::packet::decode_commands(&packet.payload).expect("decode succeeds");
+        assert!(
+            commands.is_empty(),
+            "gameplay uplink carries no simulation command"
+        );
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].kind, kind);
+        assert_eq!(decoded[0].execute_frame, gameplay.execute_frame);
+        assert_eq!(decoded[0].player_id, gameplay.player_id);
+        assert_eq!(decoded[0].sequence, gameplay.sequence);
+    }
+    // enqueue 只上行、不推进模拟、不本地 `submit_gameplay_command`。
+    assert_eq!(driver.view().tick, tick);
+    assert!(driver.applied_trace().is_empty());
+}
+
+#[test]
+fn local_and_online_share_state_for_cast_train_cancel_train() {
+    // 基线：仅 step 一次、不提交任何玩法命令，用于证明玩法命令确实进入
+    // 权威提交路径（`GameplayCommandQueue.next_arrival` 进入状态哈希）。
+    let mut baseline = FixedStepClient::new(SEED, CONTENT_HASH, world());
+    baseline.advance_one_frame();
+    let baseline_hash = baseline.sim().compute_state_hash();
+
+    for (index, kind) in gameplay_kinds().into_iter().enumerate() {
+        let gameplay = gameplay_command(index as u32 + 1, kind);
+
+        // 本地模式：玩法命令直接经 `submit_gameplay_command` 提交，随后一次 step。
+        let mut local = FixedStepClient::new(SEED, CONTENT_HASH, world());
+        local
+            .submit_gameplay_command(gameplay)
+            .expect("local gameplay submit succeeds");
+        let plan = local.advance_one_frame();
+        assert_eq!(plan.steps, 1, "one local logic frame advances exactly once");
+        let local_hash = local.sim().compute_state_hash();
+        assert_ne!(
+            local_hash, baseline_hash,
+            "gameplay command must enter the authoritative submit path",
+        );
+
+        // 联机模式：玩法命令只经上行广播，由伪 relay 装配成权威帧回注后
+        // 由唯一推进点 `apply_frame` 消费；绝不本地静默提交。
+        let (mut driver, mut relay, _bus) = online();
+        assert!(driver.enqueue(ClientCommand::Gameplay(gameplay)).is_ok());
+        let (_, bytes) = relay
+            .recv()
+            .expect("loopback recv succeeds")
+            .expect("gameplay input packet is broadcast to relay");
+        let packet = Packet::decode(&bytes).expect("valid W3N1 header");
+        assert_eq!(packet.kind, PacketKind::Input);
+        let (commands, decoded) =
+            w3_net::packet::decode_commands(&packet.payload).expect("decode succeeds");
+        assert!(commands.is_empty());
+        assert_eq!(decoded.len(), 1);
+        // 用 wire 往返后的命令装配权威帧（模拟 relay 广播的完整闭环）。
+        inject_gameplay_frame(&mut relay, START_FRAME, 1, &decoded);
+        driver.advance_ticks(TICKS_PER_LOGIC_FRAME);
+
+        assert_eq!(
+            driver.applied_trace().len(),
+            1,
+            "one authoritative frame applied"
+        );
+        assert_eq!(driver.view().tick, 1, "apply_frame steps exactly once");
+        assert_eq!(
+            driver.sim().compute_state_hash(),
+            local_hash,
+            "local and online produce identical authoritative state for one gameplay command",
+        );
+        assert_eq!(
+            w3_net::first_difference_field(driver.sim(), local.sim()),
+            None,
+        );
+    }
+}
+
+#[test]
+fn online_gameplay_uplink_failure_is_explicit() {
+    let mut driver = online_with_failing_uplink();
+    let tick = driver.view().tick;
+    let hash = driver.sim().compute_state_hash();
+    let gameplay = gameplay_command(
+        9,
+        GameplayCommandKind::Train {
+            producer: EntityId::new(1).expect("entity id 1 is valid"),
             unit_def: 1,
             is_building: false,
         },
     );
+    // 上行失败 MUST 显式返回 `ClientError`，不静默降级、不本地代跑。
     assert_eq!(
         driver.enqueue(ClientCommand::Gameplay(gameplay)),
-        Err(w3_client::ClientError::GameplayUnsupportedOnline),
+        Err(ClientError::Network),
     );
+    // 未本地 `submit_gameplay_command`：权威状态、帧号、已应用帧均不变。
+    assert_eq!(driver.view().tick, tick);
+    assert_eq!(driver.sim().compute_state_hash(), hash);
+    assert!(driver.applied_trace().is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -341,12 +519,13 @@ fn online_input_goes_uplink_and_gameplay_is_rejected_explicitly() {
 fn wire_format_contract_is_unchanged() {
     assert_eq!(&MAGIC, b"W3N1");
     assert_eq!(HEADER_LEN, 25);
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 3);
 
     let commands = frame_commands(0);
-    let encoded = encode_commands(&commands).expect("encode succeeds");
-    let decoded = w3_net::packet::decode_commands(&encoded).expect("decode succeeds");
-    // `arrival` 不编码（提交时分配），其余字段往返一致。
+    let encoded = encode_commands(&commands, &[]).expect("encode succeeds");
+    let (decoded, gameplay) = w3_net::packet::decode_commands(&encoded).expect("decode succeeds");
+    // `arrival` 不编码（提交时分配），其余字段往返一致；本批无玩法命令。
+    assert!(gameplay.is_empty());
     assert_eq!(decoded.len(), commands.len());
     for (a, b) in decoded.iter().zip(commands.iter()) {
         assert_eq!(a.execute_frame, b.execute_frame);
@@ -382,8 +561,8 @@ fn apply_frame_returns_state_hash_and_first_difference_still_works() {
     let mut a = w3_core::RtsMatch::create_with_world(config(), world());
     let mut b = w3_core::RtsMatch::create_with_world(config(), world());
     let commands = frame_commands(0);
-    let hash_a = apply_frame(&mut a, &commands).expect("apply_frame succeeds");
-    let hash_b = apply_frame(&mut b, &commands).expect("apply_frame succeeds");
+    let hash_a = apply_frame(&mut a, &commands, &[]).expect("apply_frame succeeds");
+    let hash_b = apply_frame(&mut b, &commands, &[]).expect("apply_frame succeeds");
     assert_eq!(hash_a, hash_b);
     assert_eq!(hash_a, a.compute_state_hash());
     assert_eq!(w3_net::first_difference_field(&a, &b), None);
@@ -442,11 +621,10 @@ fn deserialize_and_reject_unknown_wire_fields_cleanly() {
     let checksum_at = 21;
     bytes[checksum_at] ^= 0xff;
     assert!(Packet::decode(&bytes).is_err());
-    // 未知 tag 的 payload 不回显：decode_commands 只返回合法命令。
-    let empty = encode_commands(&[]).expect("empty batch encodes");
-    assert!(
-        w3_net::packet::decode_commands(&empty)
-            .expect("empty batch decodes")
-            .is_empty()
-    );
+    // 未知 tag 的 payload 不回显：两类命令批均为空。
+    let empty = encode_commands(&[], &[]).expect("empty batch encodes");
+    let (commands, gameplay) =
+        w3_net::packet::decode_commands(&empty).expect("empty batch decodes");
+    assert!(commands.is_empty());
+    assert!(gameplay.is_empty());
 }

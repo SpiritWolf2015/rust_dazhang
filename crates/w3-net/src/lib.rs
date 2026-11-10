@@ -28,7 +28,9 @@ pub mod transport;
 pub use checksum::{ChecksumExchange, DesyncReport, FrameChecksum, first_difference_field};
 pub use error::NetError;
 pub use frame::{
-    DEFAULT_INPUT_TIMEOUT_FRAMES, FrameAssembler, FrameScheduler, FrameStep, apply_frame, stabilize,
+    DEFAULT_INPUT_TIMEOUT_FRAMES, FrameAssembler, FrameInput, FrameScheduler, FrameStep,
+    TYPE_TAG_GAMEPLAY, TYPE_TAG_SIMULATION, apply_frame, stabilize, stabilize_frame_inputs,
+    stabilize_gameplay,
 };
 pub use logging::init_logging;
 pub use packet::{FrameCommands, MAGIC, PROTOCOL_VERSION, Packet, PacketKind};

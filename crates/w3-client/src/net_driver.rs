@@ -9,8 +9,9 @@
 //! - 本地模式：[`FixedStepClient::advance`] 由纯整数累加器换算出整数帧数，
 //!   逐个调用**无参** `RtsMatch::step()`；
 //! - 联机模式：本适配器**绝不直接调用 `sim.step()`**。唯一的模拟推进点是
-//!   [`w3_net::apply_frame`]（`w3-net/src/frame.rs:30`，其第 45 行内部
-//!   **恰好一次** `sim.step()`，第 46 行返回 `compute_state_hash()`）。
+//!   [`w3_net::apply_frame`]：它在**恰好一次**无参 `sim.step()` 之前，把一帧
+//!   内的普通 `Command` 与玩法 `GameplayCommand` 按统一稳定键归并排序后
+//!   全部提交，随后返回 `compute_state_hash()`，不新增第二个推进点。
 //! - 联机下的 [`FrameAccumulator`] 只做整数 tick → 整数帧预算换算与表现层
 //!   `alpha` 余数，MUST NOT 推进模拟。两条路径按 `StepDriver` 实现二选一，
 //!   在任何一次 `advance_ticks` 中绝不叠加。
@@ -21,10 +22,13 @@
 //! 次数或改命令排序。缺输入按帧边界等待（不按墙钟补帧、不无限阻塞），
 //! `FrameScheduler` 超时语义不变，超时以英文结构化日志明确报告。
 //!
-//! 命令排序：`apply_frame` 内部调用 `stabilize`，按
-//! `ExecuteFrame → PlayerId → Sequence` 稳定排序后依序 `submit_command`，
-//! 使 `Command.arrival` 在每个客户端一致。联机键鼠命令只经
-//! `ClientSession::submit_input` 走上行广播，MUST NOT 本地 `submit_command`。
+//! 命令排序：`apply_frame` 内部按统一稳定键
+//! `ExecuteFrame → PlayerId → Sequence → type_tag` 归并两类命令（固定
+//! `type_tag`：`Simulation=0` / `Gameplay=1`，只作并列键的确定性判别）：
+//! 普通命令经 `submit_command`、玩法命令经 `submit_gameplay_command`，两类
+//! 队列各自的 `arrival` 在每个客户端一致。联机键鼠的普通命令与玩法命令
+//! 都只经 `ClientSession::submit_input` 走上行广播，MUST NOT 本地静默
+//! `submit_command` / `submit_gameplay_command`（否则两端命令流不一致 desync）。
 
 use w3_core::{Event, MatchConfig, RtsMatch, Snapshot, StaticWorld, WorldView};
 use w3_net::{ClientSession, NetError, Transport, apply_frame};
@@ -115,14 +119,15 @@ impl<T: Transport> NetSessionDriver<T> {
     /// 按整数帧预算消费已冻结帧；**唯一**的模拟推进点。
     ///
     /// 每个预算帧恰好对应一个 `pop_ready()` 冻结帧，经 `apply_frame` 完成
-    /// 「稳定排序 → 依序 `submit_command` → 恰好一次无参 `step()`」。
+    /// 「两类命令统一稳定键归并 → 全部 `submit_command` /
+    /// `submit_gameplay_command` → 恰好一次无参 `step()`」。
     /// 缺输入时本帧不推进（按帧边界等待），不按墙钟补帧、不无限阻塞。
     fn consume_ready_frames(&mut self, budget: u32) {
         for _ in 0..budget {
             let Some(frame) = self.session.pop_ready() else {
                 break;
             };
-            match apply_frame(&mut self.sim, &frame.commands) {
+            match apply_frame(&mut self.sim, &frame.commands, &frame.gameplay) {
                 Ok(hash) => {
                     // ADR 0005：逐帧上报状态哈希（`apply_frame` 返回的正是
                     // `compute_state_hash()`），不传输游戏状态。
@@ -137,12 +142,13 @@ impl<T: Transport> NetSessionDriver<T> {
                     self.applied_trace.push((frame.frame, hash));
                 }
                 Err(error) => {
-                    // 显式失败：以英文结构化日志报告，MUST NOT 静默跳过该帧。
+                    // 显式失败：以英文结构化日志报告两类命令数，MUST NOT 静默跳过该帧。
                     log::warn!(
                         target: "w3_client",
-                        "lockstep frame rejected: frame={} commands={} error={}",
+                        "lockstep frame rejected: frame={} commands={} gameplay={} error={}",
                         frame.frame,
                         frame.commands.len(),
+                        frame.gameplay.len(),
                         error,
                     );
                     break;
@@ -202,14 +208,16 @@ impl<T: Transport> StepDriver for NetSessionDriver<T> {
         plan
     }
 
-    /// 联机键鼠命令只走 `ClientSession::submit_input` 上行广播，
-    /// MUST NOT 本地 `submit_command`（否则不进 lockstep 广播）。
-    /// `GameplayCommand` 不在 ADR 0005 protobuf schema 内，显式返回错误。
+    /// 联机键鼠的普通命令与玩法命令都只走 `ClientSession::submit_input`
+    /// 上行广播（同一 `CommandBatch` 的两类子批），MUST NOT 本地静默
+    /// `submit_command` / `submit_gameplay_command`（否则两端命令流不一致
+    /// 导致 desync，ADR 0002）。上行失败以英文结构化日志明确报告并显式
+    /// 返回 `ClientError`，不静默降级、不本地代跑。
     fn enqueue(&mut self, command: ClientCommand) -> Result<(), ClientError> {
         match command {
             ClientCommand::Simulation(command) => {
                 let frame = command.execute_frame.value();
-                match self.session.submit_input(frame, &[command]) {
+                match self.session.submit_input(frame, &[command], &[]) {
                     Ok(()) => Ok(()),
                     Err(error) => {
                         log::warn!(
@@ -223,14 +231,23 @@ impl<T: Transport> StepDriver for NetSessionDriver<T> {
                     }
                 }
             }
-            ClientCommand::Gameplay(_) => {
-                // ADR 0005：W3N1 protobuf 载荷只承载 `CommandKind`，
-                // 不含 `GameplayCommandKind`（Cast / Train / CancelTrain）。
-                log::warn!(
-                    target: "w3_client",
-                    "gameplay command unsupported: reason=wire_format_command_only",
-                );
-                Err(ClientError::GameplayUnsupportedOnline)
+            ClientCommand::Gameplay(command) => {
+                // 玩法命令只经上行广播进入权威帧批，MUST NOT 本地静默
+                // `submit_gameplay_command`（否则两端命令流不一致导致 desync）。
+                let frame = command.execute_frame.value();
+                match self.session.submit_input(frame, &[], &[command]) {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        log::warn!(
+                            target: "w3_client",
+                            "gameplay input uplink failed: frame={} player={} error={}",
+                            frame,
+                            command.player_id,
+                            error,
+                        );
+                        Err(ClientError::Network)
+                    }
+                }
             }
         }
     }

@@ -26,7 +26,8 @@
 //! 批次 C：[`net_driver::NetSessionDriver`] 把 `w3_net::ClientSession` 适配成
 //! 同一 [`app::StepDriver`] 接缝，与本地 [`FixedStepClient`] 共用同一呈现
 //! 管线；联机模式绝不直接调用 `step()`，唯一推进点是 `w3_net::apply_frame`
-//! （内部恰好一次无参 `step()`），两条路径不叠加。
+//! （一帧内普通命令与玩法命令按含固定 `type_tag` 的统一稳定键归并后全部
+//! 提交，恰好一次无参 `step()`），两条路径不叠加。
 //!
 //! 命令携带由冻结帧号推导的 `ExecuteFrame` / `PlayerId` / `Sequence`；键鼠
 //! 坐标到 `SimFixed` 只经 `w3_app::freeze_f64` 冻结边界（ADR 0004），

@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use w3_core::Command;
+use w3_core::{Command, GameplayCommand};
 
 use crate::checksum::{ChecksumExchange, FrameChecksum};
 use crate::error::NetError;
@@ -89,13 +89,20 @@ impl<T: Transport> ClientSession<T> {
     }
 
     /// 发送本帧输入到 relay（走可靠队列，丢包会重传）。
-    pub fn submit_input(&mut self, frame: u64, commands: &[Command]) -> Result<(), NetError> {
+    /// 普通命令与玩法命令同时上行到同一个 `CommandBatch`，MUST NOT
+    /// 本地静默 `submit_gameplay_command`（否则两端命令流不一致导致 desync）。
+    pub fn submit_input(
+        &mut self,
+        frame: u64,
+        commands: &[Command],
+        gameplay: &[GameplayCommand],
+    ) -> Result<(), NetError> {
         let packet = Packet::new(
             PacketKind::Input,
             self.player_id,
             0,
             frame,
-            encode_commands(commands)?,
+            encode_commands(commands, gameplay)?,
         );
         let (_, bytes) = self.sender.queue(packet)?;
         self.transport.send(&self.relay, &bytes)?;
@@ -139,10 +146,11 @@ impl<T: Transport> ClientSession<T> {
                 let (is_new, sequence) = self.receiver.accept(packet.sequence);
                 self.send_ack(sequence, &from)?;
                 if is_new {
-                    let commands = decode_commands(&packet.payload)?;
+                    let (commands, gameplay) = decode_commands(&packet.payload)?;
                     self.scheduler.offer([FrameCommands {
                         frame: packet.frame,
                         commands,
+                        gameplay,
                     }]);
                     self.drain_scheduler();
                 }

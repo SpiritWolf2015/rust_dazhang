@@ -21,7 +21,9 @@ pub use crate::payload::{
 pub const MAGIC: [u8; 4] = *b"W3N1";
 /// 协议版本；客户端与 relay 必须一致，不匹配明确拒绝。
 /// 2 = payload 改用 protobuf（ADR 0005，BREAKING，schema 变更须继续递增）。
-pub const PROTOCOL_VERSION: u8 = 2;
+/// 3 = 玩法命令线格式，ADR 0005 §3（顶层 `CommandBatch` 追加玩法命令批）；
+///     明确拒绝 v2，不保留解码垫片，不按新 schema 解码旧 payload。
+pub const PROTOCOL_VERSION: u8 = 3;
 /// 固定包头长度：magic4 + version1 + kind1 + sender1 + seq4 + frame8 + len2 + sum4。
 pub const HEADER_LEN: usize = 25;
 const MAX_PAYLOAD: usize = u16::MAX as usize;
@@ -331,8 +333,9 @@ mod tests {
     #[test]
     fn commands_roundtrip_covers_every_kind() {
         let commands = sample_commands();
-        let bytes = encode_commands(&commands).unwrap();
-        let decoded = decode_commands(&bytes).unwrap();
+        let bytes = encode_commands(&commands, &[]).unwrap();
+        let (decoded, gameplay) = decode_commands(&bytes).unwrap();
+        assert!(gameplay.is_empty());
         assert_eq!(decoded.len(), commands.len());
         for (a, b) in decoded.iter().zip(commands.iter()) {
             assert_eq!(a.execute_frame, b.execute_frame);
@@ -344,7 +347,7 @@ mod tests {
 
     #[test]
     fn truncated_command_payload_is_rejected() {
-        let bytes = encode_commands(&sample_commands()).unwrap();
+        let bytes = encode_commands(&sample_commands(), &[]).unwrap();
         assert!(matches!(
             decode_commands(&bytes[..bytes.len() - 1]),
             Err(NetError::Malformed(_))
@@ -357,10 +360,12 @@ mod tests {
             FrameCommands {
                 frame: 2,
                 commands: sample_commands()[..2].to_vec(),
+                gameplay: vec![],
             },
             FrameCommands {
                 frame: 3,
                 commands: vec![],
+                gameplay: vec![],
             },
         ];
         let bytes = payload_resync_replay(&frames).unwrap();
@@ -388,18 +393,51 @@ mod tests {
 
     #[test]
     fn frame_header_unchanged_for_protobuf_payload() {
-        let payload = encode_commands(&sample_commands()).unwrap();
+        let payload = encode_commands(&sample_commands(), &[]).unwrap();
         let bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload.clone())
             .encode()
             .unwrap();
         assert_eq!(&bytes[..4], &MAGIC);
         assert_eq!(
-            bytes[4], 2,
+            bytes[4], PROTOCOL_VERSION,
             "PROTOCOL_VERSION bumped for breaking payload change"
         );
+        assert_eq!(PROTOCOL_VERSION, 3);
         assert_eq!(&bytes[7..11], &7u32.to_le_bytes());
         assert_eq!(&bytes[11..19], &4u64.to_le_bytes());
         assert_eq!(&bytes[19..21], &(payload.len() as u16).to_le_bytes());
         assert_eq!(&bytes[HEADER_LEN..], &payload[..]);
+    }
+
+    #[test]
+    fn version_two_packet_is_rejected_before_payload_decode() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        // 构造一个携带玩法命令字段的 v3 载荷，再把包头版本字节伪装成 v2。
+        let gameplay = GameplayCommand::new(
+            Frame::new(3),
+            1,
+            1,
+            GameplayCommandKind::Cast {
+                caster: entity_from_raw(1),
+                ability: 7,
+                target: entity_from_raw(2),
+            },
+        );
+        let payload = encode_commands(&sample_commands(), &[gameplay]).unwrap();
+        let mut bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload)
+            .encode()
+            .unwrap();
+        bytes[4] = 2;
+
+        // 版本不匹配在解码 payload 之前明确拒绝；玩法命令字段绝不会被
+        // 静默当作 v2 的 unknown field 丢弃后继续进入权威命令流。
+        match Packet::decode(&bytes) {
+            Err(NetError::VersionMismatch { expected, found }) => {
+                assert_eq!(expected, PROTOCOL_VERSION);
+                assert_eq!(found, 2);
+            }
+            other => panic!("version=2 must be rejected decisively: {other:?}"),
+        }
     }
 }

@@ -87,12 +87,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             session.submit_input(
                 next_input,
                 &[command_for(next_input, player_id, execute_frame)],
+                &[],
             )?;
             next_input += 1;
         }
         // 应用所有已就绪的权威帧。
         while let Some(frame_commands) = session.pop_ready() {
-            let hash = apply_frame(&mut sim, &frame_commands.commands)?;
+            let hash = apply_frame(&mut sim, &frame_commands.commands, &frame_commands.gameplay)?;
             session.report_checksum(frame_commands.frame, hash)?;
             last_hash = hash;
             applied += 1;

@@ -5,7 +5,7 @@
 ## 1. 项目速览
 
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
-- 阶段：P0–P5 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-09-p5-gameplay-systems/`）；当前唯一 active OpenSpec change 是 `p6-playable-client`（可玩客户端集成层，实施中，9/55 tasks，已通过 `openspec validate --strict`）。主 specs 共 7 个：`3d-rendering`、`content-import`、`deterministic-simulation`、`gameplay-systems`、`lockstep-networking`、`pathfinding`、`unit-orders`。
+- 阶段：P0–P6 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-10-p6-playable-client/`）；当前 4 个 active OpenSpec change：`gameplay-command-wire-format`（9/54）、`linux-winit-platform-backend`（24/30，已实施待归档）、`cross-platform-golden-hash`（36/41，已实施待归档）、`playable-window-smoke`（P6 窗口冒烟入口提案，提案中）。主 specs 共 8 个：`3d-rendering`、`content-import`、`deterministic-simulation`、`gameplay-systems`、`lockstep-networking`、`pathfinding`、`playable-client`、`unit-orders`。
 - 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 - 架构设计原则（SRP / OCP / LSP / DIP / ISP / LoD / CARP 与本项目硬红线）已内联到 `openspec/config.yaml` 的 context 与 `critic.md` 审查清单；本文件与 ADR 为单一权威，不另立独立原则文档。
 
@@ -77,7 +77,7 @@
 
 - schema `spec-driven`，artifact 顺序 `proposal → specs → design → tasks`；项目上下文与 per-artifact 规则在 `openspec/config.yaml`。
 - 新建提案：`openspec new change <name>` → `openspec status --change <name> --json` → `openspec instructions <artifact> --change <name> --json` → 写文件 → `openspec validate <name>`；完成后 `/opsx:archive`。
-- 已归档的 P0–P5 在 `openspec/changes/archive/`；主 specs 是 source of truth。
+- 已归档的 P0–P6 在 `openspec/changes/archive/`；主 specs 是 source of truth。
 - **ADR 记"为什么决定"，OpenSpec 记"系统该做什么"**；spec 必须引用 ADR 编号，避免两份规范打架。
 - 一个 change 一个 owner，配一个只读 critic；`mode` 不使用 `bypassPermissions`。
 

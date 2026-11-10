@@ -1,7 +1,7 @@
 # content-import Specification
 
 ## Purpose
-TBD - created by archiving change p1-content-import. Update Purpose after archive.
+本规范定义内容导入层契约：从本机导出的 JSON 加载地形高度场与摆放数据，对高度场的 header 与顶点平行数组做尺寸校验、对 `units.json` / `doodads.json` 摆放做宽容读取（忽略上游未知字段、缺失文件视为空列表、声明数量不符则拒绝）；导出数据及其派生的 PNG / GLB / 音效一律不入库，读取路径由本机配置提供，守住 ADR 0001 资产合规边界。
 
 > 相关 ADR：ADR 0001（资产合规）、ADR 0003（项目范围与分期）。
 
@@ -42,4 +42,3 @@ TBD - created by archiving change p1-content-import. Update Purpose after archiv
 
 - **WHEN** `load_export` 收到本机导出目录与 SLK 表路径
 - **THEN** 打印统计，且仓库内不新增任何资产文件
-

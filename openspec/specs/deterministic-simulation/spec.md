@@ -1,7 +1,7 @@
 # deterministic-simulation Specification
 
 ## Purpose
-TBD - created by archiving change p0-deterministic-kernel. Update Purpose after archive.
+本规范定义确定性模拟内核的权威契约：权威状态一律用 `SimFixed`（Q47.16）整数运算，禁止 `f32` / `f64` 进入权威状态、快照与状态哈希；以整数帧推进且帧率冻结，到期命令按 `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；用 FNV-1a 与稳定 `EntityId` 顺序计算全状态哈希，快照为帧提交后的完整状态且头部含内容哈希，版本或内容哈希不匹配须拒绝恢复，守住 ADR 0002 确定性契约。
 
 > 相关 ADR：ADR 0002（确定性契约）、ADR 0004（冻结坐标与定点单位）。
 ## Requirements

@@ -78,4 +78,4 @@
 - [x] 9.6 CI 资产扫描通过：无 MPQ 派生数据、真实导出 JSON / PNG / GLB / 音效入库
 - [x] 9.7 git 提交信息描述一律中文（Conventional Commits 英文 type 前缀保留），一个改动一个 commit（`e1668d1`）
 - [x] 9.8 `critic` 只读审查确定性、所有权、许可证、编码与资产合规（结论：无阻塞项，可进入本地 commit；联机 GameplayCommand 缺口定性为非阻塞已知边界）
-- [ ] 9.9 `openspec archive p6-playable-client -y` 并确认主 `openspec/specs/` 新增 `playable-client`、`3d-rendering` 与 `lockstep-networking` 已吸收 delta
+- [x] 9.9 `openspec archive p6-playable-client -y` 并确认主 `openspec/specs/` 新增 `playable-client`、`3d-rendering` 与 `lockstep-networking` 已吸收 delta（已完成：归档为 `2026-11-10-p6-playable-client`，主 specs +10 / ~2 / -0）

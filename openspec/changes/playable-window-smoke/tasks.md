@@ -5,7 +5,7 @@
 ## 1. 前置拍板与规范基线（用户拍板项，apply 前确认）
 
 - [ ] 1.1 用户拍板 (a)：确认 example 命名与落点为 `crates/w3-client/examples/playable.rs`（`cargo run -p w3-client --example playable`），否决 `[[bin]]` / 扩展 `render_frame.rs` / 新 crate；验证：回报记录明确命名与形态，且 `design.md` D1 与 `specs/playable-window-entry/spec.md` 无需改判
-- [ ] 1.2 用户拍板 (b)：确认实施时机——本轮只立规范，是否立即 `/opsx:apply`，还是等 `linux-winit-platform-backend` / `cross-platform-golden-hash` / `gameplay-command-wire-format` 归档后再实施；验证：回报记录明确 apply 顺序与前置归档集合
+- [ ] 1.2 用户拍板 (b)：确认实施时机——本轮只立规范，是否立即 `/opsx:apply`，还是等仍 active 且未实施的 `gameplay-command-wire-format` 归档后再实施（`linux-winit-platform-backend` / `cross-platform-golden-hash` 已归档）；验证：回报记录明确 apply 顺序与前置归档集合
 - [ ] 1.3 用户拍板 (c)：确认人工 GPU 冒烟由谁、在何种 GPU 与显示设备执行（含 Linux 侧 `x11` 后端机器是否纳入）；验证：冒烟清单登记执行者与设备，无 GPU 环境明确标注不可执行
 - [ ] 1.4 用户拍板 (d)：确认「中文上屏 / 启用 `default_fonts`」留作后续独立 change，本期维持降级 + 英文结构化日志；验证：回报记录确认，且 `w3-client/Cargo.toml` 的 egui feature 无需改动
 - [ ] 1.5 复核本轮规范四件套 `proposal.md` / `specs/playable-window-entry/spec.md` / `design.md` / `tasks.md` 与 `openspec validate playable-window-smoke --strict` 通过；验证：命令输出 `is valid` 且无 WARNING
@@ -61,4 +61,4 @@
 ## 8. 归档
 
 - [ ] 8.1 人工 GPU 冒烟清单（第 4 组）逐项勾选、`critic` 复审无阻塞、CI 双平台门禁通过后，由编排者执行 `openspec archive playable-window-smoke -y`；验证：命令成功且归档目录带日期前缀
-- [ ] 8.2 确认主 `openspec/specs/` 新增 `playable-window-entry/spec.md`，既有 8 个 capability 未被改写、无其它 change 争用；验证：`openspec list --specs` 列出新 capability，`git diff -- openspec/specs/` 只新增该目录
+- [ ] 8.2 确认主 `openspec/specs/` 新增 `playable-window-entry/spec.md`，既有 10 个 capability 未被改写、无其它 change 争用（当前仅 2 个 active change：`gameplay-command-wire-format` 与 `playable-window-smoke`）；验证：`openspec list --specs` 列出新 capability，`git diff -- openspec/specs/` 只新增该目录

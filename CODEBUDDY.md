@@ -49,7 +49,7 @@
 - `SimFixed` Q47.16 整数数学；整数帧、30 Hz 冻结；命令按 `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；稳定 `EntityId` 顺序；FNV-1a 状态哈希；快照（`SNAPSHOT_VERSION`，当前 3）是帧提交后的完整状态，头部含 `defs_hash` / `content_hash`。
 - 任何改动 `crates/w3-core/` 的实现，必须通过 `cargo test -p w3-core --test determinism`；新增权威状态字段必须**同时**进入状态哈希与快照。
 - `w3-core` 不得依赖 `w3-content` / `render` / `ui` / `audio` / `net`；表现层不得反写模拟状态；`w3-content` 的原始 `f64` 坐标是冻结输入，不进快照与哈希。
-- 跨平台确定性目前仅在 Windows / rustc 1.91 实跑；Linux / macOS 属待验证项，不得声称已达成。
+- 跨平台确定性已在 Windows 与 Debian 12 x86_64 / rustc 1.99.1 通过离线 golden hash 逐字节比对验证（见 ADR 0002 复核记录与 `openspec/specs/cross-platform-determinism/spec.md`）；macOS、其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项，不得声称全平台达成。
 
 ## 6. 资产与法律（ADR 0001）
 

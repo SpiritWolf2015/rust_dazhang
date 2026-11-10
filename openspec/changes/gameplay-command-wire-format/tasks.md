@@ -12,9 +12,9 @@
 
 ## 2. owner 定义与 P6 归档前置（编排者执行，本轮不做）
 
-- [ ] 2.1 **由编排者执行**：按 1.5 已拍板结论新建中文 `net-owner` agent 定义，声明可写 `crates/w3-net/` / `crates/w3-relay/`（及 `w3-client` 的 net 适配切分），继承 `permissions.deny`；`w3-client` 侧由 `client-owner` 配合，配只读 `critic`（不在 `spec-steward` 可写范围）
-- [ ] 2.2 先执行 `openspec archive p6-playable-client -y`，确认主 `openspec/specs/` 已吸收 P6 的 `playable-client` / `3d-rendering` / `lockstep-networking` delta；P6 的「`PROTOCOL_VERSION` 不变」Scenario 保持原样、不追溯改写（(d) 已拍板「P6 先归档、本 change 后归档」，design.md D6）。**按 §9 串联，须在人工 push + CI 双平台通过后执行，本轮不提前归档**（P6 刚 commit、未 push / CI，归档是 §9 串联的末端动作）
-- [ ] 2.3 按 1.4 已拍板结论（选项 A / 执行载体 **A(ii)**）处理主 `lockstep-networking/spec.md` 中 P6 遗留的「`PROTOCOL_VERSION` 不变」Scenario 措辞：P6 归档后由 `spec-steward` 以一次性一致性维护**直接修订主 spec**、**不走 change delta、不产生 `lockstep-networking` delta**（与 (h) 不互斥），不追溯改写已实施完成 change 的 spec 实质（design.md D7）。**按 §9 串联，须在人工 push + CI 双平台通过后执行，本轮不提前归档、不改主 specs**
+- [x] 2.1 **由编排者执行**：按 1.5 已拍板结论新建中文 `net-owner` agent 定义，声明可写 `crates/w3-net/` / `crates/w3-relay/`（及 `w3-client` 的 net 适配切分），继承 `permissions.deny`；`w3-client` 侧由 `client-owner` 配合，配只读 `critic`（不在 `spec-steward` 可写范围）——已完成：`.codebuddy/agents/net-owner.md` 已新建并同步进 `CODEBUDDY.md §9`
+- [x] 2.2 先执行 `openspec archive p6-playable-client -y`，确认主 `openspec/specs/` 已吸收 P6 的 `playable-client` / `3d-rendering` / `lockstep-networking` delta；P6 的「`PROTOCOL_VERSION` 不变」Scenario 保持原样、不追溯改写（(d) 已拍板「P6 先归档、本 change 后归档」，design.md D6）。**按 §9 串联，须在人工 push + CI 双平台通过后执行，本轮不提前归档**（P6 刚 commit、未 push / CI，归档是 §9 串联的末端动作）——已完成：`openspec archive p6-playable-client -y` 已执行，归档为 `2026-11-10-p6-playable-client/`，主 specs 已吸收 `playable-client` / `3d-rendering` / `lockstep-networking` delta；P6 的「`PROTOCOL_VERSION` 不变」Scenario 保持原样、未追溯改写；人工 push 已完成；当前平台无托管 CI，双平台手动门禁等价满足（原状态句为提案阶段记录）
+- [x] 2.3 按 1.4 已拍板结论（选项 A / 执行载体 **A(ii)**）处理主 `lockstep-networking/spec.md` 中 P6 遗留的「`PROTOCOL_VERSION` 不变」Scenario 措辞：P6 归档后由 `spec-steward` 以一次性一致性维护**直接修订主 spec**、**不走 change delta、不产生 `lockstep-networking` delta**（与 (h) 不互斥），不追溯改写已实施完成 change 的 spec 实质（design.md D7）。**按 §9 串联，须在人工 push + CI 双平台通过后执行，本轮不提前归档、不改主 specs**——已完成：A(ii) 已执行——主 `openspec/specs/lockstep-networking/spec.md` 的「线格式不变」THEN 已修订，去掉写死版本值，未走 change delta、未产生 `lockstep-networking` delta（原状态句为提案阶段记录）
 
 ## 3. `w3net.proto` 扩展（只追加，ADR 0005 §3）
 
@@ -76,5 +76,5 @@
 ## 9. 归档（后续，本轮不执行）
 
 - [ ] 9.1 复跑 `openspec validate gameplay-command-wire-format` 与 `--strict`，确认全部 tasks 完成、四件套一致
-- [ ] 9.2 由编排者执行 `openspec archive gameplay-command-wire-format -y`，确认主 `openspec/specs/` 新增 `gameplay-command-wire/spec.md`，既有 7 个主 spec 按 1.4 / D7 结论核对 `lockstep-networking` 口径
+- [ ] 9.2 由编排者执行 `openspec archive gameplay-command-wire-format -y`，确认主 `openspec/specs/` 新增 `gameplay-command-wire/spec.md`，既有 10 个主 spec 按 1.4 / D7 结论核对 `lockstep-networking` 口径
 - [ ] 9.3 按 1.7 结论在 `docs/decisions/0005-protobuf-payload.md` 追加「修订 / 复核」记录并复核 `openspec validate --all`（仅追加段、不改原决策正文）

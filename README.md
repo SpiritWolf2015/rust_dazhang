@@ -2,7 +2,7 @@
 
 用 Rust 从零复刻经典 RTS（即时战略）玩法的开源项目。第一期目标是**确定性模拟内核 + 命令帧同步联机**，玩法范围限定为 Melee 对战。
 
-> **状态：P0 / P1 已实现并归档，P2 模拟竖切已实现并归档；P3–P5 为 active OpenSpec changes（见 ADR 0003）。** 仓库已有可编译运行的确定性内核、内容读取器与 app 注入层；3D 渲染、联机与完整玩法尚未实现。
+> **状态：P0–P6 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-10-cross-platform-golden-hash/`）；当前仅 2 个 active OpenSpec change：`gameplay-command-wire-format`（9/54，未实施）与 `playable-window-smoke`（0/35，P6 窗口冒烟入口提案），主 specs 共 10 个。** 仓库已有确定性模拟内核、内容导入层、wgpu 3D 呈现、lockstep 联机、完整玩法系统、可玩客户端集成层与 app 注入层。
 
 ## 许可证
 

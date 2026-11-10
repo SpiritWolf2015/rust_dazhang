@@ -1,6 +1,6 @@
 ## Context
 
-P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tasks，**尚未归档**，剩归档动作），主 `openspec/specs/` 现有 7 个 capability。P6 的 `crates/w3-client/src/net_driver.rs::StepDriver::enqueue` 对 `ClientCommand::Gameplay(_)` 显式返回 `ClientError::GameplayUnsupportedOnline`（英文日志 `reason=wire_format_command_only`），因为 [ADR 0005](../../../docs/decisions/0005-protobuf-payload.md) 的 protobuf 线格式只承载 `CommandKind`。该边界在 `p6-playable-client/design.md` 的 Risks「已裁定·已知边界」条登记，并被 `critic` 三轮复审定性为「非阻塞的合规显式失败」；编排者裁定「补齐需扩展 schema 并 bump `PROTOCOL_VERSION`，另开独立 change」。本 change 即该独立 change。
+P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成并已归档（`openspec/changes/archive/2026-11-10-p6-playable-client/`），主 `openspec/specs/` 现有 10 个 capability。P6 的 `crates/w3-client/src/net_driver.rs::StepDriver::enqueue` 对 `ClientCommand::Gameplay(_)` 显式返回 `ClientError::GameplayUnsupportedOnline`（英文日志 `reason=wire_format_command_only`），因为 [ADR 0005](../../../docs/decisions/0005-protobuf-payload.md) 的 protobuf 线格式只承载 `CommandKind`。该边界在 `p6-playable-client/design.md` 的 Risks「已裁定·已知边界」条登记，并被 `critic` 三轮复审定性为「非阻塞的合规显式失败」；编排者裁定 「补齐需扩展 schema 并 bump `PROTOCOL_VERSION`，另开独立 change」。本 change 即该独立 change。
 
 源码核对事实（本 design 的依据，均来自 `crates/` 实读，非摘要转述）：
 
@@ -31,7 +31,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
 - 本轮按 (g) 已在 ADR 0005 **只追加**一条「修订 / 复核」记录（不改原决策正文、不改既有段落，D4）；不写 `NOTICE.md` / `CODEBUDDY.md` / `config.yaml` / 主 `openspec/specs/`。
 - 不引入 `float` / `double` / `map` / gRPC / 新序列化框架；不承诺旧客户端长期混跑；不引入跨版本兼容垫片。
 - 本轮不写 `crates/`、不碰主 `openspec/specs/` / `p6-playable-client/`、不运行 `cargo`、不 commit、不归档、不执行任何 git 远端命令；「P6 先归档 + 之后修订主 spec」仅作为已拍板的顺序策略固化待执行，须在人工 push + CI 双平台通过后按 §9 串联执行（见 D6 / D7 / Migration Plan）。
-- 不声称 Linux / macOS 跨平台确定性已达成（ADR 0002：目前仅 Windows / rustc 1.91 实跑）；不新增需要跨平台验证的算术来源。
+- 不声称全平台 / 全 CPU 跨平台确定性已达成（ADR 0002：Windows 与 Debian 12 x86_64 / rustc 1.99.1 已验证，macOS / 其它 CPU 架构 / 其它 rustc 仍待验证）；不新增需要跨平台验证的算术来源。
 
 ## Decisions
 
@@ -51,7 +51,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
   - *B：新增独立消息 + 追加到 `CommandBatch`（顶层 tag 9）* — **已定案采纳 (a)**。改动面最小、`Command` 零触碰、10 变体 tag 段自洽、三条路径一次覆盖。
   - *新增 `PacketKind::GameplayInput` / `GameplayFrame` 独立包类型* — **否决**。帧编排出现两套就绪队列与两个推进来源，易触发双 `step()`，与 D2 及 ADR 0002 §2 冲突；`PacketKind` 还需另行规划 tag。
   - *把玩法命令编码进 `Noop` 扩展字段 / `bytes` 透传* — **否决**。违反 ADR 0005 §3 的 schema-first / canonical / 禁 unknown fields 约束。
-- **关联 ADR 0002 与跨平台确定性影响**：字段全定宽整数 / 布尔、禁用 `float` / `double` / `map`、`SimFixed` 用 `raw()`（ADR 0004），生成代码在 Windows / Linux 双平台字节一致；不新增权威状态、不改状态哈希与 `SNAPSHOT_VERSION`（当前 3）。跨平台确定性仍仅在 Windows / rustc 1.91 实跑，本决策不声称已达成，也不新增算术来源。
+- **关联 ADR 0002 与跨平台确定性影响**：字段全定宽整数 / 布尔、禁用 `float` / `double` / `map`、`SimFixed` 用 `raw()`（ADR 0004），生成代码在 Windows / Linux 双平台字节一致；不新增权威状态、不改状态哈希与 `SNAPSHOT_VERSION`（当前 3）。跨平台确定性已在 Windows 与 Debian 12 x86_64 / rustc 1.99.1 验证（ADR 0002 复核记录），但 macOS / 其它 CPU 架构 / 其它 rustc 仍待验证；本决策不声称全平台已达成，也不新增算术来源。
 - **架构原则与分层依赖影响**：SRP（`Command` 与 `GameplayCommand` 各管一类）、OCP（新增消息扩展而非改既有穷尽 match）、ISP（`w3-net` 只见 `w3-core` 的公开类型）、CARP（复用既有 `CommandBatch` 嵌套结构）。`w3-core` 零改动、不反向依赖；唯一状态所有者仍是 `RtsMatch`。
 
 ### D2：命令流组织——同一帧批、统一稳定键、一次 `step()`（**已定案 (b)**）
@@ -113,7 +113,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
   2. 本 change 是 P6「已裁定·已知边界」的**后续补齐**，逻辑上依赖 P6 的 `GameplayUnsupportedOnline` 已存在；时间线自洽。
   3. 若本 change 先归档，P6 后归档时其 delta 中「`PROTOCOL_VERSION` 不变」Scenario 会**回写**主 `lockstep-networking` spec 到与 `PROTOCOL_VERSION=3` 矛盾的状态（即 D7 冲突后移且更难收口）。先 P6 后本 change，可让冲突在 P6 归档时暴露、再由归档后的主 spec 一致性维护收口。
   4. 本 change 刻意不产生 `lockstep-networking` delta（D8），两者操作不同 capability，故归档顺序**不会**造成 OpenSpec delta 合并冲突，只剩文档口径冲突。
-  - **本轮边界（不立即归档）**：本轮**不执行归档、不改主 `openspec/specs/`**——归档是 CODEBUDDY.md §9 串联的末端动作（P6 刚 commit、未 push / CI，须先经人工 push + CI Windows / Linux 双平台 `verify_all.py` 通过）。「P6 先归档 + 之后修订主 spec」仅作为已拍板的**顺序策略**固化进本 design 与 `tasks.md` 2.2 / 2.3 待执行，本轮不碰 P6 change spec、不碰主 specs。
+  - **本轮边界（提案阶段时态；现已执行）**：提案阶段本轮**不执行归档、不改主 `openspec/specs/`**——归档是 CODEBUDDY.md §9 串联的末端动作（当时 P6 刚 commit、未 push / CI，须先经人工 push + CI Windows / Linux 双平台 `verify_all.py` 通过）；「P6 先归档 + 之后修订主 spec」当时仅作为已拍板的**顺序策略**固化进本 design 与 `tasks.md` 2.2 / 2.3 待执行，本轮不碰 P6 change spec、不碰主 specs。现已：P6 已归档（`openspec/changes/archive/2026-11-10-p6-playable-client/`）、人工 push 已完成；当前 remote 为 gitcode.com（非 GitHub），无托管 CI 载体 / 无托管 CI run，双平台门禁由 Windows 本机与 Debian 12 VM 手动跑同一 `python tools/verify_all.py`、两端 `Verification OK` 等价满足；A(ii) 已由 `spec-steward` 执行修订主 spec，`tasks.md` 2.1 / 2.2 / 2.3 前置任务已勾完。
 - **备选方案（Alternatives considered）**：
   - *本 change 先归档、P6 后归档* — **否决**。P6 会把「不变」写回主 spec 造成自相矛盾，且让已 complete 的 P6 为新提案让位不合理。
   - *两者同时归档* — **否决**。OpenSpec 逐个归档、无法原子，顺序仍需裁定。
@@ -124,7 +124,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
 
 ### D7：与 P6「`PROTOCOL_VERSION` 不变」Scenario 的冲突（**已定案 (d)，执行载体选定 A(ii)**）
 
-- **决策（已定案，(d) 用户拍板采纳选项 A；执行载体选定 A(ii)）**：本轮**不修改** `openspec/changes/p6-playable-client/` 下任何 spec 文件（用户明确要求「保持原样、不追溯改写」）。冲突事实登记：P6 的 `specs/lockstep-networking/spec.md` 在 `### Requirement: Network timing MUST NOT drive the fixed timestep` 下有 `#### Scenario: 线格式不变`，THEN 写「…`PROTOCOL_VERSION` 不变」；本 change 要 bump 到 3，**直接冲突**。P6 另有 `## MODIFIED Requirements` 的 `Unchanged simulation determinism boundary`。主 `openspec/specs/lockstep-networking/spec.md` 现有 requirements 本身并不写死版本值（只要求「schema 变更同步 bump」与「版本不匹配 `Reject`」，本轮复核确认），因此冲突**仅来自 P6 未归档的 delta**，是文档口径冲突、不是 `openspec validate` 的结构错误。**选项 A/B/C 与三个执行子选项的裁定如下**：
+- **决策（已定案，(d) 用户拍板采纳选项 A；执行载体选定 A(ii)）**：本轮**不修改** `openspec/changes/p6-playable-client/` 下任何 spec 文件（用户明确要求「保持原样、不追溯改写」）。冲突事实登记：P6 的 `specs/lockstep-networking/spec.md` 在 `### Requirement: Network timing MUST NOT drive the fixed timestep` 下有 `#### Scenario: 线格式不变`，THEN 写「…`PROTOCOL_VERSION` 不变」；本 change 要 bump 到 3，**直接冲突**。P6 另有 `## MODIFIED Requirements` 的 `Unchanged simulation determinism boundary`。主 `openspec/specs/lockstep-networking/spec.md` 现有 requirements 本身并不写死版本值（只要求「schema 变更同步 bump」与「版本不匹配 `Reject`」，本轮复核确认），提案阶段该冲突**仅来自 P6 未归档的 delta**、是文档口径冲突而非 `openspec validate` 的结构错误；P6 归档前 delta 曾带来的文档口径冲突，现已通过 A(ii) 修订主 spec 消除。**选项 A/B/C 与三个执行子选项的裁定如下**：
   - **选项 A（已定案采纳）**：P6 归档后，在**主** `openspec/specs/lockstep-networking/spec.md` 把该 Scenario 从「`PROTOCOL_VERSION` 不变」修订为「`PROTOCOL_VERSION` 按 ADR 0005 §3 随 schema 变更同步递增；本能力只约束 25B `W3N1` 帧头布局与 canonical 编码约束不变」。P6 的 change spec 保持原样（已实施完成、不追溯改写），冲突在 source of truth 层收口。
   - **执行载体：选定 A(ii)（归档后由 `spec-steward` 作为一次性一致性维护直接修订主 spec，不走 change delta）**。选它的理由：
     - (h) D8 已定案「新增独立 `gameplay-command-wire` capability、**不产生 `lockstep-networking` delta**」；执行载体必须与「不产生 delta」不互斥。
@@ -135,7 +135,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
   - **选项 B — 否决**：本 change 产出 `lockstep-networking` 的 MODIFIED delta 显式覆盖该 Scenario（等价于推翻 D8，与 (h) 互斥）。
   - **选项 C — 否决**：在 P6 的 change spec 该 Scenario 下加注「注：随后续 `gameplay-command-wire-format` change 演进，`PROTOCOL_VERSION` 按 ADR 0005 §3 bump」；属改 P6 spec 实质，本轮一律不动。
   - **注意（(d) 与 (h) 已一并拍板）**：D8 与 A(i) / B 的互斥关系已随本次一并拍板消解——选定 A(ii) 后本 change 仍「不产生 `lockstep-networking` delta」，措辞修订作为归档后的一次性一致性维护落在主 spec，不需要任何 change delta，也不重拍 D8。
-  - **本轮边界**：归档是 CODEBUDDY.md §9 串联的末端动作（P6 刚 commit、未 push / CI），本轮**不执行归档、不改主 `openspec/specs/`、不改 P6 change spec**；顺序策略与 A(ii) 仅固化在 design 与 `tasks.md` 2.2 / 2.3 待执行，须在人工 push + CI 双平台通过后执行。
+  - **本轮边界（提案阶段时态；现已执行）**：提案阶段归档是 CODEBUDDY.md §9 串联的末端动作（当时 P6 刚 commit、未 push / CI），本轮**不执行归档、不改主 `openspec/specs/`、不改 P6 change spec**；顺序策略与 A(ii) 仅固化在 design 与 `tasks.md` 2.2 / 2.3 待执行，须在人工 push + CI 双平台通过后执行。现已：P6 已归档、人工 push 已完成、当前平台无托管 CI 载体（双平台手动门禁等价满足），A(ii) 已由 `spec-steward` 执行修订主 spec、P6 change spec 保持原样，`tasks.md` 2.2 / 2.3 已勾完。
 - **备选方案（Alternatives considered）**：见上选项 A（已定案采纳 + 执行载体 A(ii)）/ A(i) / A(ii) / A(iii) / B / C；*忽略冲突、依赖归档时人工记忆* — **否决**，会让主 spec 长期自相矛盾，违反「单一权威」。
 - **关联 ADR 0002 与跨平台确定性影响**：纯文档一致性，不改代码、帧序、哈希、快照；但主 spec 若保留「版本不变」会误导后续 change 违反 ADR 0005 §3 的版本边界，间接危及确定性。
 - **架构原则与分层依赖影响**：单一权威（主 specs source of truth）、ADR ↔ spec 引用一致（CODEBUDDY.md §8）、不追溯改写已实施完成 change 的 spec 实质；A(ii) 的一次性一致性维护不走 change delta，避免与 P6 active delta 在同一 capability 冲突。
@@ -143,10 +143,10 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
 ### D8：spec delta 落点——新增独立 capability（补充「明确给出」项）（**已定案 (h)**）
 
 - **决策（已定案，(h) 用户拍板采纳 D8）**：本 change 的 spec delta **落在新增独立 capability `gameplay-command-wire`**（`specs/gameplay-command-wire/spec.md`，全部 `## ADDED Requirements`），**不产生 `lockstep-networking` delta**，`### Modified Capabilities` 留空。理由：
-  1. 避免与 P6 尚未归档的 `lockstep-networking` delta（含 ADDED「线格式不变」+ MODIFIED「Unchanged simulation determinism boundary」）在同一 capability 上冲突。
+  1. 提案阶段需避免与 P6 尚未归档的 `lockstep-networking` delta（含 ADDED「线格式不变」+ MODIFIED「Unchanged simulation determinism boundary」）在同一 capability 上冲突；P6 归档前 delta 曾带来的文档口径冲突，现已通过 A(ii) 修订主 spec 消除，新增独立 capability 的理由不变。
   2. 主 `lockstep-networking` spec 现有 requirements 已覆盖「版本不匹配 `Reject`」「schema 变更同步 bump `PROTOCOL_VERSION`」「canonical 编码约束」「只传输入命令」「模拟确定性边界不变」——本 change 是**行使**这些要求而非修改其行为；新增玩法命令的契约是自包含的新关注点（SRP）。
   3. MODIFIED delta 需整块复制并改写既有 requirement（`specs` artifact 规则），会把 P6 的「不变」Scenario 提前卷入本 change，放大 D7 冲突。
-  - **对主 specs 的影响（回报要点）**：本 change 归档时，主 `openspec/specs/` 将**新增** `gameplay-command-wire/spec.md` 一个 capability；既有 7 个主 spec **不改动**。按 (d) 已定案的选项 A + 执行载体 A(ii)，`lockstep-networking` 主 spec 的「`PROTOCOL_VERSION` 不变」措辞在 P6 归档后由 `spec-steward` 一次性一致性维护单独修订（不走 change delta、不产生 `lockstep-networking` delta，与本 change 归档无关），本轮不执行、不改主 specs。
+  - **对主 specs 的影响（回报要点）**：本 change 归档时，主 `openspec/specs/` 将**新增** `gameplay-command-wire/spec.md` 一个 capability；既有 10 个主 spec **不改动**。按 (d) 已定案的选项 A + 执行载体 A(ii)，`lockstep-networking` 主 spec 的「`PROTOCOL_VERSION` 不变」措辞在 P6 归档后由 `spec-steward` 一次性一致性维护单独修订（不走 change delta、不产生 `lockstep-networking` delta，与本 change 归档无关）；提案阶段本轮不执行、不改主 specs（本 change 不产生主 spec delta 的结论不变），现已：P6 已归档、人工 push 已完成、A(ii) 已由 `spec-steward` 执行修订主 spec，当前平台无托管 CI（双平台手动门禁等价满足）。
 - **备选方案（Alternatives considered）**：
   - *MODIFIED `lockstep-networking`* — **否决**。与 P6 active delta 直接冲突；MODIFIED 需整块复制既有 requirement；会把 D7 冲突提前。
   - *新增 capability + 同时 MODIFIED `lockstep-networking`* — **否决**。双重冲突面，违反「不擅自改 P6 spec 实质」的克制要求。
@@ -165,8 +165,8 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
 - [两类命令独立 `arrival` 计数器，归并顺序不确定会改变 pending 命令哈希] → D2 固定 `type_tag` 统一稳定键 + 稳定排序，保证每类提交子序列两端一致；`arrival` 仍不编码、非跨类型共享。
 - [`FrameCommands` / `apply_frame` / `submit_input` 公开形状 BREAKING，波及 `w3-relay` 与 P6 `net_driver.rs` 及 `w3-relay/tests/*`] → tasks 逐项迁移；两处 BREAKING 已由用户拍板确认接受；`cargo test --workspace` 全绿把关。
 - [`w3-relay` 是必改点却无任何现有 owner 覆盖；`w3-net` 亦无 owner] → (e) 已拍板 D5：指定 `net-owner`（覆盖 `w3-net` / `w3-relay`），`w3-client` 侧由 `client-owner` 配合、配只读 `critic`；中文 agent 定义由编排者新建，本轮不改 `.codebuddy/agents/`。
-- [P6 未归档的「`PROTOCOL_VERSION` 不变」Scenario 与本 change 冲突] → (d) 已拍板：D6「P6 先归档、本 change 后归档」+ D7 选项 A、执行载体 A(ii)（归档后由主 spec 修订措辞，P6 change spec 保持原样）；本轮不改 P6 spec 实质、不改主 specs、不提前归档。
-- [本轮误把「P6 先归档 + 修订主 spec」提前执行、越界改主 `openspec/specs/`] → (d) 明确本轮不执行归档、不改主 specs：归档是 §9 串联末端动作（P6 刚 commit、未 push / CI），仅把顺序策略固化进 design 与 `tasks.md` 2.2 / 2.3 待执行，须在人工 push + CI 双平台通过后执行。
+- [P6 归档前 delta 曾带来的「`PROTOCOL_VERSION` 不变」Scenario 文档口径冲突，现已通过 A(ii) 修订主 spec 消除] → (d) 已拍板：D6「P6 先归档、本 change 后归档」+ D7 选项 A、执行载体 A(ii)（归档后由主 spec 修订措辞，P6 change spec 保持原样）；P6 已归档、人工 push 已完成、A(ii) 已执行，P6 spec 实质保持原样。
+- [提案阶段误把「P6 先归档 + 修订主 spec」提前执行、越界改主 `openspec/specs/`] → (d) 提案阶段明确本轮不执行归档、不改主 specs：归档是 §9 串联末端动作（当时 P6 刚 commit、未 push / CI），仅把顺序策略固化进 design 与 `tasks.md` 2.2 / 2.3 待执行；现已按裁定顺序执行完毕：P6 已归档、人工 push 已完成、当前平台无托管 CI 载体（双平台手动门禁等价满足），A(ii) 已由 `spec-steward` 执行修订主 spec。
 - [D8「不产生 `lockstep-networking` delta」与 D7 选项 A(i)/B 互斥] → (d) 与 (h) 已一并拍板：选 A(ii) 一次性一致性维护（不走 change delta、不产生 delta），两决策不互斥，D8 不重拍。
 - [ADR 0005 复核点未闭环] → (g) 已拍板 D4：本轮在 ADR 0005 只追加一条「修订 / 复核」记录（不改原决策正文、不改既有段落），复核点已闭环。
 - [路线图阶段标注不明（P6 后续 / 独立 P7 / 不新增阶段）] → (f) 已拍板：不新增阶段、标注为「P6 集成收尾的后续补齐」，`config.yaml` rules.proposal 的「P0-P5」枚举保持不动。
@@ -179,13 +179,13 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
 
 1. **规范侧（本轮，已完成）**：按 8 项用户拍板结论定案 proposal / specs / design / tasks 四件套；在 ADR 0005 只追加一条「修订 / 复核」记录；`openspec validate gameplay-command-wire-format` 与 `--strict` 通过；`python tools/check_encoding.py` 与 `git diff --check` 通过。不碰 `crates/`、主 `openspec/specs/` / `p6-playable-client/`。
 2. **用户拍板（已完成，8 项均采纳推荐，阻塞解除）**：(a) 独立 `GameplayCommand` / `GameplayCommandBatch` + 顶层 `CommandBatch` tag 9（采纳 D1 源码校正）；(b) 同一帧批 + 固定 `type_tag` + 一次 `step()` 前全部提交，否决独立批 / 双 `step()`；(c) `PROTOCOL_VERSION` 2→3 硬 bump + 明确拒绝 v2 + 同步发布、无兼容垫片；(d) P6 先归档、本 change 后归档，P6 change spec 保持原样，归档后由主 spec 修订措辞（选项 A / 执行载体 A(ii)）；(e) 新建 `net-owner`（`w3-net` / `w3-relay`），`client-owner` 配合、只读 `critic`；(f) 不新增阶段、标为「P6 集成收尾的后续补齐」；(g) ADR 0005 只追加一条修订 / 复核记录（本轮已执行）；(h) 新增独立 `gameplay-command-wire` capability、不产生 `lockstep-networking` delta。
-3. **落实 owner 定义（编排者，本轮不执行）**：按 (e) 已拍板结论新建中文 `net-owner` agent 定义（可写 `crates/w3-net/` / `crates/w3-relay/`），`w3-client` 侧由 `client-owner` 配合，配只读 `critic`；确认「一个 change 一个 owner」（不在 `spec-steward` 可写范围，`tasks.md` 2.1）。
-4. **归档 P6（编排者，本轮不执行；按 §9 串联须在人工 push + CI Windows / Linux 双平台通过后执行，P6 刚 commit、未 push / CI，不提前归档）**：`openspec archive p6-playable-client -y`，确认主 `openspec/specs/` 已吸收 P6 的 `playable-client` / `3d-rendering` / `lockstep-networking` delta；P6 的「`PROTOCOL_VERSION` 不变」Scenario 保持原样、不追溯改写（(d) 选项 A，`tasks.md` 2.2）。
-5. **A(ii) 一次性一致性维护（编排者 / `spec-steward`，本轮不执行，P6 归档后执行）**：在**主** `openspec/specs/lockstep-networking/spec.md` 把「线格式不变」Scenario 从「`PROTOCOL_VERSION` 不变」修订为「`PROTOCOL_VERSION` 按 ADR 0005 §3 随 schema 变更同步递增；本能力只约束 25B `W3N1` 帧头布局与 canonical 编码约束不变」，**不走 change delta、不产生 `lockstep-networking` delta**（与 (h) 不互斥），不追溯改写 P6 change spec（`tasks.md` 2.3）。
+3. **落实 owner 定义（编排者，提案阶段本轮不执行；现已执行）**：提案阶段按 (e) 已拍板结论新建中文 `net-owner` agent 定义（可写 `crates/w3-net/` / `crates/w3-relay/`），`w3-client` 侧由 `client-owner` 配合，配只读 `critic`；确认「一个 change 一个 owner」（不在 `spec-steward` 可写范围，`tasks.md` 2.1）。现已：`.codebuddy/agents/net-owner.md` 已新建并同步进 `CODEBUDDY.md §9`，P6 已归档、人工 push 已完成、A(ii) 已执行，当前平台无托管 CI（双平台手动门禁等价满足），`tasks.md` 2.1 已勾完。
+4. **归档 P6（编排者，提案阶段本轮不执行、不提前归档；现已执行完毕）**：提案阶段按 §9 串联须在人工 push + CI Windows / Linux 双平台通过后执行（当时 P6 刚 commit、未 push / CI）；现已执行 `openspec archive p6-playable-client -y`（归档为 `2026-11-10-p6-playable-client/`），确认主 `openspec/specs/` 已吸收 P6 的 `playable-client` / `3d-rendering` / `lockstep-networking` delta，人工 push 已完成、当前平台无托管 CI 载体（双平台手动门禁等价满足）；P6 的「`PROTOCOL_VERSION` 不变」Scenario 保持原样、不追溯改写（(d) 选项 A，`tasks.md` 2.2）。
+5. **A(ii) 一次性一致性维护（编排者 / `spec-steward`，提案阶段本轮不执行、P6 归档后执行；现已执行）**：在**主** `openspec/specs/lockstep-networking/spec.md` 把「线格式不变」Scenario 从「`PROTOCOL_VERSION` 不变」修订为「`PROTOCOL_VERSION` 按 ADR 0005 §3 随 schema 变更同步递增；本能力只约束 25B `W3N1` 帧头布局与 canonical 编码约束不变」，**不走 change delta、不产生 `lockstep-networking` delta**（与 (h) 不互斥），不追溯改写 P6 change spec（`tasks.md` 2.3）。现已：主 `openspec/specs/lockstep-networking/spec.md` 的「线格式不变」THEN 已修订、去掉写死版本值，未走 change delta、未产生 `lockstep-networking` delta，P6 已归档、人工 push 已完成、当前平台无托管 CI（双平台手动门禁等价满足），`tasks.md` 2.3 已勾完。
 6. **`/opsx:apply`（由已指定 `net-owner` 执行）**：`w3net.proto` 扩展 → `PROTOCOL_VERSION` bump → `payload.rs` 双向编解码 → `frame.rs` / `session.rs` / `w3-relay` 命令流 → `w3-client` 联机通路去掉 `GameplayUnsupportedOnline` → 测试与门禁。顺序见 `tasks.md`。
 7. **验收门禁**：`cargo test -p w3-core --test determinism`（重跑 `crates/w3-core/tests/determinism.rs`，确认 `w3-core` 零改动且全绿）、`cargo test --workspace`、`cargo fmt --all` 后 `cargo fmt --all -- --check`、`python tools/check_encoding.py`、`python tools/verify_all.py`、CI Windows / Linux 双平台生成字节一致、双客户端逐帧哈希一致、丢包 / 乱序 / 断线回归、真实 UDP 双进程实跑（人工）。
 8. **同步发布**：客户端与 relay 同版本发布；version=2 端点被明确 `Reject`。**回滚**：整体回退到上一发布版本组合（客户端 + relay 同步），不提供跨版本兼容层；`w3-core` 零改动、快照格式不变（不 bump `SNAPSHOT_VERSION`），回滚不影响权威状态与已有快照。
-9. **归档本 change（后续，本轮不执行；P6 归档在前，且须在本 change 的 apply / commit / 人工 push / CI 双平台通过后按 §9 串联执行）**：`openspec archive gameplay-command-wire-format -y`，确认主 `openspec/specs/` 新增 `gameplay-command-wire/spec.md`，既有 7 个主 spec 不因本 change 归档改动，并核对 A(ii) 已完成 `lockstep-networking` 主 spec 口径修订。
+9. **归档本 change（后续，本轮不执行；P6 归档在前，且须在本 change 的 apply / commit / 人工 push / CI 双平台通过后按 §9 串联执行）**：`openspec archive gameplay-command-wire-format -y`，确认主 `openspec/specs/` 新增 `gameplay-command-wire/spec.md`，既有 10 个主 spec 不因本 change 归档改动，并核对 A(ii) 已完成 `lockstep-networking` 主 spec 口径修订。
 
 ## Open Questions
 
@@ -194,8 +194,8 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成（54/55 tas
 - **（a）schema 扩展方式与 tag 段规划 — 已由用户拍板（采纳 D1 建议 + 源码校正）**：独立 `GameplayCommand` 消息（oneof tag 4–13 覆盖 10 变体 + `reserved 14 to 32`）+ `GameplayCommandBatch` + 在**顶层 `CommandBatch` 追加 tag 9**（而非 `FrameCommands`），不动 `Command` 的 `oneof` tag 4–10 与 `reserved 11 to 16`。理由已核实：玩法命令变体无法映射回 `CommandKind` 穷尽 match，且 6 个保留位不够 10 个变体；顶层编解码消息是 `CommandBatch`，Input / Frame / ResyncReplay 三条路径一次覆盖。
 - **（b）命令流组织 — 已由用户拍板（采纳 D2）**：同一帧批 + 固定 `type_tag`（`Simulation=0` / `Gameplay=1`）统一稳定键 + 恰好一次 `step()` 前全部提交；否决独立批 / 双 `step()`。`Command` 与 `GameplayCommand` 是两条独立队列、独立 `arrival`，统一键只用于规范化归并顺序、非跨类型共享 `arrival`。
 - **（c）`PROTOCOL_VERSION` 兼容策略 — 已由用户拍板（采纳 D3）**：2→3 硬 bump + `VersionMismatch` / `Reject` 明确拒绝 v2 + 客户端与 relay 同步发布、无兼容垫片。核心理由已核实：v2 端会把玩法命令字段当 unknown field 静默丢弃 → 两端命令流不等 → desync 不可见，违反「显式失败不静默降级」。
-- **（d）归档顺序与 P6「不变」Scenario — 已由用户拍板（采纳 D6 / D7 选项 A）**：**P6 先归档、本 change 后归档**；P6 的 `p6-playable-client/specs/lockstep-networking/spec.md`「`PROTOCOL_VERSION` 不变」Scenario **保持原样、不追溯改写**；待 P6 归档后由主 `openspec/specs/lockstep-networking/spec.md` 修订措辞。**执行载体已选定 A(ii)**（归档后由 `spec-steward` 作为一次性一致性维护直接修订主 spec、不走 change delta），是唯一与 (h)「不产生 `lockstep-networking` delta」不互斥的载体：A(i) / B 会产 delta（互斥）、A(iii) 需新 change / 新阶段、C 需改 P6 spec 实质，均否决（详见 D7）。本轮**不执行归档、不改主 specs**——归档是 §9 串联末端动作（P6 刚 commit、未 push / CI），仅把顺序策略固化进 design 与 `tasks.md` 2.2 / 2.3 待执行，须在人工 push + CI 双平台通过后执行。
-- **（e）owner 归属 — 已由用户拍板（新建 `net-owner`）**：已指定 `net-owner`（单一 owner，覆盖 `crates/w3-net/` / `crates/w3-relay/`），`w3-client` 侧由 `client-owner` 配合，配只读 `critic`；中文 agent 定义由编排者新建（不在 `spec-steward` 可写范围，本轮不改 `.codebuddy/agents/`）。满足 CODEBUDDY.md §8「一个 change 一个 owner」+ 只读 `critic`。
+- **（d）归档顺序与 P6「不变」Scenario — 已由用户拍板（采纳 D6 / D7 选项 A）**：**P6 先归档、本 change 后归档**；P6 的 `p6-playable-client/specs/lockstep-networking/spec.md`「`PROTOCOL_VERSION` 不变」Scenario **保持原样、不追溯改写**；待 P6 归档后由主 `openspec/specs/lockstep-networking/spec.md` 修订措辞。**执行载体已选定 A(ii)**（归档后由 `spec-steward` 作为一次性一致性维护直接修订主 spec、不走 change delta），是唯一与 (h)「不产生 `lockstep-networking` delta」不互斥的载体：A(i) / B 会产 delta（互斥）、A(iii) 需新 change / 新阶段、C 需改 P6 spec 实质，均否决（详见 D7）。提案阶段本轮**不执行归档、不改主 specs**——归档是 §9 串联末端动作（当时 P6 刚 commit、未 push / CI），仅把顺序策略固化进 design 与 `tasks.md` 2.2 / 2.3 待执行，须在人工 push + CI 双平台通过后执行；现已按裁定顺序执行完毕：P6 已归档、人工 push 已完成、当前平台无托管 CI 载体（双平台手动门禁等价满足），A(ii) 已由 `spec-steward` 执行修订主 spec。
+- **（e）owner 归属 — 已由用户拍板（新建 `net-owner`）**：已指定 `net-owner`（单一 owner，覆盖 `crates/w3-net/` / `crates/w3-relay/`），`w3-client` 侧由 `client-owner` 配合，配只读 `critic`；提案阶段中文 agent 定义计划由编排者新建（不在 `spec-steward` 可写范围，本轮不改 `.codebuddy/agents/`）；现已由编排者新建 `.codebuddy/agents/net-owner.md` 并同步进 `CODEBUDDY.md §9`（`tasks.md` 2.1 已完成），P6 已归档、人工 push 已完成、A(ii) 已执行，当前平台无托管 CI（双平台手动门禁等价满足）。满足 CODEBUDDY.md §8「一个 change 一个 owner」+ 只读 `critic`。
 - **（f）路线图阶段标注 — 已由用户拍板（采纳建议）**：不新增阶段、标注为「P6 集成收尾的后续补齐」；`config.yaml` rules.proposal 的「P0-P5」枚举保持不动（与 P6 的 D9 拍板口径一致）。独立 P7 / 归入 P4 后续网络层演进 / 不标注阶段 均未采纳。
 - **（g）是否追加 ADR 0005 修订记录 — 已由用户拍板（采纳 D4，本轮已执行）**：在 `docs/decisions/0005-protobuf-payload.md` **只追加**一条「修订 / 复核」记录（新增 `## 修订记录` 段，沿用 `- **修订**：` 行体例），不改原决策正文、不改既有段落；涵盖字段编号段扩展、`PROTOCOL_VERSION` 2→3、明确拒绝旧版本、canonical 约束继续适用、实施状态以本 change 的 tasks 为准。
 - **（h）spec delta 落点 — 已由用户拍板（采纳 D8）**：新增独立 `gameplay-command-wire` capability、**不产生 `lockstep-networking` delta**；`proposal.md` Capabilities 与 `specs/` 布局不变。与 (d) 选项 A 不互斥的执行载体为 A(ii)（同 (d)）。

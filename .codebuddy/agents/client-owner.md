@@ -64,4 +64,4 @@ python tools/verify_all.py
 - 为通过测试放宽哈希字段、跳过校验，或让表现层反写模拟状态。
 - 把 `alpha` / 相机 / 选中 / HUD 状态写进权威状态或快照。
 - 引入 `HashMap` 迭代顺序、墙钟、异步完成顺序影响规则。
-- 声称跨平台确定性已验证（目前仅 Windows / rustc 1.91 实跑）。
+- 声称全平台 / 全 CPU 跨平台确定性已达成（目前仅 Windows 与 Debian 12 x86_64 / rustc 1.99.1 已验证，macOS / 其它 CPU 架构 / 其它 rustc 仍待验证，见 ADR 0002 复核记录）。

@@ -51,4 +51,4 @@ python tools/check_encoding.py
 
 - 禁止任何远端同步命令（`push` / `fetch` / `pull` / `clone`），人工独占。
 - 禁止为了通过测试而放宽哈希字段或跳过校验。
-- 禁止声称跨平台确定性已验证（目前仅 Windows / rustc 1.91 实跑）。
+- 禁止声称全平台 / 全 CPU 跨平台确定性已达成（目前仅 Windows 与 Debian 12 x86_64 / rustc 1.99.1 已验证，macOS / 其它 CPU 架构 / 其它 rustc 仍待验证，见 ADR 0002 复核记录）。

@@ -2,7 +2,7 @@
 
 ## Context
 
-见 `proposal.md` 的 Why（不重述动机）。P0–P6 已全部实施并归档（最新归档 `openspec/changes/archive/2026-11-10-p6-playable-client/`），主 `openspec/specs/` 共 8 个 capability。用户否决引入 Bevy，拍板「A 方案」：复用既有 `winit 0.30` + `wgpu 30` + `w3-render` + 新 `w3-client` + egui 0.37。
+见 `proposal.md` 的 Why（不重述动机）。P0–P6 已全部实施并归档（最新归档 `openspec/changes/archive/2026-11-10-cross-platform-golden-hash/`），主 `openspec/specs/` 共 10 个 capability。用户否决引入 Bevy，拍板「A 方案」：复用既有 `winit 0.30` + `wgpu 30` + `w3-render` + 新 `w3-client` + egui 0.37。
 
 已核实的关键既有事实（见 `proposal.md` 与源码核对）：
 
@@ -12,7 +12,7 @@
 - `i18n.rs` 文案层已实现；egui 0.37 未启用 `default_fonts`，`FontDefinitions::default()` 返回空 `font_data`，运行时中文不上屏，走 `HudAssets::degraded()` + 英文结构化日志（tasks 6.6）。启用 `default_fonts` 会引入 OFL-1.1 / Ubuntu-font-1.0 字体许可证（CODEBUDDY.md §10 人工独占）且仍无 CJK 字形，P6 明确不启用。
 - `crates/w3-client/Cargo.toml` 已依赖 `w3-core` / `w3-render` / `w3-content` / `w3-app`（`freeze_f64`）/ `w3-net` / `winit` / `wgpu` / `egui` 家族 / `log` / `thiserror`；含 `[target.'cfg(target_os = "linux")'.dependencies]` 的 `x11` 追加（`linux-winit-platform-backend` 已修好 Linux 平台后端）。
 - `crates/w3-core/`：`SNAPSHOT_VERSION = 3`（`snapshot.rs:15`），`RtsMatch::create_with_world` / `submit_command` / `step()` / `compute_state_hash()` / `read_view()` 等公开 API，`w3-app::freeze_f64`（`freeze.rs:34`）。`crates/w3-core/tests/determinism.rs`（26 项）与 `crates/w3-render/tests/isolation.rs`（3 项）是硬门禁。
-- 3 个 active change 分别落在独立 capability：`gameplay-command-wire-format`（`gameplay-command-wire`）、`linux-winit-platform-backend`（`linux-platform-backend`）、`cross-platform-golden-hash`（`cross-platform-determinism`）。CI 为 `.github/workflows/ci.yml` 的 `ubuntu-latest` / `windows-latest` matrix 跑 `python tools/verify_all.py`（CODEBUDDY.md §2：只验证**工具链**跨平台，不等于模拟内核确定性已达成）。
+- 当前仅 2 个 active change（`gameplay-command-wire-format`、`playable-window-smoke`）；`linux-winit-platform-backend` / `cross-platform-golden-hash` 已归档，其 capability（`linux-platform-backend` / `cross-platform-determinism`）已进入主 `openspec/specs/`。CI 为 `.github/workflows/ci.yml` 的 `ubuntu-latest` / `windows-latest` matrix 跑 `python tools/verify_all.py`（CODEBUDDY.md §2：只验证**工具链**跨平台，不等于模拟内核确定性已达成）。
 
 约束：确定性硬门禁（ADR 0002）、资产法律边界（ADR 0001）、范围与否决引擎（ADR 0003）、冻结坐标（ADR 0004）、线格式分层（ADR 0005）。架构原则（config.yaml context）：SRP / OCP / LSP / DIP / ISP / LoD / CARP，正确性 / 确定性优先；硬红线：唯一状态所有者、`w3-core` 不反向依赖上层、显式失败不静默降级、只读参考不复制代码。用户已明确**本轮只立规范，不实施代码**（`/opsx:apply` 是后续动作）。
 
@@ -23,7 +23,7 @@
 - 补一个零资产、零新依赖、可编译可运行的最小入口，把 P6 真窗口路径（输入 / HUD / 相机 / 30 Hz 累加器）真正启动起来。
 - 提供可逐项执行的人工 GPU 冒烟清单，并划清「人工验收」与「CI 编译 + CPU 测试」的边界。
 - 全部复用既有 `ClientApp` 装配与公开 API，不新增权威状态、不改哈希 / 快照、不改既有 API。
-- 新增独立 capability `playable-window-entry`，不产生其它 capability 的 MODIFIED delta（避免与 3 个 active change 争用）。
+- 新增独立 capability `playable-window-entry`，不产生其它 capability 的 MODIFIED delta（避免与其它 active change 争用）。
 
 **Non-Goals:**
 
@@ -32,7 +32,7 @@
 - 读取 `config.toml`、真实导出 JSON / MPQ 派生数据 / `assets-export/` / `slk-exported/` 或任何暴雪资产（ADR 0001）。
 - 改 `w3-core` 帧序、命令排序、状态哈希编码、快照字段或 `SNAPSHOT_VERSION`；新增权威状态字段。
 - 把 GPU 冒烟写进 CI 自动化、或用 CPU 测试 / headless 软件渲染冒充 GPU 验收。
-- 声称 Linux / macOS 跨平台确定性已达成（ADR 0002：目前仅 Windows / rustc 1.91 与 `cross-platform-golden-hash` 记录的 Debian 12 x86_64 实跑）。
+- 声称全平台 / 全 CPU 跨平台确定性已达成（ADR 0002：目前仅 Windows 与 Debian 12 x86_64 / rustc 1.99.1 已验证，macOS / 其它 CPU 架构 / 其它 rustc 仍待验证）。
 - 本轮不写 `crates/`、不碰主 `openspec/specs/` / 其它 change 目录 / `docs/` / `.codebuddy/` / `NOTICE.md` / `CODEBUDDY.md` / 根配置，不 commit、不归档、不运行 `cargo`、不执行远端命令。
 
 ## Decisions
@@ -116,7 +116,7 @@
 
 ### D8：归档顺序与 delta 落点——新增独立 capability，无 MODIFIED delta
 
-- **决策**：本 change 只新增 capability `playable-window-entry`（全部 ADDED Requirements），**不产生任何既有 capability 的 MODIFIED delta**。理由：主 `openspec/specs/` 8 个 capability 的需求无行为变更，本 change 是 `playable-client` 既有要求的「行使」而非改写；且 3 个 active change 分别持有 `gameplay-command-wire` / `linux-platform-backend` / `cross-platform-determinism` 的 delta，同时写这些 capability 会在归档时争用。归档顺序：本 change 在 **P6（`2026-11-10-p6-playable-client/`，已归档）之后**，与 `gameplay-command-wire-format` **无依赖**（不改 `w3-net` / protobuf / `PROTOCOL_VERSION`），故可与那 3 个 active change 各自独立推进、互不阻塞；若编排者要求严格串行，建议「P6 → 本 change → 其余 active change」或「其余 active change 先归档、本 change 后归档」，两者均不冲突。
+- **决策**：本 change 只新增 capability `playable-window-entry`（全部 ADDED Requirements），**不产生任何既有 capability 的 MODIFIED delta**。理由：主 `openspec/specs/` 共 10 个 capability 的需求无行为变更，本 change 是 `playable-client` 既有要求的「行使」而非改写；当前仅 2 个 active change（`gameplay-command-wire-format`、`playable-window-smoke`），`linux-winit-platform-backend` / `cross-platform-golden-hash` 已归档，其 capability（`linux-platform-backend` / `cross-platform-determinism`）已进入主 specs、不再持有 active delta，归档时无争用。归档顺序：P6 → winit → golden-hash 已按裁定顺序执行归档；本 change 与 `gameplay-command-wire-format` **无依赖**（不改 `w3-net` / protobuf / `PROTOCOL_VERSION`），互不阻塞，可各自独立推进。
 - **备选方案（Alternatives considered）**：
   - *对 `playable-client` 产生 MODIFIED delta，把「存在可运行入口」写进主 spec* — **否决**。主 `playable-client` 已规定 `ClientApp` 装配 / 单一呈现管线 / 状态非权威，本 change 不新增能力面行为；且 MODIFIED 会与任何后续写该 capability 的 change 冲突。
   - *把 requirements 挂到 `3d-rendering` 或 `deterministic-simulation` 下* — **否决**。入口既非渲染能力面行为变更，也不改确定性契约；后者还与 `cross-platform-golden-hash` 的 `cross-platform-determinism` delta 邻接，易生口径冲突。
@@ -140,12 +140,12 @@
 ## Migration Plan
 
 1. **规范侧（本轮，`spec-steward` 可写范围）**：写 `openspec/changes/playable-window-smoke/` 下 proposal / specs / design / tasks 四件套；`openspec validate playable-window-smoke` 与 `--strict` 通过；`python tools/check_encoding.py` 与 `git diff --check` 通过。不碰主 specs / 其它 change 目录 / `crates/` / `docs/` / 根配置。
-2. **用户拍板（本轮交付回报项，不阻塞本轮规范）**：(a) example 命名与落点（`examples/playable.rs` vs `[[bin]]`）；(b) 是否立即 `/opsx:apply`，还是等 `linux-winit-platform-backend` / `cross-platform-golden-hash` / `gameplay-command-wire-format` 归档后再实施；(c) 人工 GPU 冒烟由谁、在何种 GPU / 显示设备执行；(d) 是否把「中文上屏 / 启用 `default_fonts`」留作后续独立项。四项改判需回到对应 artifact 修订。
+2. **用户拍板（本轮交付回报项，不阻塞本轮规范）**：(a) example 命名与落点（`examples/playable.rs` vs `[[bin]]`）；(b) 是否立即 `/opsx:apply`，还是等仍 active 且未实施的 `gameplay-command-wire-format` 归档后再实施（P6、`linux-winit-platform-backend`、`cross-platform-golden-hash` 均已归档；当前仅 2 个 active change：`gameplay-command-wire-format` 与 `playable-window-smoke`）；(c) 人工 GPU 冒烟由谁、在何种 GPU / 显示设备执行；(d) 是否把「中文上屏 / 启用 `default_fonts`」留作后续独立项。四项改判需回到对应 artifact 修订。
 3. **`/opsx:apply`（由 `client-owner` 执行，非本轮）**：新增 `crates/w3-client/examples/playable.rs`；合成地形 / 合成单位脚本 → `FixedStepClient` → `ClientApp::new(...).run()`；不碰 `w3-core` / `w3-render` / 依赖段。写完 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`。
 4. **本机自检（`client-owner`，有显示设备机器）**：`cargo build -p w3-client --example playable`、`cargo run -p w3-client --example playable`；确认窗口打开、`GpuContext::new` 成功、英文降级日志出现。
 5. **人工 GPU 冒烟（人工项，D5 清单逐项勾选）**：由 (c) 指定的人与设备执行，记录可观察证据；无 GPU 环境明确报告不可执行。
 6. **门禁**：`cargo fmt --all -- --check`、`python tools/check_encoding.py`、`git diff --check`、`python tools/verify_all.py`、重跑 `crates/w3-core/tests/determinism.rs`（`cargo test -p w3-core --test determinism`）与 `crates/w3-render/tests/isolation.rs`、`openspec validate playable-window-smoke --strict`。
-7. **`critic` 复审 → 本地 commit（中文描述）→ 人工 push → CI 双平台门禁 → `/opsx:archive`**：`openspec archive playable-window-smoke -y`，确认主 `openspec/specs/` 新增 `playable-window-entry` 且既有 8 个 capability 未被改写。归档动作由编排者执行，本轮不归档、不 commit、不预断结果。
+7. **`critic` 复审 → 本地 commit（中文描述）→ 人工 push → CI 双平台门禁 → `/opsx:archive`**：`openspec archive playable-window-smoke -y`，确认主 `openspec/specs/` 新增 `playable-window-entry` 且既有 10 个 capability 未被改写（P6、winit、golden-hash 均已归档，当前 2 个 active change）。归档动作由编排者执行，本轮不归档、不 commit、不预断结果。
 8. **回滚**：只需删除 `crates/w3-client/examples/playable.rs`；`w3-core` 零改动、依赖零改动、快照格式不变（不 bump `SNAPSHOT_VERSION`），回滚不影响权威状态或其它 change。
 
 ## Open Questions
@@ -153,7 +153,7 @@
 > 以下为**需要用户拍板 / 确认**的事项。本轮四件套按「推荐默认值」写入（`examples/playable.rs`、本轮只立规范不 apply、人工冒烟由用户指定、中文上屏留后续独立项），并在交付回报中明确列出；若用户改判，须回到对应 artifact 与 tasks 修订，不擅自猜测。这些是「流程 / 归属 / 后续范围」决策，不改变 `playable-window-entry` 的行为契约，故不阻塞本轮规范编写与 `--strict` 校验。
 
 - **（a）example 命名与落点**：推荐 `crates/w3-client/examples/playable.rs`（`cargo run -p w3-client --example playable`），否决 `[[bin]]` / 扩展 `render_frame.rs` / 新 crate（D1）。待用户确认命名 `playable` 与 example 形态。
-- **（b）实施时机**：推荐本轮只立规范，`/opsx:apply` 作为后续动作；与 `gameplay-command-wire-format` 无依赖，但 `linux-winit-platform-backend` / `cross-platform-golden-hash` 仍 active，是否等其归档后再 apply 由用户拍板（D8）。
+- **（b）实施时机**：推荐本轮只立规范，`/opsx:apply` 作为后续动作；与 `gameplay-command-wire-format` 无依赖，`linux-winit-platform-backend` / `cross-platform-golden-hash` 两者已归档，仅 `gameplay-command-wire-format` 仍未实施；是否等其归档后再 apply 仍由用户拍板（D8）。
 - **（c）人工 GPU 冒烟的执行者与设备**：清单为人工项，只能人工在有 GPU / 显示设备的桌面执行；由谁、在何种 GPU（含 Linux 侧 `x11` 后端）与显示设备执行待用户指定（D5）。
 - **（d）中文上屏 / 启用 `default_fonts`**：推荐留作后续独立 change（涉及 OFL-1.1 / Ubuntu-font-1.0 许可证，CODEBUDDY.md §10 人工独占，且仍无 CJK 字形）；本 change 维持降级 + 英文日志（D6）。待用户确认不纳入本期。
 - **（e）`max_frames` 取值**：`ClientApp::new` 的第 4 参用于「无人值守验收限帧」，人工交互需取足够大的值（或约定一个便于退出的默认值）；具体数值属实现细节，留 `client-owner` 在 apply 阶段决定，不改变 spec / 任务分解（D2）。

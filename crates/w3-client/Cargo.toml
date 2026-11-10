@@ -32,3 +32,15 @@ egui-wgpu = "0.37"
 # 经 feature 统一重新开启 winit 的默认 feature，保持与 w3-render 一致的
 # 最小 winit feature 集（rwh_06），不引入平台装饰依赖。
 egui-winit = { version = "0.37", default-features = false }
+
+# Linux 平台后端：既有 [dependencies] 关闭 winit default 后，Linux 上不会命中
+# 任何平台后端，将触发 winit platform_impl 末尾的 compile_error!。这里按
+# target cfg 追加 x11，Cargo 对同 crate 同版本在 cfg 匹配时把 features 取并集：
+# Linux 得到 rwh_06 + x11；Windows 不匹配该段，仍只有 rwh_06，win32 后端由
+# winit 自身 target cfg 自动生效，故依赖图与行为零影响，无需改动既有依赖段。
+# 选 x11 而非 wayland：x11 后端通过 x11-dl 在运行时动态加载系统库，编译期
+# 依赖面最小；wayland 组会拉入 wayland-csd-adwaita / ab_glyph 等服务端装饰
+# 依赖，正是当初关闭 default 与 egui-winit default 所规避的对象，因此不得
+# 启用任何 wayland feature，egui-winit 的 default-features 也保持关闭。
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06", "x11"] }

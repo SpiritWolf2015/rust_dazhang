@@ -19,7 +19,7 @@
 ## 3. `w3net.proto` 扩展（只追加，ADR 0005 §3）
 
 - [x] 3.1 新增 `GameplayCommand` 消息：`execute_frame=1` / `player_id=2` / `sequence=3`，`oneof kind` 用 tag 4–13 覆盖 `Cast` / `Train` / `CancelTrain` / `Research` / `BuyItem` / `Gather` / `RegisterBehavior` / `SpawnWave` / `SetAi` / `Leave` 共 10 变体，并写 `reserved 14 to 32`
-- [x] 3.2 为 10 个玩法变体各定义消息，字段全用定宽 `int64` / `uint64` / `uint32` / `bool`（`EntityId`→`uint64`、`DefId`→`uint32`、`EffectDef.amount`→`int64`、`EffectKind`→稳定码 `uint32`、`SimFixed`→`raw()` `int64`）；每消息显式 `reserved`，MUST NOT 出现 `float` / `double` / `map`
+- [x] 3.2 为 10 个玩法变体各定义消息，字段全用定宽 `int64` / `uint64` / `uint32` / `bool`（`EntityId`→`uint64`、`DefId`→`uint32`、`EffectDef.amount`→`int64`、`EffectKind`→稳定码 `uint32`；若命令字段为 `SimFixed` 则用 `raw()` 的 `int64`，该约束仅适用于同批 `CommandBatch` 内的既有普通命令，本 change 的 10 个玩法变体无 `SimFixed` 字段）；每消息显式 `reserved`，MUST NOT 出现 `float` / `double` / `map`
 - [x] 3.3 新增 `GameplayCommandBatch { repeated GameplayCommand commands = 1; reserved 2 to 8; }`
 - [x] 3.4 在既有 `CommandBatch` 的 `reserved 2 to 8` 之后追加 `GameplayCommandBatch gameplay = 9;`；确认 `Command` 的 `oneof` tag 4–10、`reserved 11 to 16`、`FrameCommands` 的 `reserved 3 to 6`、`ResyncReplay` 与全部控制包的字段编号 / `reserved` 零改动
 - [x] 3.5 确认 `build.rs` 无需改动（`prost-build` 仍编译同一 `w3net.proto`），`prost` / `prost-build` 版本锁定且 `Cargo.lock` 不变；`cargo:rerun-if-changed` 已覆盖 schema

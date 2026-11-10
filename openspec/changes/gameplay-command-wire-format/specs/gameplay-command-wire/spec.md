@@ -1,10 +1,8 @@
-> 相关 ADR：ADR 0001（资产与法律）、ADR 0002（确定性契约）、ADR 0003（范围与分期）、ADR 0004（冻结坐标与定点单位）、ADR 0005（protobuf 载荷折中方案）。本 capability 为新增，全部为 ADDED Requirements；刻意不产生 `lockstep-networking` delta 的理由见 `proposal.md` 的 Capabilities 与 `design.md` 的 D6 / D7。
-
 ## ADDED Requirements
 
 ### Requirement: Wire format carries all gameplay command kinds
 
-联机线格式 SHALL 承载 P5 `GameplayCommandKind` 的**全部 10 个变体**（`Cast` / `Train` / `CancelTrain` / `Research` / `BuyItem` / `Gather` / `RegisterBehavior` / `SpawnWave` / `SetAi` / `Leave`）及其全部字段，且 MUST 与 `w3_core::GameplayCommand` 的 `execute_frame` / `player_id` / `sequence` / `kind` 一一对应、双向可逆。字段 SHALL 使用定宽 `int64` / `uint64` / `uint32` / `bool`：`EntityId` 用 `uint64` 的 `value()`、`DefId` 用 `uint32`、`EffectKind` 用稳定码 `uint32`、`EffectDef.amount` 用 `int64`、`SimFixed` 用 `raw()` `int64`；MUST NOT 使用 `float` / `double`（ADR 0005 §2、ADR 0004）。`arrival` MUST NOT 编码，仍由各端按稳定序提交时本地分配（ADR 0005 §3、ADR 0002 §3）。
+联机线格式 SHALL 承载 P5 `GameplayCommandKind` 的**全部 10 个变体**及其全部字段，且 MUST 与 `w3_core::GameplayCommand` 的 `execute_frame` / `player_id` / `sequence` / `kind` 一一对应、双向可逆。字段 SHALL 使用定宽 `int64` / `uint64` / `uint32` / `bool`，MUST NOT 使用 `float` / `double`（ADR 0005 §2、ADR 0004）；若命令字段为 `SimFixed` 则用 `raw()` 的 `int64`，本 change 的 10 个玩法变体无 `SimFixed` 字段（该约束仅适用于同批 `CommandBatch` 内的既有普通命令）。`arrival` MUST NOT 编码，仍由各端按稳定序提交时本地分配（ADR 0005 §3、ADR 0002 §3）。相关 ADR：ADR 0001 / 0002 / 0003 / 0004 / 0005。
 
 #### Scenario: 10 类玩法命令编解码往返
 
@@ -14,11 +12,16 @@
 #### Scenario: 无浮点进入线格式
 
 - **WHEN** 检查新增的玩法命令消息定义
-- **THEN** 不含 `float` / `double` / `map` 字段，定点数值均为 `int64` 的 `raw()`，且 `EffectKind` 以稳定码而非枚举索引隐式传递
+- **THEN** 不含 `float` / `double` / `map` 字段，且 `EffectKind` 以稳定码而非枚举索引隐式传递；若命令字段为 `SimFixed` 则其定点数值用 `raw()` 的 `int64`，本 change 的 10 个玩法变体实际字段为 `EntityId` / `DefId` / `u32` / `bool` / `u8` / `EffectDef`、无 `SimFixed` 字段（该约束仅适用于同批 `CommandBatch` 内的既有普通命令）
+
+#### Scenario: 10 变体字段定宽映射
+
+- **WHEN** 逐字段检查 10 个玩法变体消息的字段类型
+- **THEN** `EntityId` 用 `uint64` 的 `value()`、`DefId` 用 `uint32`、`EffectKind` 用稳定码 `uint32`、`EffectDef.amount` 用 `int64`，全部为定宽整数 / 布尔，无 `float` / `double` / `map` 字段
 
 ### Requirement: Append-only field numbers and canonical protobuf encoding
 
-既有 `.proto` 消息（`Command` 的 `oneof` tag 4–10 与 `reserved 11 to 16`、`CommandBatch` 的 `reserved 2 to 8`、`FrameCommands` 的 `reserved 3 to 6`、各控制包 `reserved`）的字段编号与语义 SHALL 保持不变；新增字段 MUST 只追加在既有 `reserved` 段之后已规划的新 tag 段，MUST NOT 复用、改名或重排既有字段编号；删除一律保留 `reserved`（ADR 0005 §3）。系统 MUST NOT 使用 `map` 字段（集合一律 `repeated` + 显式顺序），MUST NOT 透传或回显 unknown fields，MUST 锁定 `prost` / `prost-build` 版本并写入 `Cargo.lock`，MUST NOT 产生非规范 varint，且生成代码在 Windows / Linux 双平台编码结果 MUST 逐字节一致（ADR 0005 §3）。10 个玩法变体与现有仅 6 位的 `reserved 11 to 16` 的 tag 段规划 SHALL 在 `design.md` 的 D1 显式给出并经拍板，MUST NOT 挤压或复用既有 `Command` 的保留位。
+既有 `.proto` 消息的字段编号与语义 SHALL 保持不变；新增字段 MUST 只追加在既有 `reserved` 段之后已规划的新 tag 段，MUST NOT 复用、改名或重排既有字段编号；删除一律保留 `reserved`（ADR 0005 §3）。系统 MUST NOT 使用 `map` 字段（集合一律 `repeated` + 显式顺序），MUST NOT 透传或回显 unknown fields，MUST 锁定 `prost` / `prost-build` 版本并写入 `Cargo.lock`，MUST NOT 产生非规范 varint，且生成代码在 Windows / Linux 双平台编码结果 MUST 逐字节一致（ADR 0005 §3）。10 个玩法变体与现有仅 6 位的 `reserved 11 to 16` 的 tag 段规划 SHALL 在 `design.md` 的 D1 显式给出并经拍板，MUST NOT 挤压或复用既有 `Command` 的保留位。
 
 #### Scenario: 只追加不复用
 
@@ -34,6 +37,11 @@
 
 - **WHEN** 玩法命令相关的 `.proto` 字段发生增改
 - **THEN** `PROTOCOL_VERSION` 同步递增，旧版本客户端被明确拒绝（见「Protocol version bump and rejection」requirement）
+
+#### Scenario: 既有字段编号清单保持不变
+
+- **WHEN** 为玩法命令扩展 `w3net.proto` 前核对既有消息定义
+- **THEN** `Command` 的 `oneof` tag 4–10 与 `reserved 11 to 16`、`CommandBatch` 的 `reserved 2 to 8`、`FrameCommands` 的 `reserved 3 to 6`、各控制包 `reserved` 的字段编号与语义均保持不变，且新增字段只追加在已规划的新 tag 段
 
 ### Requirement: Protocol version bump and rejection
 
@@ -70,7 +78,7 @@
 
 ### Requirement: Unchanged w3-core, state hash and snapshot
 
-`w3-core` MUST 保持**零改动、零依赖**，且不反向依赖 `w3-net` / `w3-relay` / `w3-client`（ADR 0002 §5、ADR 0005 §4）。本 change MUST NOT 新增任何权威状态字段：玩法命令作为「未执行命令」本就经 `WorldGameplayState::hash → GameplayCommandQueue::hash` 进入 FNV-1a 状态哈希，因此状态哈希字段集合、`first_difference()` 语义与由 `SNAPSHOT_VERSION`（当前 **3**，头部含 `defs_hash` / `content_hash`）定义的快照 SHALL 全部**不变、不 bump 快照版本**；`crates/w3-core/tests/determinism.rs` MUST 重跑且全绿（ADR 0002 §6/§7/§8、CODEBUDDY.md §5）。`CommandKind` 与 `payload.rs` 对 `CommandKind` 的穷尽 match MUST 保持原样，本 change 只新增玩法命令的编解码映射。
+`w3-core` MUST 保持**零改动、零依赖**，且不反向依赖 `w3-net` / `w3-relay` / `w3-client`（ADR 0002 §5、ADR 0005 §4）。本 change MUST NOT 新增任何权威状态字段；状态哈希字段集合、`first_difference()` 语义与由 `SNAPSHOT_VERSION`（当前 **3**，头部含 `defs_hash` / `content_hash`）定义的快照 SHALL 全部**不变、不 bump 快照版本**；`crates/w3-core/tests/determinism.rs` MUST 重跑且全绿（ADR 0002 §6/§7/§8、CODEBUDDY.md §5）。`CommandKind` 与 `payload.rs` 对 `CommandKind` 的穷尽 match MUST 保持原样，本 change 只新增玩法命令的编解码映射。
 
 #### Scenario: 内核零改动与确定性基线
 
@@ -81,6 +89,11 @@
 
 - **WHEN** 在联机对局中提交玩法命令后比对状态哈希与快照
 - **THEN** `SNAPSHOT_VERSION` 仍为 3、头部含 `defs_hash` / `content_hash`，状态哈希字段集合与本地对局一致，未新增权威状态字段
+
+#### Scenario: 玩法命令经既有队列进入状态哈希
+
+- **WHEN** 在联机对局中提交玩法命令后计算权威状态哈希
+- **THEN** 玩法命令作为「未执行命令」本就经 `WorldGameplayState::hash → GameplayCommandQueue::hash` 进入 FNV-1a 状态哈希，因此无需新增权威状态字段，状态哈希字段集合与本地对局一致
 
 ### Requirement: Per-frame hash equality and invariant frame ordering
 

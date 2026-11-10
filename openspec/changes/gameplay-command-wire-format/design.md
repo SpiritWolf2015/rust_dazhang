@@ -43,7 +43,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成并已归档
   - 新增 `GameplayCommand`：`execute_frame=1 / player_id=2 / sequence=3`，`oneof kind` 用 **tag 4–13** 放 10 个玩法变体（`Cast / Train / CancelTrain / Research / BuyItem / Gather / RegisterBehavior / SpawnWave / SetAi / Leave`），`reserved 14 to 32`。因为是**全新消息**、tag 空间独立，`Command.reserved 11 to 16` 只有 6 位而玩法有 10 变体的矛盾**根本不适用**——这是对「tag 段如何规划」最干净的回答，且完全满足 ADR 0005 §3「字段编号只追加、不复用、不改名；删除保留 `reserved`」。
   - 新增 `GameplayCommandBatch { repeated GameplayCommand commands = 1; reserved 2 to 8; }`。
   - **关键源码校正（已由 (a) 采纳）**：`encode_commands` / `decode_commands` 的顶层消息是 `CommandBatch`，`FrameCommands.commands` 也是 `CommandBatch`。因此追加字段应落在 `CommandBatch`：`GameplayCommandBatch gameplay = 9;`（tag 9，位于 `reserved 2 to 8` **之后**，只追加，不改该 `reserved`）。这样 `FrameCommands` / `ResyncReplay` **无需新增字段**即自动携带玩法批，Input / Frame / ResyncReplay 三条路径一次覆盖。在 `FrameCommands` 里追加 `repeated` 字段的设想会漏掉 Input / Frame 主路径（它们不经过 `FrameCommands`），需两处都改且语义割裂，故**否决**。
-  - `to_pb_kind` / `from_pb_kind`（对 `CommandKind`）的穷尽 match **完全不动**，只新增 `to_pb_gameplay_*` / `from_pb_gameplay_*` 映射；`EffectKind` 用 `effect_kind_code` 的稳定码 `uint32` 并对未知码显式拒绝；`EntityId`→`uint64`、`DefId`→`uint32`、`SimFixed`→`raw()` `int64`、其余 `int64/uint32/bool`。
+  - `to_pb_kind` / `from_pb_kind`（对 `CommandKind`）的穷尽 match **完全不动**，只新增 `to_pb_gameplay_*` / `from_pb_gameplay_*` 映射；`EffectKind` 用 `effect_kind_code` 的稳定码 `uint32` 并对未知码显式拒绝；`EntityId`→`uint64`、`DefId`→`uint32`、其余 `int64/uint32/bool`；若命令字段为 `SimFixed` 则用 `raw()` 的 `int64`，该约束仅适用于同批 `CommandBatch` 内的既有普通命令，本 change 的 10 个玩法变体实际字段为 `EntityId` / `DefId` / `u32` / `bool` / `u8` / `EffectDef`、无 `SimFixed` 字段。
 - **备选方案（Alternatives considered）**：
   - *A1：删 / 扩 `Command.reserved 11 to 16`，用 11–20 放 10 个 gameplay 变体，另设 `reserved 21 to 32`* — **否决**。占用 / 改写既有 `reserved` 声明属「复用保留位」；更致命的是 `pb::Command` 解码目标是 `w3_core::Command { kind: CommandKind }`（7 变体），gameplay 变体无法映射回 `CommandKind`，除非把 `Command` 改成 enum wrapper（改下游契约、违反 ISP/SRP，且 `decode_commands` 返回类型 BREAKING）。
   - *A2：保留 `reserved 11 to 16`，在 `Command.kind` oneof 追加 17–26* — **否决**。仍把两类不同 Rust 类型塞进同一 `oneof`，类型语义污染与穷尽 match 破坏同 A1。
@@ -51,7 +51,7 @@ P0–P5 已交付并归档，P6 `p6-playable-client` 已实施完成并已归档
   - *B：新增独立消息 + 追加到 `CommandBatch`（顶层 tag 9）* — **已定案采纳 (a)**。改动面最小、`Command` 零触碰、10 变体 tag 段自洽、三条路径一次覆盖。
   - *新增 `PacketKind::GameplayInput` / `GameplayFrame` 独立包类型* — **否决**。帧编排出现两套就绪队列与两个推进来源，易触发双 `step()`，与 D2 及 ADR 0002 §2 冲突；`PacketKind` 还需另行规划 tag。
   - *把玩法命令编码进 `Noop` 扩展字段 / `bytes` 透传* — **否决**。违反 ADR 0005 §3 的 schema-first / canonical / 禁 unknown fields 约束。
-- **关联 ADR 0002 与跨平台确定性影响**：字段全定宽整数 / 布尔、禁用 `float` / `double` / `map`、`SimFixed` 用 `raw()`（ADR 0004），生成代码在 Windows / Linux 双平台字节一致；不新增权威状态、不改状态哈希与 `SNAPSHOT_VERSION`（当前 3）。跨平台确定性已在 Windows 与 Debian 12 x86_64 / rustc 1.99.1 验证（ADR 0002 复核记录），但 macOS / 其它 CPU 架构 / 其它 rustc 仍待验证；本决策不声称全平台已达成，也不新增算术来源。
+- **关联 ADR 0002 与跨平台确定性影响**：字段全定宽整数 / 布尔、禁用 `float` / `double` / `map`；若命令字段为 `SimFixed` 则用 `raw()` 的 `int64`（ADR 0004，该约束仅适用于同批 `CommandBatch` 内的既有普通命令，本 change 的 10 个玩法变体无 `SimFixed` 字段），生成代码在 Windows / Linux 双平台字节一致；不新增权威状态、不改状态哈希与 `SNAPSHOT_VERSION`（当前 3）。跨平台确定性已在 Windows 与 Debian 12 x86_64 / rustc 1.99.1 验证（ADR 0002 复核记录），但 macOS / 其它 CPU 架构 / 其它 rustc 仍待验证；本决策不声称全平台已达成，也不新增算术来源。
 - **架构原则与分层依赖影响**：SRP（`Command` 与 `GameplayCommand` 各管一类）、OCP（新增消息扩展而非改既有穷尽 match）、ISP（`w3-net` 只见 `w3-core` 的公开类型）、CARP（复用既有 `CommandBatch` 嵌套结构）。`w3-core` 零改动、不反向依赖；唯一状态所有者仍是 `RtsMatch`。
 
 ### D2：命令流组织——同一帧批、统一稳定键、一次 `step()`（**已定案 (b)**）

@@ -63,7 +63,7 @@
 - [x] 8.3 注入丢包 / 乱序 / 短暂断线回归（扩展 `w3-relay/tests/network_faults.rs`、`two_clients.rs`），确认玩法命令仍在原定 `ExecuteFrame` 执行一次、帧序与 `step()` 次数不变、追帧后哈希与健康客户端一致
 - [x] 8.4 `ResyncReplay` 回归：补发多帧同时含两类命令、顺序与原始权威帧批一致、恢复后逐帧哈希一致
 - [x] 8.5 `cargo test --workspace` 全绿（含 `w3-net` / `w3-relay` / `w3-client` / `w3-core` 全部单测）
-- [ ] 8.6 真实 UDP 双进程实跑（**人工**）：两客户端联机触发施法 / 生产 / 取消生产，30 帧两端 `compute_state_hash()` 一致，确认无 `GameplayUnsupportedOnline`、无静默降级
+- [x] 8.6 真实 UDP 双进程实跑（**人工**）：两客户端联机触发施法 / 生产 / 取消生产，30 帧两端 `compute_state_hash()` 一致，确认无 `GameplayUnsupportedOnline`、无静默降级
 - [x] 8.7 `cargo fmt --all` 后 `cargo fmt --all -- --check` 通过（写 Rust 的 owner 与 `critic` Review 前均复跑）
 - [x] 8.8 源码注释（含 `pub` rustdoc / 模块级 `//!` / 行内 `//`）一律中文，日志与错误信息一律英文结构化 `key=value`，无散落 `println!`（CODEBUDDY.md §3）
 - [x] 8.9 `python tools/check_encoding.py` 通过（UTF-8 无 BOM / LF / 文件末尾换行 / 无行尾空格）与 `git diff --check` 通过

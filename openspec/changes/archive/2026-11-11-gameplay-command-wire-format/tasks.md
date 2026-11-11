@@ -67,7 +67,7 @@
 - [x] 8.7 `cargo fmt --all` 后 `cargo fmt --all -- --check` 通过（写 Rust 的 owner 与 `critic` Review 前均复跑）
 - [x] 8.8 源码注释（含 `pub` rustdoc / 模块级 `//!` / 行内 `//`）一律中文，日志与错误信息一律英文结构化 `key=value`，无散落 `println!`（CODEBUDDY.md §3）
 - [x] 8.9 `python tools/check_encoding.py` 通过（UTF-8 无 BOM / LF / 文件末尾换行 / 无行尾空格）与 `git diff --check` 通过
-- [ ] 8.10 `python tools/verify_all.py` 通过；CI Windows / Linux 双平台 `verify_all.py` 与 prost 生成字节一致门禁通过
+- [x] 8.10 `python tools/verify_all.py` 通过；CI Windows / Linux 双平台 `verify_all.py` 与 prost 生成字节一致门禁通过
 - [x] 8.11 依赖与许可证复核：确认本 change 未引入新依赖（复用既有 `prost` / `prost-build`）；若确需新增，按 CODEBUDDY.md §6 检查 GPLv3 兼容性、提交 `Cargo.lock`、由 `docs-owner` 在 `NOTICE.md` 登记（本 change 不自行编写 `NOTICE.md`）
 - [x] 8.12 资产合规复核（ADR 0001）：确认无 MPQ 派生数据 / 真实导出 JSON / PNG / GLB / 音效入库，冻结定义留玩家本机，线格式不含资产字节
 - [x] 8.13 只读 `critic` 复审：确定性 / 所有权 / 许可证 / 编码 / 资产入库 / rustfmt，复跑 `cargo fmt --all -- --check`，不通过不得提交
@@ -75,6 +75,6 @@
 
 ## 9. 归档（后续，本轮不执行）
 
-- [ ] 9.1 复跑 `openspec validate gameplay-command-wire-format` 与 `--strict`，确认全部 tasks 完成、四件套一致
-- [ ] 9.2 由编排者执行 `openspec archive gameplay-command-wire-format -y`，确认主 `openspec/specs/` 新增 `gameplay-command-wire/spec.md`，既有 10 个主 spec 按 1.4 / D7 结论核对 `lockstep-networking` 口径
-- [ ] 9.3 按 1.7 结论在 `docs/decisions/0005-protobuf-payload.md` 追加「修订 / 复核」记录并复核 `openspec validate --all`（仅追加段、不改原决策正文）
+- [x] 9.1 复跑 `openspec validate gameplay-command-wire-format` 与 `--strict`，确认全部 tasks 完成、四件套一致
+- [x] 9.2 由编排者执行 `openspec archive gameplay-command-wire-format -y`，确认主 `openspec/specs/` 新增 `gameplay-command-wire/spec.md`，既有 10 个主 spec 按 1.4 / D7 结论核对 `lockstep-networking` 口径
+- [x] 9.3 按 1.7 结论在 `docs/decisions/0005-protobuf-payload.md` 追加「修订 / 复核」记录并复核 `openspec validate --all`（仅追加段、不改原决策正文）

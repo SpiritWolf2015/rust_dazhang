@@ -171,3 +171,175 @@ fn real_minimap_decodes_into_nonflat_hud_backdrop() {
     }
     assert!(seen.len() > 4, "真实小地图底图应含多种颜色");
 }
+
+/// 真实模型资产存在时返回完整装配产物；否则跳过（CI 无本机资产）。
+fn local_model_map() -> Option<RealMap> {
+    let config = config_path();
+    if !config.exists() {
+        eprintln!("skip=real_map_models reason=no_local_config");
+        return None;
+    }
+    let paths = load_paths(&config).ok()?;
+    if paths.models_dir.is_none() || paths.slk_dir.is_none() {
+        eprintln!("skip=real_map_models reason=no_model_config");
+        return None;
+    }
+    let (map, _) = assemble(&config).expect("full real map with models must assemble");
+    Some(map)
+}
+
+#[test]
+fn real_gltf_models_replace_all_programmatic_geometry() {
+    let Some(map) = local_model_map() else {
+        return;
+    };
+    let stats = &map.model_stats;
+    // 真实 Echo Isles：97 单位 + 2491 装饰物全部解析成真实 glTF 模型。
+    assert_eq!(stats.placements, 97 + 2491, "全部摆放都参与模型解析");
+    assert_eq!(stats.skipped, 0, "所有摆放都应命中真实模型，无几何体残留");
+    assert_eq!(stats.budget_truncated, 0);
+    assert_eq!(stats.resolved, stats.placements);
+
+    // 顶点流来自真实网格（远超单个程序化标记的 12 顶点），且颜色取自真实贴图。
+    assert!(
+        map.static_model_vertices.len() > 100_000,
+        "真实模型顶点数应远大于程序化几何，实际 {}",
+        map.static_model_vertices.len()
+    );
+    assert!(
+        map.static_model_vertices
+            .iter()
+            .all(|v| v.surface < 0.0 && v.position.iter().all(|c| c.is_finite()))
+    );
+    let mut colors = std::collections::BTreeSet::new();
+    for v in &map.static_model_vertices {
+        colors.insert(v.color.map(|c| (c * 64.0) as i64));
+    }
+    assert!(colors.len() > 100, "真实贴图应带来丰富颜色，非纯色块");
+
+    // 6 个动态实体类型键全部绑定真实网格。
+    assert_eq!(map.entity_models.len(), 6);
+    for (key, model) in &map.entity_models {
+        assert!(model.triangle_count() > 0, "实体 {key} 模型不能为空");
+    }
+    // 建筑 / 单位模型比程序化四面体复杂得多。
+    assert!(map.entity_models["town-hall"].triangle_count() > 500);
+    assert!(map.entity_models["barracks"].triangle_count() > 500);
+}
+
+#[test]
+fn real_models_enter_scene_vertices_and_are_deterministic() {
+    use w3_render::Scene;
+
+    let Some(map) = local_model_map() else {
+        return;
+    };
+    let mut scene = Scene::default();
+    scene.set_static_markers(map.markers.clone());
+    let programmatic = scene.build_vertices(&map.terrain);
+    let programmatic_markers = programmatic.iter().filter(|v| v.surface < 0.0).count();
+
+    scene.set_static_model_vertices(map.static_model_vertices.clone());
+    let with_models = scene.build_vertices(&map.terrain);
+    let model_markers = with_models.iter().filter(|v| v.surface < 0.0).count();
+    // 程序化摆放被真实网格整体替换：摆放顶点数等于真实模型预展开顶点数。
+    assert_eq!(model_markers, map.static_model_vertices.len());
+    assert!(
+        model_markers > programmatic_markers * 3,
+        "真实模型顶点应远多于程序化摆放，实际 {} vs {}",
+        model_markers,
+        programmatic_markers
+    );
+    assert_eq!(
+        scene.static_model_vertex_count(),
+        map.static_model_vertices.len()
+    );
+    // 确定性：同一真实模型流逐帧可复现（无随机源 / 无墙钟）。
+    assert_eq!(with_models, scene.build_vertices(&map.terrain));
+    assert_eq!(SNAPSHOT_VERSION, 3, "真实模型装配不触碰快照版本");
+}
+
+#[test]
+fn real_gltf_models_render_on_screen_not_black() {
+    use w3_render::{Camera, RenderError, render_headless_rgba};
+
+    let Some(map) = local_model_map() else {
+        return;
+    };
+
+    // A/B 对照：A = 仅地形（真实地表贴图、无模型）；B = 地形 + 真实 glTF
+    // 模型。只有「B 相对 A 出现大量像素变化」才能证明**真实模型确实上屏**，
+    // 而非地形自身满足非黑屏 / 颜色丰富（critic B2）。
+    let mut terrain_only = w3_render::Scene::default();
+    terrain_only.set_terrain_tiles(map.terrain_tiles.clone());
+    let vertices_a = terrain_only.build_vertices(&map.terrain);
+    // A 里 surface>=0 全为地形，surface<0 为空（无静态摆放、无动态单位）。
+    assert!(vertices_a.iter().all(|v| v.surface >= 0.0));
+
+    let mut with_models = w3_render::Scene::default();
+    with_models.set_terrain_tiles(map.terrain_tiles.clone());
+    with_models.set_static_model_vertices(map.static_model_vertices.clone());
+    let vertices_b = with_models.build_vertices(&map.terrain);
+    assert!(vertices_b.len() > vertices_a.len());
+    // B 必须确实含真实模型顶点（surface<0），否则 A/B 差异无从归因于模型。
+    assert!(
+        vertices_b.iter().any(|v| v.surface < 0.0),
+        "B 应含真实模型顶点"
+    );
+
+    let view_proj = Camera::new(1.0).matrix(&map.terrain);
+    let width = 160u32;
+    let height = 120u32;
+    // 先渲 A：无 adapter 则整体如实跳过（不冒充通过）。
+    let rgba_a = match render_headless_rgba(&vertices_a, &view_proj, width, height) {
+        Ok(rgba) => rgba,
+        Err(RenderError::GpuUnavailable(reason)) => {
+            eprintln!("skip=real_model_gpu reason=no_adapter detail={reason}");
+            return;
+        }
+        Err(error) => panic!("terrain-only headless render failed: {error}"),
+    };
+    // A 已成功 ⇒ adapter 可用；B 若再报 GpuUnavailable 属异常，MUST NOT 静默
+    // return 显示 passed（critic residual）。
+    let rgba_b = match render_headless_rgba(&vertices_b, &view_proj, width, height) {
+        Ok(rgba) => rgba,
+        Err(error) => panic!("model headless render failed after terrain-only succeeded: {error}"),
+    };
+    assert_eq!(rgba_b.len(), (width * height * 4) as usize);
+
+    // ① 全场景非黑屏：大量像素亮于 Clear 背景。
+    let lit = rgba_b
+        .chunks_exact(4)
+        .filter(|p| p[0] > 40 || p[1] > 40 || p[2] > 40)
+        .count();
+    assert!(lit > 500, "真实地图画面应有大量非背景像素，实际 {lit}");
+
+    // ② 关键：B 相对 A 有大量像素被真实模型改变 —— 地形自身无法伪造。
+    let changed = rgba_a
+        .chunks_exact(4)
+        .zip(rgba_b.chunks_exact(4))
+        .filter(|(a, b)| {
+            let delta = a[0].abs_diff(b[0]) as u32
+                + a[1].abs_diff(b[1]) as u32
+                + a[2].abs_diff(b[2]) as u32;
+            delta > 24
+        })
+        .count();
+    assert!(
+        changed > 200,
+        "真实模型应显著改变画面像素（A=仅地形 vs B=地形+模型），实际变化 {changed} 像素"
+    );
+
+    // ③ 变化像素里出现多种模型贴图颜色，而非单一色块。
+    let mut model_colors = std::collections::BTreeSet::new();
+    for (a, b) in rgba_a.chunks_exact(4).zip(rgba_b.chunks_exact(4)) {
+        if a[0].abs_diff(b[0]) > 16 || a[1].abs_diff(b[1]) > 16 || a[2].abs_diff(b[2]) > 16 {
+            model_colors.insert([b[0] / 16, b[1] / 16, b[2] / 16]);
+        }
+    }
+    assert!(
+        model_colors.len() > 8,
+        "真实模型应带来多种贴图颜色，实际 {}",
+        model_colors.len()
+    );
+}

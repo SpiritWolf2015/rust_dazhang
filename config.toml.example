@@ -1,38 +1,37 @@
 # rust_dazhang 配置模板——复制为 config.toml 后按需修改路径。
-# config.toml 已被 gitignore：它含有本机路径，绝不能提交。
-# 本仓库不含任何游戏资产；下面的每个路径都指向你本机合法获得的文件。
-
-[paths]
-# 你本机合法获得的经典客户端安装目录（基于 MPQ）。
-# 必须包含 war3.mpq / War3x.mpq，且不能是 Reforged/CASC 版本
-# （CASC 版本只有 Data/ 目录，没有散装的 .mpq 文件）。
+# config.toml 已被 .gitignore 忽略：它含有本机绝对路径，绝不能提交。
+# 本仓库不含任何游戏资产；下面每个路径都指向你本机合法获得 / 导出的文件。
 #
-# 关于 1.27a：部分安装把基座归档命名为小写的 "war3.mpq"，
-# 其余归档使用 "War3x.mpq" 等大写形式。Windows 大小写不敏感，
-# 但 Rust 读取器必须大小写不敏感匹配，才能在 Linux/macOS 上同样工作。
-wc3_dir = "D:/soft/game/war3/1.27a"
+# 解析方：crates/w3-client/src/real_map.rs::load_paths
+# 只识别下面 6 个 `key = "value"` 键（极简解析，无 toml 依赖；注释 / 分段
+# 标题 / 未知键会被忽略）。键名与 `config.toml` 当前实际用法一致。
 
-# 由参考资产管线从该安装目录导出的本机 JSON。
-# P0/P1 从这里读取 SLK 表与已解析地图。
-# 这些文件是从游戏归档派生的：只读取，绝不提交。
-#   <wc3_exported>/slk-exported/   单位 / 技能 / UI 表
-#   <wc3_exported>/map-parsed/      已解析的地图 JSON
-wc3_exported = "C:/open_rts/godot_warcraft3/assets"
+# 已解析的 Echo Isles 地图目录（w3-content::load_map 读取
+# terrain-heightfield.json / units.json / doodads.json）。必填。
+map_dir = "C:/open_rts/godot_warcraft3/assets/map-parsed/echoisles"
 
-# P1：要加载的 <wc3_exported>/map-parsed/ 下的目录名。
-# 填上游工具在本机生成的实际目录名；读取器不硬编码任何地图名。
-# 本机当前已导出 "echoisles"。
-map_slug = "echoisles"
+# 可选：地表 tileset SLK 表（阶段 2 贴图映射，当前装配未直接消费）。
+tileset_table = "C:/open_rts/godot_warcraft3/assets/slk-exported/TerrainArt/Terrain.json"
 
-# 本项目自身的临时目录（同样被 gitignore）。
-cache_dir = ".cache"
+# 可选：真实小地图底图 PNG（阶段 2 HUD 底图）。
+minimap_image = "C:/open_rts/godot_warcraft3/assets/map-parsed/echoisles/war3mapMap.png"
 
-[sim]
-# 每秒整数逻辑帧数。对局生命周期内冻结，中途不得变更；
-# 项目级冻结见 ADR 0002。
-# 权威模拟绝不能读取墙钟、渲染帧率或调用方传入的 delta。
-logic_fps = 30
+# 可选：6 张 BLP→PNG 地表贴图目录（阶段 2 真实地表顶点色）。
+# 目录内需含 Lords_Dirt.png / Lords_DirtRough.png / Lords_DirtGrass.png /
+# Lords_Rock.png / Lords_Grass.png / Lords_GrassDark.png。
+tileset_dir = "C:/open_rts/godot_warcraft3/assets/asset-converted/TerrainArt/LordaeronSummer"
 
-# 确定性契约（见 ADR 0002）：所有权威状态数学使用定点数。
-# f32/f64 不得进入模拟状态；墙钟、无序集合迭代顺序、
-# 异步任务完成顺序都不得影响规则。
+# 可选：真实 glTF 模型根目录（阶段 3，asset-convert 产物，含 .gltf/.bin/PNG）。
+models_dir = "C:/open_rts/godot_warcraft3/assets/asset-converted"
+
+# 可选：SLK 表根目录（阶段 3 模型映射，需含 Units/unitUI.json 与
+# Doodads/Doodads.json）。models_dir 与 slk_dir 必须同时提供才装配真实模型；
+# 二者缺失时优雅降级到程序化几何、CI 无资产环境可跑。
+slk_dir = "C:/open_rts/godot_warcraft3/assets/slk-exported"
+
+# 说明：
+# - 以上路径全部由只读参考项目 godot_warcraft3 的上游 dev-setup / asset-convert
+#   在玩家本机从合法获得的经典客户端导出；本仓库零资产、绝不入库（ADR 0001）。
+# - 缺 map_dir 或导出数据无效时 `cargo run -p w3-client --example melee`
+#   显式失败、不回落合成 demo；玩法闭环 CPU 测试不依赖任何本机资产。
+# - 确定性契约见 ADR 0002：权威模拟用定点数、整数帧 30 Hz、不读墙钟 / 刷新率。

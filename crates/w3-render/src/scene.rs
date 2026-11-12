@@ -11,6 +11,7 @@ use w3_content::RgbaImage;
 use w3_core::{ANGLE_SCALE, Event, EventKind, SCALE, WorldView};
 
 use crate::model::{ModelLibrary, team_color};
+use crate::model_geometry::{BakedModel, ModelTransform, expand_model};
 use crate::terrain::{TerrainMesh, TerrainVertex};
 
 /// 定点世界坐标（Q47.16）→ 表现层 `f32` 世界单位。
@@ -85,6 +86,12 @@ pub struct Scene {
     /// 顶点色由它按 `surface` 层索引 + 世界 XZ 平铺采样得到；
     /// `None` 时回退到 6 色调色板（既有路径 / CI 无本机资产）。
     terrain_tiles: Option<Vec<RgbaImage>>,
+    /// 真实地图静态摆放的 glTF 模型（已按位姿预展开成 `SceneVertex`）。
+    /// 由装配层注入，`build_vertices` 直接拼接；`consume` 不触碰。
+    static_model_vertices: Vec<SceneVertex>,
+    /// 动态实体类型键 → 真实烘焙模型（按实例位姿逐帧展开）。
+    /// `BTreeMap` 保证稳定迭代；缺键时该实例回退到程序化几何。
+    entity_models: BTreeMap<String, BakedModel>,
     /// 已消费事件的最高 sequence，用于重复投递去重。
     max_sequence: Option<u64>,
     /// 最近消费的逻辑帧号。
@@ -598,12 +605,49 @@ impl Scene {
         self.terrain_tiles = tiles;
     }
 
+    /// 注入真实地图静态摆放的 glTF 模型（已按位姿预展开的顶点）。
+    /// 非空时 `build_vertices` 用它替代 `static_markers` 的程序化几何；
+    /// 纯表现层数据，`consume` 不触碰。
+    pub fn set_static_model_vertices(&mut self, vertices: Vec<SceneVertex>) {
+        self.static_model_vertices = vertices;
+    }
+
+    /// 静态真实模型顶点数（只读，供验收 / 诊断）。
+    pub fn static_model_vertex_count(&self) -> usize {
+        self.static_model_vertices.len()
+    }
+
+    /// 注入动态实体类型键 → 真实烘焙模型；缺键的实例回退到程序化几何。
+    pub fn set_entity_models(&mut self, models: BTreeMap<String, BakedModel>) {
+        self.entity_models = models;
+    }
+
+    /// 真实绑定模型数（只读，供验收 / 诊断）。
+    pub fn entity_model_count(&self) -> usize {
+        self.entity_models.len()
+    }
+
     /// 生成一帧的非索引 GPU 顶点：地形三角形 + 静态摆放 + 可见单位标记。
     /// 纯函数，稳定顺序、无随机源，便于 GPU readback 逐帧比对。
+    ///
+    /// 真实模型阶段：静态摆放优先用 [`Self::set_static_model_vertices`]
+    /// 注入的真实网格顶点，动态单位优先用 [`Self::set_entity_models`]
+    /// 绑定的真实网格按实例位姿展开；两者缺失时才回退程序化几何。
     pub fn build_vertices(&self, terrain: &TerrainMesh) -> Vec<SceneVertex> {
         let tiles = self.terrain_tiles.as_deref();
+        let dynamic_model_estimate: usize = self
+            .instances
+            .values()
+            .filter(|i| i.alive)
+            .filter_map(|i| i.model_key.as_deref())
+            .filter_map(|key| self.entity_models.get(key))
+            .map(|m| m.triangles.len() * 3)
+            .sum();
         let mut vertices = Vec::with_capacity(
-            terrain.indices.len() + (self.instances.len() + self.static_markers.len()) * 12,
+            terrain.indices.len()
+                + self.static_model_vertices.len()
+                + dynamic_model_estimate
+                + (self.instances.len() + self.static_markers.len()) * 12,
         );
         for &index in &terrain.indices {
             let vertex = &terrain.vertices[index as usize];
@@ -615,8 +659,12 @@ impl Scene {
             });
         }
         // 静态摆放先于动态单位，保证 readback 顺序稳定。
-        for marker in &self.static_markers {
-            append_static_marker(&mut vertices, marker, terrain);
+        if self.static_model_vertices.is_empty() {
+            for marker in &self.static_markers {
+                append_static_marker(&mut vertices, marker, terrain);
+            }
+        } else {
+            vertices.extend_from_slice(&self.static_model_vertices);
         }
         for instance in self.instances.values() {
             if !instance.alive {
@@ -625,6 +673,21 @@ impl Scene {
             let Some(key) = instance.model_key.as_deref() else {
                 continue;
             };
+            if let Some(model) = self.entity_models.get(key) {
+                if !model.is_empty() {
+                    let transform = ModelTransform {
+                        origin: [
+                            instance.x,
+                            terrain.height_at_world(instance.x, instance.y),
+                            instance.y,
+                        ],
+                        yaw: instance.facing,
+                        scale: 1.0,
+                    };
+                    vertices.extend(expand_model(model, &transform));
+                    continue;
+                }
+            }
             append_typed_marker(&mut vertices, instance, terrain, key);
         }
         vertices
@@ -1051,5 +1114,123 @@ mod tests {
         );
         let after = scene.build_vertices(&mesh);
         assert_eq!(before, after, "真实贴图采样可复现、consume 不改地形顶点色");
+    }
+
+    /// 构造一个多三角形的真实模型（顶点数远超程序化标记的 12）。
+    fn baked_model(triangles: usize) -> BakedModel {
+        let mut list = Vec::with_capacity(triangles);
+        for i in 0..triangles {
+            let h = i as f32 * 0.1;
+            list.push(crate::model_geometry::BakedTriangle {
+                position: [[0.0, h, 0.0], [2.0, h, 0.0], [0.0, h + 1.0, 0.0]],
+                normal: [[0.0, 1.0, 0.0]; 3],
+                color: [[0.2, 0.6, 0.3, 1.0]; 3],
+            });
+        }
+        BakedModel { triangles: list }
+    }
+
+    #[test]
+    fn static_real_models_replace_programmatic_markers() {
+        let mesh = terrain();
+        let mut scene = Scene::default();
+        scene.set_static_markers(vec![StaticMarker {
+            x: 1.0,
+            y: 2.0,
+            size: 6.0,
+            color: [0.1, 0.5, 0.2, 1.0],
+            shape: StaticShape::Tree,
+        }]);
+        let programmatic = scene.build_vertices(&mesh).len();
+
+        let model = baked_model(40);
+        let vertices = expand_model(
+            &model,
+            &ModelTransform {
+                origin: [1.0, 0.0, 2.0],
+                ..Default::default()
+            },
+        );
+        scene.set_static_model_vertices(vertices.clone());
+        assert_eq!(scene.static_model_vertex_count(), 120);
+        let with_real = scene.build_vertices(&mesh);
+        // 真实模型 120 顶点 >> 单个圆锥标记，且静态程序化几何被替换。
+        assert!(with_real.len() > programmatic);
+        assert_eq!(
+            with_real.iter().filter(|v| v.surface < 0.0).count(),
+            120,
+            "静态摆放应全部来自真实模型顶点"
+        );
+        // 确定性 + consume 不清除。
+        assert_eq!(with_real, scene.build_vertices(&mesh));
+        let empty_view = view(4, vec![]);
+        scene.consume(
+            FrameInput {
+                view: &empty_view,
+                events: &[],
+            },
+            &ModelLibrary::default(),
+        );
+        assert_eq!(scene.static_model_vertex_count(), 120);
+    }
+
+    #[test]
+    fn dynamic_real_models_replace_typed_markers_and_are_stable() {
+        let mut library = ModelLibrary::default();
+        library.insert("peasant", crate::model::Model::default());
+        library.bind_entity(1, "peasant");
+        let mut scene = Scene::default();
+        let view = view(1, vec![entity(1, 0, 0)]);
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        let mesh = terrain();
+        let before = scene.build_vertices(&mesh);
+        // 程序化几何：四面体 12 顶点。
+        assert_eq!(before.iter().filter(|v| v.surface < 0.0).count(), 12);
+
+        let mut models = BTreeMap::new();
+        models.insert("peasant".to_string(), baked_model(30));
+        scene.set_entity_models(models);
+        assert_eq!(scene.entity_model_count(), 1);
+        let after = scene.build_vertices(&mesh);
+        assert_eq!(
+            after.iter().filter(|v| v.surface < 0.0).count(),
+            90,
+            "动态单位应由真实网格的 30 三角形展开"
+        );
+        assert!(after.len() > before.len());
+        assert_eq!(after, scene.build_vertices(&mesh), "逐帧展开可复现");
+    }
+
+    #[test]
+    fn missing_entity_model_falls_back_to_programmatic_marker() {
+        let mut library = ModelLibrary::default();
+        library.insert("peasant", crate::model::Model::default());
+        library.bind_entity(1, "peasant");
+        let mut scene = Scene::default();
+        let view = view(1, vec![entity(1, 0, 0)]);
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        // 注入了其它键的模型，peasant 无绑定 → 回退四面体。
+        let mut models = BTreeMap::new();
+        models.insert("soldier".to_string(), baked_model(10));
+        scene.set_entity_models(models);
+        let mesh = terrain();
+        let vertices = scene.build_vertices(&mesh);
+        assert_eq!(
+            vertices.iter().filter(|v| v.surface < 0.0).count(),
+            12,
+            "缺键回退到程序化几何"
+        );
     }
 }

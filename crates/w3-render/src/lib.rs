@@ -16,14 +16,21 @@
 pub mod error;
 pub mod gpu;
 pub mod model;
+pub mod model_geometry;
 pub mod scene;
 pub mod terrain;
 
 pub use error::RenderError;
-pub use gpu::{Camera, FrameProducer, GpuContext, RendererApp, ScreenProjection};
+pub use gpu::{
+    Camera, FrameProducer, GpuContext, RendererApp, ScreenProjection, render_headless_rgba,
+};
 pub use model::{
     Attachment, Bone, FilterMode, GeosetAnim, Material, Model, ModelDocument, ModelLibrary,
     ResolvedMaterial, Sequence, TEAM_COLORS, Track, team_color,
+};
+pub use model_geometry::{
+    BakedModel, BakedTriangle, MODEL_WORLD_SCALE, ModelTransform, bake_model, expand_model,
+    gltf_to_world,
 };
 pub use scene::{
     DisplayHints, FrameInput, Instance, LORDAERON_SUMMER_TILES, Scene, SceneVertex, StaticMarker,

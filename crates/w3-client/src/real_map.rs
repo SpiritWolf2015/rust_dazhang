@@ -1,4 +1,4 @@
-//! 真实导出地图的表现层装配（对齐 `godot_warcraft3` 水位，阶段 1）。
+//! 真实导出地图 + 真实 glTF 模型的表现层装配（对齐 `godot_warcraft3` 水位）。
 //!
 //! 本模块把本机 `map-parsed/<slug>/` 的导出数据装配成客户端可直接呈现的
 //! `TerrainMesh` 与静态摆放 `StaticMarker`：
@@ -12,26 +12,34 @@
 //!   这样相机、拾取、`StaticWorld`、玩法单位坐标全部无需改动。
 //! - 阶段 1 用 6 种 Lordaeron Summer 地表调色板 + 程序化几何区分摆放；
 //!   阶段 2 起从本机 `tileset_dir` / `minimap_image` 读取真实 BLP→PNG
-//!   地表贴图与小地图底图（纯表现层数据，不进权威状态 / 哈希 / 快照），
-//!   未配置时回退阶段 1 调色板；glTF 骨骼模型留后续阶段。
+//!   地表贴图与小地图底图；阶段 3 起从 `models_dir` / `slk_dir` 经
+//!   [`crate::model_assembly`] 装配真实 glTF WC3 模型，把 2588 个静态摆放
+//!   与 6 类动态单位替换为真实网格（程序化几何仅无资产 / 缺键时回退）。
+//!   以上全部是纯表现层数据，不进权威状态 / 哈希 / 快照；逐帧骨骼动画与
+//!   逐像素 GPU 纹理过滤留后续阶段。
 //!
 //! 路径来源：gitignored 的本机 `config.toml`（ADR 0001 / CODEBUDDY.md §6）。
-//! 为避免新增依赖，这里只做极简 `key = "value"` 解析；仓库不含任何导出资产。
+//! 这里只做极简 `key = "value"` 解析（不引入 `toml` 解析 crate）；真实 glTF
+//! 解析与 PNG 解码在 `w3-content` 内复用已有 `serde_json` / `image`，阶段 3
+//! 零新增 Cargo 依赖。仓库不含任何导出资产。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use w3_content::{
-    CenterOffset, DoodadPlacement, ParsedMap, RgbaImage, TerrainHeightfield, UnitPlacement,
-    load_rgba, load_tileset,
+    CenterOffset, DoodadPlacement, ModelCatalog, ParsedMap, RgbaImage, TerrainHeightfield,
+    UnitPlacement, load_rgba, load_tileset,
 };
-use w3_render::{StaticMarker, StaticShape, TerrainMesh};
+use w3_render::{BakedModel, SceneVertex, StaticMarker, StaticShape, TerrainMesh};
+
+use crate::model_assembly::{AssembledModels, ModelStats, assemble_models};
 
 /// 上游导出的瓦片边长（Echo Isles `tileSize=128`）。
 const EXPORT_TILE_SIZE: f64 = 128.0;
 /// 缩放到玩法世界后的瓦片边长：129 格 × 2 ≈ 258 世界单位，与合成世界对齐。
 const WORLD_TILE_SIZE: f64 = 2.0;
 /// 表现层坐标缩放比（只作用于 `f64` 冻结输入与 `f32` 呈现数据）。
-const WORLD_SCALE: f64 = WORLD_TILE_SIZE / EXPORT_TILE_SIZE;
+pub(super) const WORLD_SCALE: f64 = WORLD_TILE_SIZE / EXPORT_TILE_SIZE;
 
 /// 静态摆放基准尺寸（相对 258 的地图跨度）。
 const MARKER_SIZE: f32 = 3.5;
@@ -54,6 +62,10 @@ pub struct RealMapPaths {
     pub minimap_image: Option<PathBuf>,
     /// 可选：6 张 BLP→PNG 地表贴图目录（阶段 2 真实地表用）。
     pub tileset_dir: Option<PathBuf>,
+    /// 可选：`asset-converted/` 目录（阶段 3 真实 glTF 模型用）。
+    pub models_dir: Option<PathBuf>,
+    /// 可选：`slk-exported/` 目录（阶段 3 模型映射表用）。
+    pub slk_dir: Option<PathBuf>,
 }
 
 /// 装配错误；错误文本一律英文（CODEBUDDY.md §3）。
@@ -69,6 +81,8 @@ pub enum RealMapError {
     Terrain { message: String },
     /// 已配置的贴图资源读取 / 解码失败（不静默回落）。
     Texture { path: PathBuf, message: String },
+    /// 已配置的模型目录 / 映射表读取失败（不静默回落）。
+    Model { path: PathBuf, message: String },
 }
 
 impl std::fmt::Display for RealMapError {
@@ -85,6 +99,9 @@ impl std::fmt::Display for RealMapError {
             Self::Texture { path, message } => {
                 write!(f, "cannot decode {}: {message}", path.display())
             }
+            Self::Model { path, message } => {
+                write!(f, "cannot load models at {}: {message}", path.display())
+            }
         }
     }
 }
@@ -92,7 +109,8 @@ impl std::fmt::Display for RealMapError {
 impl std::error::Error for RealMapError {}
 
 /// 极简解析 gitignored `config.toml` 的 `key = "value"` 行，忽略注释与未知键。
-/// 不引入 toml 依赖；只识别三个键。
+/// 不引入 toml 依赖；只识别 map_dir / tileset_table / minimap_image /
+/// tileset_dir / models_dir / slk_dir 六个键。
 pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
     let text = std::fs::read_to_string(config_path).map_err(|error| RealMapError::ConfigIo {
         path: config_path.to_path_buf(),
@@ -102,6 +120,8 @@ pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
     let mut tileset_table = None;
     let mut minimap_image = None;
     let mut tileset_dir = None;
+    let mut models_dir = None;
+    let mut slk_dir = None;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
@@ -119,6 +139,8 @@ pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
             "tileset_table" => tileset_table = Some(PathBuf::from(value)),
             "minimap_image" => minimap_image = Some(PathBuf::from(value)),
             "tileset_dir" => tileset_dir = Some(PathBuf::from(value)),
+            "models_dir" => models_dir = Some(PathBuf::from(value)),
+            "slk_dir" => slk_dir = Some(PathBuf::from(value)),
             _ => {}
         }
     }
@@ -131,6 +153,8 @@ pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
         tileset_table,
         minimap_image,
         tileset_dir,
+        models_dir,
+        slk_dir,
     })
 }
 
@@ -213,10 +237,13 @@ pub fn assemble_from(parsed: &ParsedMap) -> Result<RealMap, RealMapError> {
         markers,
         terrain_tiles: None,
         minimap_image: None,
+        static_model_vertices: Vec::new(),
+        entity_models: BTreeMap::new(),
+        model_stats: ModelStats::default(),
     })
 }
 
-/// 装配产物：真实地形网格 + 静态摆放（全部为表现层数据）。
+/// 装配产物：真实地形网格 + 静态摆放 + 真实模型（全部为表现层数据）。
 #[derive(Clone, Debug)]
 pub struct RealMap {
     pub terrain: TerrainMesh,
@@ -226,6 +253,12 @@ pub struct RealMap {
     pub terrain_tiles: Option<Vec<RgbaImage>>,
     /// 真实 `war3mapMap.png` 小地图底图（RGBA8）；`None` 用纯色底。
     pub minimap_image: Option<RgbaImage>,
+    /// 静态摆放的真实 glTF 模型（预展开顶点）；空则回退程序化几何。
+    pub static_model_vertices: Vec<SceneVertex>,
+    /// 动态实体类型键 → 真实烘焙模型。
+    pub entity_models: BTreeMap<String, BakedModel>,
+    /// 模型装配统计（只读诊断）。
+    pub model_stats: ModelStats,
 }
 
 /// 从本机 `config.toml` 指向的导出目录装配真实地图。
@@ -251,6 +284,19 @@ pub fn assemble(config_path: &Path) -> Result<(RealMap, RealMapPaths), RealMapEr
             path: image.clone(),
             message: error.to_string(),
         })?);
+    }
+    // 阶段 3：真实 glTF 模型。models_dir / slk_dir 未配置时优雅降级到程序化
+    // 几何（CI / 未转换模型）；已配置但目录读取失败 MUST 显式报错。
+    if let (Some(models_dir), Some(slk_dir)) = (&paths.models_dir, &paths.slk_dir) {
+        let catalog =
+            ModelCatalog::load(models_dir, slk_dir).map_err(|error| RealMapError::Model {
+                path: models_dir.clone(),
+                message: error.to_string(),
+            })?;
+        let assembled: AssembledModels = assemble_models(&parsed, &map.terrain, catalog);
+        map.static_model_vertices = assembled.static_vertices;
+        map.entity_models = assembled.entity_models;
+        map.model_stats = assembled.stats;
     }
     Ok((map, paths))
 }
@@ -424,7 +470,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "# local export paths\nmap_dir = \"C:/maps/echoisles\"\ntileset_table = 'C:/slk/Terrain.json'\ntileset_dir = 'C:/converted/LordaeronSummer'\nunknown = 1\n",
+            "# local export paths\nmap_dir = \"C:/maps/echoisles\"\ntileset_table = 'C:/slk/Terrain.json'\ntileset_dir = 'C:/converted/LordaeronSummer'\nmodels_dir = 'C:/converted'\nslk_dir = 'C:/slk'\nunknown = 1\n",
         )
         .unwrap();
         let paths = load_paths(&path).unwrap();
@@ -437,6 +483,8 @@ mod tests {
             paths.tileset_dir,
             Some(PathBuf::from("C:/converted/LordaeronSummer"))
         );
+        assert_eq!(paths.models_dir, Some(PathBuf::from("C:/converted")));
+        assert_eq!(paths.slk_dir, Some(PathBuf::from("C:/slk")));
         assert_eq!(paths.minimap_image, None);
         std::fs::remove_file(&path).unwrap();
     }
@@ -464,5 +512,7 @@ mod tests {
         let map = assemble_from(&fixture()).unwrap();
         assert!(map.terrain_tiles.is_none());
         assert!(map.minimap_image.is_none());
+        assert!(map.static_model_vertices.is_empty());
+        assert!(map.entity_models.is_empty());
     }
 }

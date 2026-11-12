@@ -2,7 +2,7 @@
 
 ## Context
 
-动机见 `proposal.md` Why，不在此重述。现状（只读核实，2026-11-12）：主 `openspec/specs/` 共 12 个 capability；`w3-core` 已交付确定性内核与完整玩法命令面——`CommandKind`（`Spawn` / `Move` 含群体分组 / `Stop` / `Attack` / 障碍）与 `GameplayCommandKind`（`Cast` / `Train` / `CancelTrain` / `Research` / `BuyItem` / `Gather` / `SpawnWave` / `SetAi` / `Leave`），以及 `FrozenDefinitions`、`PlayerEconomy`、`VictoryState` + `resolve_victory`（`leave()` 置 `active=false` 后按稳定顺序结算）、`run_ai`（当前只让空闲单位发 `Gather`）。`playable-window-smoke` 已归档并交付 `ClientApp` 装配、只读 HUD、高 DPI 拾取与 `playable-window-entry` 入口，但 example 只有合成碗状地形、4 个四面体与 ASCII 状态窗。用户拍板验收线为「能打完一局」，随后进一步判定合成色块 demo 不是 War3 地图画面、要求对齐 `godot_warcraft3` 视觉水位，追加真实地图表现层阶段（阶段 1 真实 Echo Isles 地形 / 静态摆放、阶段 2 真实地表贴图 / 小地图底图），详见 D7。约束：ADR 0001（仓库零资产、只读参考）、ADR 0002（`w3-core` 确定性硬门禁，`SNAPSHOT_VERSION` 当前 3，头部含 `defs_hash` / `content_hash`）、ADR 0004（冻结坐标）、CODEBUDDY.md（中文注释 / 英文日志 / rustfmt / 跨平台脚本 / AI 不碰远端）。
+动机见 `proposal.md` Why，不在此重述。现状（只读核实，2026-11-12）：主 `openspec/specs/` 共 12 个 capability；`w3-core` 已交付确定性内核与完整玩法命令面——`CommandKind`（`Spawn` / `Move` 含群体分组 / `Stop` / `Attack` / 障碍）与 `GameplayCommandKind`（`Cast` / `Train` / `CancelTrain` / `Research` / `BuyItem` / `Gather` / `SpawnWave` / `SetAi` / `Leave`），以及 `FrozenDefinitions`、`PlayerEconomy`、`VictoryState` + `resolve_victory`（`leave()` 置 `active=false` 后按稳定顺序结算）、`run_ai`（当前只让空闲单位发 `Gather`）。`playable-window-smoke` 已归档并交付 `ClientApp` 装配、只读 HUD、高 DPI 拾取与 `playable-window-entry` 入口，但 example 只有合成碗状地形、4 个四面体与 ASCII 状态窗。用户拍板验收线为「能打完一局」，随后进一步判定合成色块 demo 不是 War3 地图画面、要求对齐 `godot_warcraft3` 视觉水位，追加真实地图表现层阶段（阶段 1 真实 Echo Isles 地形 / 静态摆放、阶段 2 真实地表贴图 / 小地图底图）；阶段 2 人工窗口验收后，用户再次判定「EI 地图上仍是基本几何体、未达参考项目制作水平」，遂追加**阶段 3：真实 glTF 模型**（2588 个静态摆放 + 6 类动态单位全部替换为真实 WC3 网格 + 真实贴图），详见 D7 / D8。约束：ADR 0001（仓库零资产、只读参考）、ADR 0002（`w3-core` 确定性硬门禁，`SNAPSHOT_VERSION` 当前 3，头部含 `defs_hash` / `content_hash`）、ADR 0004（冻结坐标）、CODEBUDDY.md（中文注释 / 英文日志 / rustfmt / 跨平台脚本 / AI 不碰远端）。
 
 ## Goals / Non-Goals
 
@@ -20,7 +20,7 @@
 - 改 `w3-core` 帧序、命令排序、状态哈希编码、快照字段或 `SNAPSHOT_VERSION`；新增权威状态字段。
 - 引入通用游戏引擎（Bevy 等）、CJK 字体依赖，或向仓库提交任何字体 / 模型 / 纹理 / 导出资产文件（ADR 0001）。
 - 把真实 SLK 数值灌进 `FrozenDefinitions` 等权威内容定义（本期真实数据只进表现层）；改动 `defs_hash` / `content_hash` 计算方式。
-- 真实 glTF/MDX 骨骼模型、逐像素 GPU 纹理采样、战争迷雾、JASS/wtg 触发器 VM、战役、Mod API（均为后续阶段已知限制，见 D7 / Risks）。
+- 真实 glTF/MDX **骨骼动画逐帧蒙皮**（阶段 3 已接入 bind pose 静态真实模型，动画留后续）、逐像素 GPU 纹理采样（阶段 3 用 CPU 逐顶点 UV 采样 + 三角形级 alpha 剔除）、战争迷雾、JASS/wtg 触发器 VM、战役、Mod API（均为后续阶段已知限制，见 D7 / D8 / Risks）。
 - 联机对战接入本局验收（P5 已有 `w3-net` / relay，本 change 只走单机对 AI）。
 - 中文上屏（需内嵌 CJK 字体与许可证人工拍板，留后续独立 change）；本期文字层沿用已启用的开源内置字体 ASCII 文案。
 - 声称全平台确定性已达成（ADR 0002 目前仅 Windows 与 Debian 12 x86_64 / rustc 1.99.1 经 golden hash 验证）。
@@ -70,14 +70,14 @@
 - **关联 ADR 0002 与跨平台确定性影响**：HUD 数据与选中集合 MUST NOT 进入哈希或快照；输入执行帧由冻结帧号推导，不用墙钟或呈现帧号；`isolation.rs` 全绿。
 - **架构原则与分层依赖**：ISP（HUD 只读派生）、OCP（中文上屏独立扩展）、`w3-core` 不反向依赖 `w3-client`。
 
-### D5：程序化几何按类型区分，履行既有呈现契约
+### D5：程序化几何按类型区分（阶段 3 起降级为无资产回退）
 
-- **决策**：`w3-render` 扩展 `Scene` 按实体类型（农民 / 战斗单位 / 建筑 / 资源点）生成不同程序化几何，配队伍色、选中环与血条；这是对 `3d-rendering` 既有「Skeletal animation and team color」与「Terrain and heightfield presentation」的最小可辨识子集，真实 glTF/MDX 模型与骨骼动画留后续。
+- **决策**：`w3-render` 扩展 `Scene` 按实体类型（农民 / 战斗单位 / 建筑 / 资源点）生成不同程序化几何，配队伍色、选中环与血条；这是对 `3d-rendering` 既有「Skeletal animation and team color」与「Terrain and heightfield presentation」的最小可辨识子集。**阶段 3 起**（D8）静态摆放与动态单位优先用真实 glTF 网格，`Scene` 仅在无本机资产 / 模型缺键 / CI 环境回退到程序化几何；既有单测仍覆盖该回退路径。
 - **备选方案（Alternatives considered）**：
-  - *本期接入真实 MDX/glTF 模型* — **否决**。需导出资产与模型解析，阻塞主线且资产不入库。
+  - *本期只做程序化几何、真实模型永久留后续* — **否决（用户拍板）**。用户判定「EI 地图上使用基本几何体，不是达到参考项目的制作水平」，要求替换。
   - *维持四面体占位* — **否决**。用户明确判定「根本没法玩」，无法分辨类型与敌我。
-  - *程序化几何 + 队伍色 + 选中环* — **采纳**。零资产、类型可辨、改动集中在表现层。
-- **关联 ADR 0002 与跨平台确定性影响**：纯表现层几何与颜色 MUST NOT 反写权威状态、进入哈希或快照；`capture_snapshot()` 字节与只读基线一致。
+  - *程序化几何 + 队伍色 + 选中环（初版）+ 阶段 3 真实 glTF 模型覆盖* — **采纳**。无资产时零依赖可跑，有资产时真实呈现。
+- **关联 ADR 0002 与跨平台确定性影响**：纯表现层几何与颜色 MUST NOT 反写权威状态、进入哈希或快照；`capture_snapshot()` 字节与只读基线一致；真实模型顶点流同为表现层派生数据。
 - **架构原则与分层依赖**：SRP（呈现只读）、ADR 0001（零资产）、`3d-rendering` 既有契约不被改写。
 
 ### D6：入口复用 `ClientApp`，不改既有公开签名
@@ -101,22 +101,45 @@
 - **备选方案（Alternatives considered）**：
   - *GPU `texture_2d_array` + UV 纹理采样 shader* — **否决**。shader / GPU 管线在 CLI / headless 侧无法验证，正是此前反复黑屏 / 错位返工的根源；改动 GPU 顶点布局会牵动 `isolation.rs` 确定性 readback 契约。
   - *真实贴图 CPU 采样进顶点色 + 小地图降采样颜色网格* — **采纳**。零 shader 改动、零 GPU 黑屏风险，真实像素确实上屏，且 `cargo test --workspace` 全绿、e2e 断言顶点色较调色板路径改变且逐帧可复现。
-  - *接入真实 glTF/MDX 骨骼模型* — **否决（留阶段 3）**。离线缓存无 `gltf` crate，外链贴图 / 骨骼动画解析工程量大且 CLI 侧不可验，如实登记为已知限制，不在本轮假装完成。
+  - *接入真实 glTF/MDX 模型* — 阶段 2 曾否决，**但阶段 3 已实现（见 D8）**：手写 glTF 2.0 子集解析（用已有 `serde_json` / `image`，零新依赖）读取 922 个本机模型，bind pose 静态真实网格 + 真实贴图颜色上屏；逐帧骨骼动画蒙皮仍留后续。原「离线无 gltf crate、CLI 不可验」的判断被证明是回避——数据一直在本机，缺的是读取器与 headless GPU 自测。
 - **关联 ADR 0002 与跨平台确定性影响**：`RgbaImage` / 顶点色 / 颜色网格 / `StaticMarker` 全部是表现层派生数据，MUST NOT 进入权威状态、FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 3）快照；`scene.rs` 新增字段不参与 `Scene` 的权威哈希（Scene 本就不进哈希）；`git diff -- crates/w3-core/` 仍为空，`determinism` 26 项 / `isolation` 3 项全绿。
 - **资产与许可证（ADR 0001）**：6 张贴图与底图来自玩家本机合法导出的经典客户端，路径由 gitignored `config.toml` 提供、仓库零资产、绝不入库；`image` 及 13 个传递依赖许可证逐一核对（全为 MIT / Apache-2.0 / BSD-3-Clause / Zlib / 0BSD / Unlicense 宽松许可、与 GPLv3 兼容），登记 `NOTICE.md` 新节、`Cargo.lock` 提交；`asset scan OK`。
 - **架构原则与分层依赖**：SRP（真实数据装配独立 `real_map` / `textures` 模块）、OCP（`ClientApp` 用 builder 注入，既有 `playable` 入口零改动）、只读呈现边界、ADR 0004（导出 `f64` 只经表现层缩放，不进冻结边界 / 权威状态）。
+
+### D8：真实 glTF 模型全量替换基本几何体 + headless GPU 自测（阶段 3，用户追加）
+
+- **背景**：阶段 2 人工窗口验收后，用户判定「EI 地图上仍是基本几何体、未达参考项目制作水平」。只读核实根因：`w3-render::Model` 只有骨骼 / 动画 / 材质**元数据**、没有网格顶点；922 个真实 glTF 一直躺在本机未被读取，`Scene` 只能用四面体 / 圆锥 / 长方体拼摆放。不是数据缺失，是缺读取器。
+- **决策**：
+  - `w3-content::gltf`：手写 glTF 2.0 子集解析——`.gltf` JSON（`buffers` / `bufferViews` / `accessors` / `meshes` / `materials` / `images`）+ 外链 `.bin` 交错顶点（`POSITION` / `NORMAL` / `TEXCOORD_0` + 索引）+ 相对路径 PNG 贴图；输出中立 `ModelMesh`。**零新依赖**（仅用已有 `serde_json` / `image`）；bind pose 直接取 `POSITION`（glTF 规范下即站立姿势），不采样动画 / `JOINTS` / `WEIGHTS`。
+  - `w3-content::model_index`：`ModelCatalog` 扫描 `asset-converted/` 922 个 glTF，结合 SLK `unitUI.json` / `Doodads.json` 的 `file` 字段建立 `typeId` / `doodadID` → 模型路径映射；处理大小写、`numVar` 变体、树 `LTlt` 等 `file` 为空的 tileset 树兜底、上游空占位模型跳过。EI 实测 **2588/2588 摆放 + 6 类动态实体全部命中真实模型**。
+  - `w3-render::model_geometry`：把 `ModelMesh` 烘焙成表现层三角形——逐顶点 UV 采样真实贴图像素写入顶点色、按三角形重心 alpha 剔除树叶镂空（`MASK cutoff`）、按 `wc3ToGltfVec3` 坐标约定展开成 `SceneVertex`（`surface=-1`）。**保持 `SceneVertex` 布局 / shader / 单管线 / 单 draw call 零改动**（前几轮反复黑屏的经验），真实模型几何与真实贴图颜色上屏。
+  - `w3-client::model_assembly`：按摆放位姿（缩放 / 贴地 / `angle`）预展开静态模型顶点；`Scene` 用 `set_static_model_vertices` / `set_entity_models` 注入，静态摆放与动态单位优先真实网格、缺键回退程序化几何（D5）；同一 glTF 缓存解码（树占 1588 个摆放）；顶点预算与单模型三角形上限防御异常资产。
+  - **headless GPU 自测**：新增 `w3-render::render_headless_rgba`（自建 `Instance`→`adapter`→`device`、复用 `build_pipeline` / `record_scene` / readback，不依赖窗口）。`gpu_headless.rs` 3 项用**合成顶点流**验证离屏管线本身（非黑屏 / 逐字节确定 / 空流纯背景）；`real_map_e2e.rs` 的 `real_gltf_models_render_on_screen_not_black` 用**A/B 像素差对照**——分别离屏渲染「仅地形」与「地形+2588 真实模型」两帧，断言 B 相对 A 有大量像素被改变且变化像素含多种模型贴图颜色（地形自身无法满足，故真正证明真实模型贡献画面）、全场景非黑屏。这破解了此前「shader / GPU 呈现只能人工看窗口」的验证盲区；真窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组）。
+- **备选方案（Alternatives considered）**：
+  - *改 shader / 顶点布局 / bind group 做 GPU 逐像素纹理采样 + 图集* — **否决**。四处 GPU 大改、tree 稀疏网格 + alpha 镂空易错，正是前几轮反复黑屏的雷区；且用户明确要求「先自测充分再让我人工测，不要反复试错」。
+  - *CPU 逐顶点 UV 采样进顶点色 + 三角形级 alpha 剔除，零 GPU 改动* — **采纳**。真实几何 + 真实贴图颜色上屏、全链路 CPU 可测、确定性可证、零黑屏风险，一次交付。
+  - *引入 `gltf` crate* — **否决**。离线缓存无此 crate，且 glTF 子集解析用已有依赖即可，避免新依赖 / 许可证审查。
+- **诚实边界（已知限制，不冒充完成）**：
+  - 逐像素 GPU 纹理过滤未做（现为逐顶点 UV 采样进顶点色，稀疏网格贴图细节有限）；
+  - 骨骼动画逐帧蒙皮未做（现为 bind pose 静态站姿）；
+  - `ruins` / `ashenvale` 等未纳入上游 `convert-echo-isles` 子集的少数装饰物，用同类真实模型语义兜底（非原版精确模型）；`sloc`（起始点，2 个）在 SLK 无模型，也经语义兜底映射到通用真实模型并计入 `resolved`——即「2588/2588、0 skip」指每个摆放都落到真实网格，但其中约 2 个起始点与部分跨 tileset 装饰物用的是同类真实模型而非原版精确资产；
+  - 真实模型在真 GPU 窗口的最终观感（含 egui 底图叠加）仍须人工验收（第 6.3 / 8 组）；headless 自测已用 A/B 像素差对照在离屏 3D 场景证明真实模型贡献画面，但不覆盖 HUD overlay 与真窗口最终观感。
+- **关联 ADR 0002 与跨平台确定性影响**：glTF 顶点 / PNG 像素 / `SceneVertex` / `BakedModel` / 颜色网格全部是表现层 `f32` 派生数据，MUST NOT 进入权威状态、FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 3）快照；`w3-core` 零 diff、`determinism` 26 项 / `isolation` 3 项全绿；`build_vertices` 纯函数、`BTreeMap` 稳定顺序、模型展开确定性由 e2e 逐帧比对证明。
+- **资产与许可证（ADR 0001）**：922 个 glTF / `.bin` / PNG 来自玩家本机合法导出的经典客户端，由 gitignored `config.toml` 的 `models_dir` / `slk_dir` 定位、仓库零资产、绝不入库；**零新增 Cargo 依赖**，`Cargo.lock` / `NOTICE.md` 无变化；`asset scan OK`。
+- **架构原则与分层依赖**：SRP（读取 `w3-content::gltf` / 索引 `model_index` / 烘焙 `model_geometry` / 装配 `model_assembly` 分离）、OCP（`ClientApp` builder 注入，既有入口零改动）、DIP（`Scene` 只接收 `SceneVertex` / `BakedModel`，不依赖路径 / 目录）、只读呈现边界。
 
 ## Risks / Trade-offs
 
 - [AI 太弱导致「没有对手感」或打不完一局] → D3 命令源至少覆盖采集、训练与周期性进攻；人工验收清单逐项勾「一局可打完」；若强度仍不足，作为后续独立 change 增强，**不在本 change 扩内核**。
 - [合成定义数值不合理导致闭环卡住（资源不够 / 训练过慢）] → CPU 自测用固定命令脚本跑完整一局（采集 → 造兵营 → 训兵 → 摧毁主城 → 结算）验证可达；数值全为编译期常量，便于一次性校准。
-- [真实导出数据越过表现层污染权威状态] → 真实地图 / 贴图 / 底图全部只在 `real_map` / `textures` / `Scene` / `HudModel` 的表现层派生数据中流转；`w3-content` 原始 `f64` 与 PNG 像素 MUST NOT 进入 `FrozenDefinitions` / 状态哈希 / 快照（D2 / D7）；`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍为 3 作硬门禁。
+- [真实导出数据越过表现层污染权威状态] → 真实地图 / 贴图 / 底图 / glTF 网格全部只在 `real_map` / `textures` / `gltf` / `model_geometry` / `Scene` / `HudModel` 的表现层派生数据中流转；`w3-content` 原始 `f64`、glTF 顶点与 PNG 像素 MUST NOT 进入 `FrozenDefinitions` / 状态哈希 / 快照（D2 / D7 / D8）；`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍为 3 作硬门禁。
 - [中文未上屏被误认为 HUD 不可见] → ASCII 文案 + 已启用的开源内置字体保证文字层可见；中文上屏与 CJK 字体明确留后续独立 change（CODEBUDDY.md §10 人工独占）。
 - [`w3-core` 被无意改动破坏确定性] → `git diff -- crates/w3-core/` 为空、`determinism` 26 项 / `isolation` 3 项 / `cargo test --workspace` 全绿、`SNAPSHOT_VERSION` 仍为 3 作硬门禁；critic 复审逐项勾对。
 - [人工 GPU 冒烟被 CI 绿灯冒充] → CI 只覆盖编译 + CPU 测试；真窗口「打完一局」只能人工在有 GPU / 显示设备桌面执行，清单未逐项勾选前不得归档。
-- [新增依赖 / 许可证越界] → 阶段 2 经用户授权新增 `image`（png only）及 13 个传递依赖，`cargo metadata` 逐一核对 license 均为宽松许可、与 GPLv3 兼容，已登记 `NOTICE.md` / `Cargo.lock`；CJK 字体、真实模型、开源资产若后续引入，仍走 CODEBUDDY.md §10 人工拍板 + `NOTICE.md` 登记 + `Cargo.lock` 提交。
-- [真实 glTF/MDX 骨骼模型 / 逐像素 GPU 纹理被误当成已实现] → 如实登记为**阶段 3 已知限制**：本轮静态摆放仍用程序化几何（四面体 / 长方体 / 圆锥 / 八面体），地表是 CPU 采样进顶点色（非逐像素纹理），离线无 `gltf` crate 且 CLI 侧不可验；不冒充已完成（D7）。
-- [真实视觉最终上屏效果未经人工验收] → CPU 侧只验证贴图加载 / 顶点色改变 / 颜色网格非纯色 / 确定性；egui 底图与顶点色地形在真 GPU 窗口的观感、以及阶段 1/2 之前的全部人工 GPU 冒烟项，仍须用户在有显示设备桌面按 `smoke-checklist.md` 逐项执行（第 6.3 / 8 组），CI 不覆盖 GPU 链路，清单未勾前不归档。
+- [新增依赖 / 许可证越界] → 阶段 2 经用户授权新增 `image`（png only）及 13 个传递依赖，`cargo metadata` 逐一核对 license 均为宽松许可、与 GPLv3 兼容，已登记 `NOTICE.md` / `Cargo.lock`；阶段 3 真实 glTF 模型**零新增依赖**（仅用已有 `serde_json` / `image`）。CJK 字体、GPU 图集 / 开源资产若后续引入，仍走 CODEBUDDY.md §10 人工拍板 + `NOTICE.md` 登记 + `Cargo.lock` 提交。
+- [阶段 3 真实 glTF 模型的诚实边界] → 真实 glTF 网格 + 真实贴图颜色**已实现**（2588 摆放 + 6 类动态单位，D8）；如实登记为**后续已知限制**：逐像素 GPU 纹理过滤（现为逐顶点 UV 采样进顶点色）、骨骼动画逐帧蒙皮（现为 bind pose 静态）、少数非 EI 子集装饰物用同类真实模型兜底、真 GPU 窗口 HUD 叠加观感须人工验收。不冒充已完成，也不再把「真实模型上屏」整体留后续（D8 / `tasks.md` 第 12 组）。
+- [GPU 呈现链路只在真窗口可验、前几轮反复黑屏] → 新增 `render_headless_rgba`：`gpu_headless.rs`（合成顶点流，验管线非黑屏 / 确定性）+ `real_map_e2e` 的 A/B 像素差对照（仅地形 vs 地形+真实模型，断言模型显著改变画面像素）用真 adapter 在 CLI 证明离屏 3D 链路与真实模型贡献画面；人工 GPU 冒烟（第 6.3 / 8 组）仍须执行以确认 HUD overlay 与最终观感，CI / headless 测试不覆盖 overlay。
+- [真实视觉最终上屏效果未经人工验收] → CLI 侧已验证贴图加载 / 顶点色改变 / 颜色网格非纯色 / 确定性，并用真 adapter 离屏渲染 + A/B 像素差对照证明真实模型贡献画面（非黑屏）；但 egui 底图叠加、HUD overlay、真 GPU 窗口的最终观感，以及第 6.3 / 8 组全部人工 GPU 冒烟项，仍须用户在有显示设备桌面按 `smoke-checklist.md` 逐项执行。CI 不覆盖真窗口 GPU 链路与 HUD overlay，清单未勾前不归档。
 - [参考项目代码被复制或 AGPLv3 组合] → 四个参考项目只读；`WarsmashModEngine`(AGPLv3) 仅作语义参考，未经 ADR 复核不得引入其代码。
 - [命令卡 / 小地图交互被误接成权威命令] → 小地图点击只平移表现层相机；选中集合、编组、HUD 布局全部表现层专属，`isolation.rs` 与逐帧哈希比对守住。
 - [窗口内「重开」按键未实现] → 本 change 验收线为「打完一局」；spec 的重开 Scenario 已与实现对齐为「以相同冻结定义与开局脚本重新构造一局」（CPU 层 `full_script_plays_one_match_to_victory_and_restart_is_clean` 验证），窗口内按键式重开留后续独立 change（`critic` residual R2）。
@@ -127,7 +150,7 @@
 
 ## Migration Plan
 
-1. **规范侧（本轮）**：写 `openspec/changes/melee-playable-loop/` 下 proposal / specs / design / tasks 四件套；`openspec validate melee-playable-loop --strict` 通过；`python tools/check_encoding.py` 与 `git diff --check` 通过。不碰主 specs / 其它 change / `crates/w3-core/` / 根配置；实施阶段按用户拍板追加了 `crates/w3-client` / `w3-render` / `w3-content` 的表现层改动与 `NOTICE.md` / `Cargo.lock` 依赖登记（D7）。
+1. **规范侧（本轮）**：写 `openspec/changes/melee-playable-loop/` 下 proposal / specs / design / tasks 四件套；`openspec validate melee-playable-loop --strict` 通过；`python tools/check_encoding.py` 与 `git diff --check` 通过。不碰主 specs / 其它 change / `crates/w3-core/` / 根配置；实施阶段按用户拍板追加了 `crates/w3-client` / `w3-render` / `w3-content` 的表现层改动（真实地图阶段 1/2 D7、真实 glTF 模型阶段 3 D8）与 `NOTICE.md` / `Cargo.lock` 依赖登记（阶段 2 `image`；阶段 3 零新依赖）。
 2. **用户拍板后 `/opsx:apply`**：由对应 owner 实施（`w3-client` / `w3-render` 为主，`w3-core` 零改动），按 tasks 分组推进；写完 `cargo fmt --all`、提交前 `cargo fmt --all -- --check`。
 3. **CPU 自测**：固定命令脚本跑完一局；`cargo test -p w3-core --test determinism`（26 项）、`crates/w3-render/tests/isolation.rs`（3 项）、`cargo test --workspace`、`cargo build --examples`、`python tools/verify_all.py` 全绿。
 4. **本机自检（有显示设备机器）**：`cargo build -p w3-client --example melee` 与 `cargo run -p w3-client --example melee`，确认窗口打开、HUD 文字层与命令卡 / 小地图可见、英文结构化日志可观测。
@@ -139,7 +162,7 @@
 
 > 以下均为**可延后**的后续范围，不影响本 change 的 specs、方案与任务分解；若纳入本期，须回到对应 artifact 修订。
 
-- **真实数据接入权威定义**：表现层真实地图 / 贴图 / 小地图底图已在阶段 1/2 落地（D7）；是否进一步用真实 SLK 数值替换合成 `FrozenDefinitions`、引入真实单位数值，仍留后续独立 change（D2）。
+- **真实数据接入权威定义**：表现层真实地图 / 贴图 / 小地图底图已在阶段 1/2 落地（D7）、真实 glTF 模型在阶段 3 落地（D8）；是否进一步用真实 SLK 数值替换合成 `FrozenDefinitions`、引入真实单位数值，仍留后续独立 change（D2）。
 - **中文上屏与 CJK 字体**：需内嵌开源 CJK 字体，涉及新增依赖与许可证（CODEBUDDY.md §10 人工独占），留后续独立 change（D4）。
-- **真实模型 / 骨骼动画 / 迷雾 / 联机接入本局**：留 P7 后续阶段，不在本期验收线内（D5、D6）。
+- **逐像素 GPU 纹理 / 骨骼动画 / 迷雾 / 联机接入本局**：真实模型 bind pose + 逐顶点贴图已实现（D8）；逐像素纹理过滤、骨骼动画逐帧蒙皮、迷雾、联机接入本局仍留 P7 后续阶段，不在本期验收线内（D5、D6、D8 诚实边界）。
 - **AI 强度与多难度**：本期保证「有对手、可打完、可结算」；更丰富的 AI 行为（编队、科技、多难度）留后续 change（D3）。

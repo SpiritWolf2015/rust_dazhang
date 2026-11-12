@@ -724,6 +724,136 @@ impl GpuContext {
     }
 }
 
+/// 离屏（headless）渲染一帧并把颜色读回 CPU，返回紧凑 RGBA。
+///
+/// 不依赖任何窗口 / surface：自建 `Instance` → `adapter` → `device`、
+/// 复用同一 `build_pipeline` / `record_scene` / readback 逻辑，用 `Rgba8Unorm`
+/// 离屏纹理。专供**提交前 GPU 链路自测**——把「真实模型贴图是否真的上屏、
+/// 是否黑屏 / 纯色块」变成可在 CLI 断言的事实，而不必开窗口人工观察。
+/// 无 GPU 适配器时返回 `GpuUnavailable`，由测试跳过（不冒充通过）。
+pub fn render_headless_rgba(
+    vertices: &[SceneVertex],
+    view_proj: &glam::Mat4,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, RenderError> {
+    let width = width.max(1);
+    let height = height.max(1);
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    // 空顶点流：无需建 GPU 资源，返回与 `record_scene` Clear 一致的深蓝背景
+    // （0.02, 0.03, 0.06, 1.0 → RGBA8），也让 wgpu 的空 buffer slice 无从触发。
+    if vertices.is_empty() {
+        let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+        for _ in 0..(width as usize * height as usize) {
+            rgba.extend_from_slice(&[5, 8, 15, 255]);
+        }
+        return Ok(rgba);
+    }
+    let instance = wgpu::Instance::default();
+    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        compatible_surface: None,
+        ..Default::default()
+    }))
+    .map_err(|e| RenderError::GpuUnavailable(format!("headless request_adapter: {e:?}")))?;
+    let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("w3-render headless device"),
+        ..Default::default()
+    }))
+    .map_err(|e| RenderError::GpuUnavailable(format!("headless request_device: {e:?}")))?;
+
+    let resources = build_pipeline(&device, format);
+    let depth_view = create_depth_view(&device, width, height);
+    let color_texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("w3-render headless color"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("w3-render headless vertices"),
+        contents: bytemuck::cast_slice(vertices),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    queue.write_buffer(
+        &resources.uniform_buffer,
+        0,
+        bytemuck::cast_slice(&view_proj.to_cols_array()),
+    );
+
+    let bytes_per_row = (width * 4).div_ceil(256) * 256;
+    let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("w3-render headless readback"),
+        size: u64::from(bytes_per_row) * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&Default::default());
+    record_scene(
+        &mut encoder,
+        &color_view,
+        &depth_view,
+        &resources,
+        &vertex_buffer,
+        vertices.len() as u32,
+    );
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &color_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback_buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = readback_buffer.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(30)),
+        })
+        .map_err(|e| RenderError::Readback(format!("headless device poll: {e:?}")))?;
+    receiver
+        .recv()
+        .map_err(|e| RenderError::Readback(format!("headless map callback: {e}")))?
+        .map_err(|e| RenderError::Readback(format!("headless map async: {e:?}")))?;
+    let padded = {
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| RenderError::Readback(format!("headless get_mapped_range: {e:?}")))?;
+        mapped.to_vec()
+    };
+    readback_buffer.unmap();
+    readback::remove_row_padding(&padded, width, height, bytes_per_row)
+}
+
 /// winit 应用：把 `FrameProducer` 的只读帧喂给 `Scene`，再交给 `GpuContext`。
 pub struct RendererApp<P: FrameProducer> {
     producer: P,

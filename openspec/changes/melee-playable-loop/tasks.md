@@ -1,6 +1,6 @@
 # Tasks
 
-> 按 `design.md` D1–D7 决策分组，每组自带其工作所需的测试与验证；`w3-core` 全程零改动。工具 / 命令名保持原样，任务描述一律中文。第 1–7、9 组为用户拍板「能打完一局」的闭环与 HUD；第 10 / 11 组为实施期间用户追加的真实地图表现层阶段（D7）。第 6.3 / 8 组为人工 GPU 冒烟，须用户在有显示设备桌面执行，CI 不覆盖、未勾前不归档。
+> 按 `design.md` D1–D8 决策分组，每组自带其工作所需的测试与验证；`w3-core` 全程零改动。工具 / 命令名保持原样，任务描述一律中文。第 1–7、9 组为用户拍板「能打完一局」的闭环与 HUD；第 10 / 11 组为实施期间用户追加的真实地图表现层阶段 1/2（D7）；第 12 组为用户再次判定「EI 地图上仍是基本几何体」后追加的真实 glTF 模型阶段 3（D8）。第 6.3 / 8 组为人工 GPU 冒烟，须用户在有显示设备桌面执行，CI 不覆盖、未勾前不归档。
 
 ## 1. 规范基线与合成内容定义
 
@@ -56,9 +56,9 @@
 
 ## 8. 人工 GPU 冒烟（人工项，仅能在有 GPU 与显示设备的桌面执行）
 
-> 本组全部为**人工项**：只能由用户在本机逐项执行。**执行者与设备登记：由用户在本机（有 GPU / 显示设备桌面）执行；`melee` example 现依赖 `config.toml` 指向的本机真实 Echo Isles 导出（阶段 1/2，D7），真实资产留本机、不入库；玩法闭环 CPU 测试仍零资产。** **运行记录：本轮 AI 侧已完成 CPU 自测——`melee_loop` 7 项端到端（含「采集→建造→训练→摧毁主城→胜负结算→重开」一局可打完，以及 `ai_commands_are_frame_frozen_not_clock_driven` 确定性回归）、`determinism` 26 项、`isolation` 3 项、`w3-render` 36 项（含真实贴图采样 3 项回归）、`w3-content` 23 项、`real_map_e2e` 4 项（本机真实加载 6 张贴图 / 底图、无 skip）、`interaction` 21 项、`cargo test --workspace` 全绿，`verify_all.py` → `Verification OK`（编码 / fmt / openspec validate / asset scan 全通过）；6.2 编译 example 通过。6.3 真窗口与 8.1–8.5 仍待用户本机逐项勾选（判据见 `smoke-checklist.md`）。** 当前 CLI 会话标注「待人工在有 GPU / 显示设备桌面执行」；CI / headless / 无显示设备环境 MUST 明确报告无法执行、不静默跳过、不改判为通过；**CI 只覆盖编译 + CPU 测试，未验证 GPU 链路**；清单未逐项勾选前不得归档。
+> 本组全部为**人工项**：只能由用户在本机逐项执行。**执行者与设备登记：由用户在本机（有 GPU / 显示设备桌面）执行；`melee` example 现依赖 `config.toml` 指向的本机真实 Echo Isles 导出 + 922 个真实 glTF 模型（阶段 1/2/3，D7/D8），真实资产留本机、不入库；玩法闭环 CPU 测试仍零资产。** **运行记录：本轮 AI 侧已完成 CPU + 离屏 GPU 自测——`melee_loop` 7 项端到端（含「采集→建造→训练→摧毁主城→胜负结算→重开」一局可打完，以及 `ai_commands_are_frame_frozen_not_clock_driven` 确定性回归）、`determinism` 26 项、`isolation` 3 项、`w3-render` 45 项、`gpu_headless` 3 项（真 adapter 离屏渲染非黑屏、逐字节确定）、`w3-content` 35 项（gltf 解析 / model_index 映射）、`real_map_e2e` 7 项（本机真实加载贴图 / 底图 / 2588 真实 glTF 模型、无 skip、真实模型离屏渲染非黑屏）、`interaction` 21 项、`cargo test --workspace` 全绿，`verify_all.py` → `Verification OK`（编码 / fmt / openspec validate / asset scan 全通过）；6.2 编译 example 通过。6.3 真窗口与 8.1–8.5 仍待用户本机逐项勾选（判据见 `smoke-checklist.md`）。** 当前 CLI 会话标注「待人工在有 GPU / 显示设备桌面执行」；CI / headless / 无显示设备环境 MUST 明确报告无法执行、不静默跳过、不改判为通过；**CI 只覆盖编译 + CPU 测试 + 本机 headless 离屏 3D 场景，未验证真窗口 GPU 链路与 HUD overlay**；清单未逐项勾选前不得归档。
 
-- [ ] 8.1 人工项：窗口能开可关；真实 Echo Isles 129×97 地形（非合成浅碗）、真实 BLP→PNG 地表贴图颜色（非调色板色块）、97+2491 静态摆放贴地可见、真实 `war3mapMap.png` 小地图底图（非纯灰底），且 HUD 文字层 / 命令卡 / 选择面板 / 生产队列可见；验证：人工记录可观察证据（对应 `smoke-checklist.md` B1–B6）
+- [ ] 8.1 人工项：窗口能开可关；真实 Echo Isles 129×97 地形（非合成浅碗）、真实 BLP→PNG 地表贴图颜色（非调色板色块）、**2588 个静态摆放与动态单位呈现为真实 glTF WC3 模型（树 / 岩石 / 建筑 / 农民 / 士兵，非四面体 / 圆锥 / 长方体等基本几何体）**、真实 `war3mapMap.png` 小地图底图（非纯灰底），且 HUD 文字层 / 命令卡 / 选择面板 / 生产队列可见；验证：人工记录可观察证据（对应 `smoke-checklist.md` B1–B6）
 - [ ] 8.2 人工项：在真实地形 / 真实贴图上框选拾取不错位；右键移动 / 攻击、采集、建造、训练、取消、编队逐项生效且失败有英文日志；验证：人工记录观察
 - [ ] 8.3 人工项：从开局到分出胜负**打完一局**（含 AI 对手行为、胜负显示与重开）；验证：人工记录完整剧本与结果
 - [ ] 8.4 人工项：WASD / 滚轮 / Z-X 相机、拖拽 `Resized`、高刷下逻辑帧恒定 30；验证：人工记录画面与帧号
@@ -90,10 +90,25 @@
 - [x] 11.5 新增依赖许可证核对与登记；验证：`cargo metadata` 逐一提取 13 个新包 license，全为宽松许可与 GPLv3 兼容，`NOTICE.md` 新节登记、`Cargo.lock` 提交、资产扫描 `asset scan OK`
 - [x] 11.6 全量门禁；验证：`python tools/verify_all.py` → `Verification OK`（编码 / rustfmt / 全测试 / `openspec validate` / 资产扫描全绿），`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍为 3
 
-> **阶段 2 已知限制（如实登记，不冒充完成，留阶段 3 独立 change）**：真实 glTF/MDX 骨骼模型未接入（离线无 `gltf` crate、CLI 侧不可验），静态摆放仍为程序化几何；地表为 CPU 采样进顶点色而非逐像素 GPU 纹理；egui 底图与顶点色地形在真 GPU 窗口的最终观感须人工验收（第 6.3 / 8 组，`smoke-checklist.md`）。
+> **阶段 2 收尾说明**：当时登记「真实 glTF 模型留阶段 3 独立 change」。用户随后在真窗口判定「EI 地图上仍是基本几何体、未达参考项目制作水平」，故**阶段 3 在同一 change 内追加并完成**（见第 12 组 / `design.md` D8）——2588 摆放 + 6 类动态单位全部替换为真实 glTF 模型。仍成立的已知限制：逐像素 GPU 纹理过滤、骨骼动画逐帧蒙皮、真 GPU 窗口 HUD overlay 观感须人工验收（第 6.3 / 8 组）。
+
+## 12. 真实 glTF 模型与 headless GPU 自测（阶段 3，用户追加 / D8）
+
+> 用户判定「EI 地图上使用基本几何体，不是达到参考项目的制作水平」，要求全量替换。根因：`w3-render::Model` 只有骨骼 / 动画 / 材质元数据、无网格顶点；922 个真实 glTF 一直在本机未被读取。策略：手写 glTF 2.0 子集解析（零新依赖）+ CPU 烘焙进顶点色（零 shader / 零 GPU 黑屏风险）+ headless 离屏 readback 自测（破解「GPU 只能人工看窗口」盲区）。
+
+- [x] 12.1 `w3-content::gltf` 手写 glTF 2.0 子集解析（`.gltf` JSON + `.bin` 交错顶点 `POSITION`/`NORMAL`/`TEXCOORD_0` + 索引 + 相对路径 PNG 贴图 → `ModelMesh`），零新依赖（仅用已有 `serde_json`/`image`）；验证：`gltf.rs` 单测（交错 stride、u16/u32 索引、材质 alpha/doubleSided、越界 / 短 buffer / 坏 JSON 显式报错、确定性）全绿；真实 Corn / 树 / Footman / 兵营 glTF 探针确认 136/53/372/1671 三角形、贴图与 `node_scale=0.01` 正确解析
+- [x] 12.2 `w3-content::model_index` 的 `ModelCatalog` 扫描 922 个 glTF + SLK `file` 字段建立 `typeId`/`doodadID`→模型映射（大小写不敏感、变体前缀、树 `LTlt` 等 `file` 空者按类别兜底、候选列表跳过上游空占位）；验证：`model_index.rs` 单测（合成目录 / 变体 / 树兜底 / 确定性）全绿；真实目录探针 922 索引、单位 25/26（`sloc` 无模型）、装饰物 21/21、6 个实体键全命中
+- [x] 12.3 `w3-render::model_geometry` 烘焙：逐顶点 UV 采样真实贴图像素写入顶点色、按三角形重心 alpha 剔除树叶镂空、`wc3ToGltfVec3` 坐标展开成 `SceneVertex`（布局 / shader / 单管线零改动）；验证：`model_geometry.rs` 单测（贴图采样、alpha 剔除、坐标翻转、退化 UV、展开确定性）全绿
+- [x] 12.4 `Scene` 增加 `set_static_model_vertices` / `set_entity_models`，静态摆放与动态单位优先真实网格、缺键回退程序化几何；验证：`scene.rs` 新增 3 项单测（静态替换、动态替换、缺键回退）全绿，`w3-render` 45 项全绿
+- [x] 12.5 `w3-client::model_assembly` 按摆放位姿（缩放 / 贴地 / `angle`）预展开静态模型、6 类动态实体烘焙、glTF 解码缓存、顶点预算保护；`config.toml` 加 `models_dir`/`slk_dir`，`real_map::assemble` / `ClientApp` builder / `melee` example 串联；验证：真实装配探针 **2588/2588 摆放命中、0 skip、37.4 万真实模型顶点、3970 种真实贴图颜色、6 实体模型（主城 3212 / 兵营 1667 / 步兵 369 三角形）**
+- [x] 12.6 `w3-render::render_headless_rgba` 离屏 GPU 渲染 + readback（真 adapter、无窗口、复用 `build_pipeline`/`record_scene`）；验证：`gpu_headless.rs` 3 项（合成顶点流验管线非黑屏 / 逐字节确定 / 空流纯背景，明确不声称证明真实模型上屏）全绿
+- [x] 12.7 真实资产 e2e：`real_gltf_models_replace_all_programmatic_geometry`（2588 全命中、顶点数远超程序化、真实贴图颜色丰富、6 实体模型）、`real_models_enter_scene_vertices_and_are_deterministic`（程序化被真实网格整体替换、逐帧可复现）、`real_gltf_models_render_on_screen_not_black`（**A/B 像素差对照**：仅地形 vs 地形+真实模型两帧，断言真实模型显著改变大量画面像素 + 变化像素含多种模型贴图颜色 + 全场景非黑屏，地形自身无法伪造）；验证：`real_map_e2e.rs` 7 项全绿、无 skip
+- [x] 12.8 全量门禁与合规；验证：`python tools/verify_all.py` → `Verification OK`（编码 / rustfmt / 全 workspace 测试 / `openspec validate` / 资产扫描全绿），`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍为 3、**零新增 Cargo 依赖**、`NOTICE.md`/`Cargo.lock` 无新变化
+
+> **阶段 3 诚实边界（如实登记，不冒充完成）**：真实模型为 bind pose 静态网格（逐帧骨骼动画蒙皮留后续）；贴图为逐顶点 UV 采样进顶点色（逐像素 GPU 纹理过滤留后续，稀疏网格细节有限）；少数非 EI convert 子集装饰物用同类真实模型语义兜底；真 GPU 窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组，`smoke-checklist.md`）；headless 自测已用 A/B 像素差对照证明真实模型在离屏 3D 场景贡献画面，但不覆盖 HUD overlay 与真窗口最终观感。
 
 ## Workflow follow-up
 
 - 人工 `git push` → CI 双平台 `python tools/verify_all.py` 绿灯。
 - 由编排者执行 `/opsx:archive`（`openspec archive melee-playable-loop -y`），确认主 `openspec/specs/` 新增 `melee-match` 与 `rts-command-hud`，既有 12 个 capability 未被改写。
-- 后续独立 change：真实 SLK 数值进权威 `FrozenDefinitions`（表现层真实地图 / 贴图已在本 change 阶段 1/2 落地）、逐像素 GPU 纹理采样、真实 glTF/MDX 模型与骨骼动画、中文上屏（CJK 字体与许可证人工拍板）、AI 强度与多难度、联机接入本局。
+- 后续独立 change：真实 SLK 数值进权威 `FrozenDefinitions`、逐像素 GPU 纹理采样、真实 glTF 骨骼动画逐帧蒙皮、中文上屏（CJK 字体与许可证人工拍板）、AI 强度与多难度、联机接入本局（表现层真实地图 / 贴图 / 小地图底图已在阶段 1/2、真实 glTF 模型 bind pose 已在阶段 3 落地）。

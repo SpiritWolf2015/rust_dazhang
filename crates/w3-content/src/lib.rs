@@ -22,8 +22,10 @@
 //! 必须留在本机；其中任何文件都不得提交进本仓库。测试使用合成 fixture。
 
 pub mod definitions;
+pub mod gltf;
 pub mod heightfield;
 pub mod load;
+pub mod model_index;
 pub mod placements;
 pub mod table;
 pub mod textures;
@@ -32,8 +34,10 @@ pub use definitions::{
     AbilityDef, CONTENT_HASH_SCHEMA, DefinitionError, DefinitionKind, DefinitionTables,
     FrozenDefinitions, ItemDef, UnitDef, UpgradeDef, from_slk_tables,
 };
+pub use gltf::{GltfError, ModelMesh, SubMesh, load_gltf, parse_gltf};
 pub use heightfield::{CenterOffset, HeightfieldError, TerrainHeightfield};
 pub use load::{ContentError, ParsedMap, load_map, load_table};
+pub use model_index::{ENTITY_MODEL_FILES, ModelCatalog, ModelClass, ModelIndexError};
 pub use placements::{
     DoodadPlacement, DoodadsFile, PlacementError, Position3, UnitPlacement, UnitsFile,
 };

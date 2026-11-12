@@ -42,6 +42,7 @@ pub mod hud;
 pub mod i18n;
 pub mod input;
 pub mod melee;
+pub mod model_assembly;
 pub mod net_driver;
 pub mod presentation;
 pub mod real_map;

@@ -18,9 +18,12 @@
 //!   定义的快照（ADR 0002）。
 //!
 //! 阶段 2 接入真实 BLP→PNG 地表贴图（CPU 采样进地形顶点色）与
-//! `war3mapMap.png` 小地图底图（CPU 降采样颜色网格）；静态摆放仍用
-//! 程序化几何，glTF 骨骼模型留后续阶段。以上全部是表现层数据，MUST NOT
-//! 进入权威状态、状态哈希或快照（ADR 0002）。
+//! `war3mapMap.png` 小地图底图（CPU 降采样颜色网格）；阶段 3 把 2588 个
+//! 静态摆放与 6 类动态单位全部替换为真实 glTF WC3 模型（bind pose 静态网格
+//! + 逐顶点 UV 采样贴图，程序化几何仅在无本机资产 / 缺键时回退）。真实模型
+//! 由 [`w3_client::model_assembly`] 装配、经 `ClientApp` builder 注入 `Scene`。
+//! 逐帧骨骼动画蒙皮与逐像素 GPU 纹理过滤留后续阶段。以上全部是表现层数据，
+//! MUST NOT 进入权威状态、状态哈希或快照（ADR 0002）。
 
 use std::path::Path;
 
@@ -41,7 +44,9 @@ const MAX_FRAMES: u32 = u32::MAX;
 const AI_HORIZON: u64 = 3600;
 
 /// 纯内存模型库：为每种动态实体类型插入一个空模型键，并按开局实体 ID
-/// 绑定类型标签，使 `Scene` 生成对应程序化几何（零资产读取）。
+/// 绑定类型标签。`Scene` 用该 key 匹配 [`Scene::set_entity_models`] 注入的
+/// 真实 glTF 模型；无真实模型时回退到程序化几何。本库本身零资产读取，
+/// 真实网格由 `real_map::assemble` 从本机 glTF 装配后单独注入。
 fn synthetic_library(setup: &MeleeSetup) -> ModelLibrary {
     let mut library = ModelLibrary::default();
     for key in [
@@ -78,12 +83,16 @@ fn main() {
     );
     log::info!(
         target: "w3_client",
-        "real map loaded: vertices={} static_markers={} columns={} terrain_tiles={} minimap={}",
+        "real map loaded: vertices={} static_markers={} columns={} terrain_tiles={} minimap={} model_vertices={} entity_models={} models_resolved={}/{}",
         real_map.terrain.vertices.len(),
         real_map.markers.len(),
         real_map.terrain.columns,
         real_map.terrain_tiles.as_ref().map_or(0, |tiles| tiles.len()),
         real_map.minimap_image.is_some(),
+        real_map.static_model_vertices.len(),
+        real_map.entity_models.len(),
+        real_map.model_stats.resolved,
+        real_map.model_stats.placements,
     );
 
     let setup = MeleeSetup::new();
@@ -113,6 +122,8 @@ fn main() {
         .with_static_markers(real_map.markers)
         .with_terrain_tiles(real_map.terrain_tiles)
         .with_minimap_image(real_map.minimap_image)
+        .with_static_model_vertices(real_map.static_model_vertices)
+        .with_entity_models(real_map.entity_models)
         .with_entity_kinds(kinds)
         .run()
         .expect("melee example: reason=window_run_failed");

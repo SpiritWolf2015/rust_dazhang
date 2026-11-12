@@ -26,8 +26,8 @@ use egui_wgpu::ScreenDescriptor;
 use w3_content::RgbaImage;
 use w3_core::{CommandError, Event, GameplayCommandError, Snapshot, WorldView};
 use w3_render::{
-    Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene, StaticMarker,
-    TerrainMesh,
+    BakedModel, Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene,
+    SceneVertex, StaticMarker, TerrainMesh,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -272,6 +272,19 @@ impl<P: StepDriver + 'static> ClientApp<P> {
     /// 注入真实小地图底图并降采样为颜色网格（纯 CPU，不上传 GPU 纹理）。
     pub fn with_minimap_image(mut self, image: Option<RgbaImage>) -> Self {
         self.minimap_backdrop = image.map(|image| minimap_backdrop(&image, MINIMAP_GRID));
+        self
+    }
+
+    /// 注入真实地图静态摆放的 glTF 模型（预展开顶点，纯表现层）。
+    /// 非空时替代程序化几何；既有入口不受影响。
+    pub fn with_static_model_vertices(mut self, vertices: Vec<SceneVertex>) -> Self {
+        self.scene.set_static_model_vertices(vertices);
+        self
+    }
+
+    /// 注入动态实体类型键 → 真实烘焙模型（纯表现层）。
+    pub fn with_entity_models(mut self, models: BTreeMap<String, BakedModel>) -> Self {
+        self.scene.set_entity_models(models);
         self
     }
 

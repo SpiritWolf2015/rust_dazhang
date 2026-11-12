@@ -26,7 +26,7 @@ pub use model::{
     ResolvedMaterial, Sequence, TEAM_COLORS, Track, team_color,
 };
 pub use scene::{
-    DisplayHints, FrameInput, Instance, Scene, SceneVertex, UNIT_MARKER_SIZE, display_hints,
-    facing_to_radians, world_to_f32,
+    DisplayHints, FrameInput, Instance, LORDAERON_SUMMER_TILES, Scene, SceneVertex, StaticMarker,
+    StaticShape, UNIT_MARKER_SIZE, display_hints, facing_to_radians, world_to_f32,
 };
 pub use terrain::{TerrainMesh, TerrainVertex};

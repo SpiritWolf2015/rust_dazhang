@@ -25,7 +25,8 @@ use std::time::Instant;
 use egui_wgpu::ScreenDescriptor;
 use w3_core::{CommandError, Event, GameplayCommandError, Snapshot, WorldView};
 use w3_render::{
-    Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene, TerrainMesh,
+    Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene, StaticMarker,
+    TerrainMesh,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -245,6 +246,13 @@ impl<P: StepDriver + 'static> ClientApp<P> {
     /// 不改动既有 `new` 签名，既有入口不受影响。
     pub fn with_entity_kinds(mut self, kinds: BTreeMap<u64, EntityKind>) -> Self {
         self.entity_kinds = kinds;
+        self
+    }
+
+    /// 注入导出地图的静态摆放（真实地图入口用，纯表现层）。
+    /// `consume` 不触碰这些标记；既有入口不受影响。
+    pub fn with_static_markers(mut self, markers: Vec<StaticMarker>) -> Self {
+        self.scene.set_static_markers(markers);
         self
     }
 

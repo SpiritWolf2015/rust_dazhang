@@ -76,6 +76,10 @@ impl Instance {
 #[derive(Default)]
 pub struct Scene {
     instances: BTreeMap<u64, Instance>,
+    /// 导出地图的静态摆放（units / doodads），纯表现层，MUST NOT 进入
+    /// 权威状态 / 状态哈希 / 快照；由 `set_static_markers` 注入，
+    /// `consume` 不触碰。
+    static_markers: Vec<StaticMarker>,
     /// 已消费事件的最高 sequence，用于重复投递去重。
     max_sequence: Option<u64>,
     /// 最近消费的逻辑帧号。
@@ -111,18 +115,46 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
     }
 }
 
+/// Lordaeron Summer 的 6 种地表调色板，索引与 `groundTilesets`
+/// （`Ldrt` / `Ldro` / `Ldrg` / `Lrok` / `Lgrs` / `Lgrd`）一一对应。
+/// 阶段 1 用稳定色块区分地表分区；真实 BLP 贴图由后续阶段接入。
+pub const LORDAERON_SUMMER_TILES: [[f32; 4]; 6] = [
+    [0.55, 0.45, 0.30, 1.0], // Ldrt  Dirt
+    [0.46, 0.36, 0.25, 1.0], // Ldro  Rough Dirt
+    [0.49, 0.55, 0.29, 1.0], // Ldrg  Grassy Dirt
+    [0.53, 0.52, 0.49, 1.0], // Lrok  Rock
+    [0.34, 0.57, 0.27, 1.0], // Lgrs  Grass
+    [0.26, 0.44, 0.21, 1.0], // Lgrd  Dark Grass
+];
+
+/// `cliffTextures` 中 15 表示「无悬崖」，0..14 才是真实悬崖层。
+const NO_CLIFF: f32 = 15.0;
+
 fn surface_color(vertex: &TerrainVertex) -> [f32; 4] {
-    if vertex.water > 0.0 {
-        // 水体：按导出 waterHeights 呈现。
-        return [0.15, 0.35, 0.75, 0.85];
+    // 只有水面高度高于地面顶点时才呈现水体；`waterHeights` 恒定为正，
+    // 不能用 `water > 0` 判定（否则整张地图被刷成蓝色）。
+    if vertex.water > vertex.position[1] + 1.0e-3 {
+        return [0.18, 0.38, 0.62, 0.92];
     }
-    if vertex.cliff > 0.0 {
-        // 悬崖层：按导出 cliffTextures 呈现。
-        return [0.45, 0.40, 0.35, 1.0];
+    // 悬崖：15 是「无」哨兵值，0..14 才是真实悬崖层（含 0）。
+    if vertex.cliff >= 0.0 && vertex.cliff < NO_CLIFF && vertex.layer > 0.0 {
+        return [0.42, 0.37, 0.31, 1.0];
     }
-    // 地表：按 groundTextures 索引生成稳定颜色（不用随机源，保证 readback 可复现）。
-    let shade = (vertex.surface * 0.137).fract();
-    [0.20 + shade * 0.25, 0.45 + shade * 0.20, 0.20, 1.0]
+    // 地表：按 groundTextures 索引取调色板，越界回退到主地表。
+    let index = vertex.surface as i64;
+    let tile = if (0..6).contains(&index) {
+        LORDAERON_SUMMER_TILES[index as usize]
+    } else {
+        LORDAERON_SUMMER_TILES[0]
+    };
+    // 用 groundVariations 做稳定的小幅明暗变化，不引入随机源，保证 readback 可复现。
+    let shade = (vertex.layer * 0.07).fract();
+    [
+        tile[0] * (0.92 + shade * 0.12),
+        tile[1] * (0.92 + shade * 0.12),
+        tile[2] * (0.92 + shade * 0.12),
+        tile[3],
+    ]
 }
 
 fn triangle_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
@@ -137,7 +169,6 @@ fn triangle_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     [n[0] / len, n[1] / len, n[2] / len]
 }
 
-/// 单位占位标记（四面体）的基准尺寸；拾取平面高度由它推导。
 /// 只读派生的实体展示提示（design D5）：队伍色、选中环与血条比例。
 /// 纯函数，不写回任何状态、不进入 FNV-1a 状态哈希或快照。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,32 +208,51 @@ fn push_triangle(
     }
 }
 
+/// 几何锚点：世界 XZ 坐标与朝向。动态单位与导出地图的静态摆放共用同一套
+/// 几何函数，避免重复；全部为表现层 `f32`，不写回权威状态。
+#[derive(Clone, Copy, Debug)]
+struct MarkerPose {
+    x: f32,
+    y: f32,
+    facing: f32,
+}
+
+impl MarkerPose {
+    fn from_instance(instance: &Instance) -> Self {
+        Self {
+            x: instance.x,
+            y: instance.y,
+            facing: instance.facing,
+        }
+    }
+}
+
 /// 追加可缩放、可着色的四面体（单位占位标记）。
 fn append_tetra(
     vertices: &mut Vec<SceneVertex>,
-    instance: &Instance,
+    pose: &MarkerPose,
     terrain: &TerrainMesh,
     size: f32,
     color: [f32; 4],
 ) {
-    let base_y = terrain.height_at_world(instance.x, instance.y);
-    let (sin, cos) = instance.facing.sin_cos();
+    let base_y = terrain.height_at_world(pose.x, pose.y);
+    let (sin, cos) = pose.facing.sin_cos();
     let forward = [cos, sin];
-    let apex = [instance.x, base_y + size * 1.6, instance.y];
+    let apex = [pose.x, base_y + size * 1.6, pose.y];
     let front = [
-        instance.x + forward[0] * size,
+        pose.x + forward[0] * size,
         base_y,
-        instance.y + forward[1] * size,
+        pose.y + forward[1] * size,
     ];
     let left = [
-        instance.x - forward[0] * size * 0.5 - forward[1] * size * 0.6,
+        pose.x - forward[0] * size * 0.5 - forward[1] * size * 0.6,
         base_y,
-        instance.y - forward[1] * size * 0.5 + forward[0] * size * 0.6,
+        pose.y - forward[1] * size * 0.5 + forward[0] * size * 0.6,
     ];
     let right = [
-        instance.x - forward[0] * size * 0.5 + forward[1] * size * 0.6,
+        pose.x - forward[0] * size * 0.5 + forward[1] * size * 0.6,
         base_y,
-        instance.y - forward[1] * size * 0.5 - forward[0] * size * 0.6,
+        pose.y - forward[1] * size * 0.5 - forward[0] * size * 0.6,
     ];
     for &(p0, p1, p2) in &[
         (apex, front, left),
@@ -217,20 +267,26 @@ fn append_tetra(
 /// 追加一个朝向标记（四面体）作为单位占位呈现，贴地并应用队伍色。
 fn append_unit_marker(vertices: &mut Vec<SceneVertex>, instance: &Instance, terrain: &TerrainMesh) {
     let color = team_color(instance.team);
-    append_tetra(vertices, instance, terrain, UNIT_MARKER_SIZE, color);
+    append_tetra(
+        vertices,
+        &MarkerPose::from_instance(instance),
+        terrain,
+        UNIT_MARKER_SIZE,
+        color,
+    );
 }
 
 /// 追加长方体（建筑）：四个侧面与顶面，不含底面（贴地）。
 fn append_box(
     vertices: &mut Vec<SceneVertex>,
-    instance: &Instance,
+    pose: &MarkerPose,
     terrain: &TerrainMesh,
     half: f32,
     height: f32,
     color: [f32; 4],
 ) {
-    let base_y = terrain.height_at_world(instance.x, instance.y);
-    let (x, z) = (instance.x, instance.y);
+    let base_y = terrain.height_at_world(pose.x, pose.y);
+    let (x, z) = (pose.x, pose.y);
     let b0 = [x - half, base_y, z - half];
     let b1 = [x + half, base_y, z - half];
     let b2 = [x + half, base_y, z + half];
@@ -254,13 +310,13 @@ fn append_box(
 /// 追加八面体（金矿）：上下两顶点与四个赤道点。
 fn append_octahedron(
     vertices: &mut Vec<SceneVertex>,
-    instance: &Instance,
+    pose: &MarkerPose,
     terrain: &TerrainMesh,
     size: f32,
     color: [f32; 4],
 ) {
-    let base_y = terrain.height_at_world(instance.x, instance.y);
-    let (x, z) = (instance.x, instance.y);
+    let base_y = terrain.height_at_world(pose.x, pose.y);
+    let (x, z) = (pose.x, pose.y);
     let top = [x, base_y + size * 1.6, z];
     let bottom = [x, base_y, z];
     let east = [x + size, base_y + size * 0.8, z];
@@ -276,13 +332,13 @@ fn append_octahedron(
 /// 追加圆锥（树）：六段侧面三角形。
 fn append_cone(
     vertices: &mut Vec<SceneVertex>,
-    instance: &Instance,
+    pose: &MarkerPose,
     terrain: &TerrainMesh,
     size: f32,
     color: [f32; 4],
 ) {
-    let base_y = terrain.height_at_world(instance.x, instance.y);
-    let (x, z) = (instance.x, instance.y);
+    let base_y = terrain.height_at_world(pose.x, pose.y);
+    let (x, z) = (pose.x, pose.y);
     let apex = [x, base_y + size * 2.2, z];
     let segments = 6usize;
     let ring: Vec<[f32; 3]> = (0..segments)
@@ -305,15 +361,76 @@ fn append_typed_marker(
     terrain: &TerrainMesh,
     key: &str,
 ) {
+    let pose = MarkerPose::from_instance(instance);
     let color = team_color(instance.team);
     let size = UNIT_MARKER_SIZE;
     match key {
-        "town-hall" => append_box(vertices, instance, terrain, size * 0.9, size * 1.4, color),
-        "barracks" => append_box(vertices, instance, terrain, size * 0.7, size * 0.9, color),
-        "gold-mine" => append_octahedron(vertices, instance, terrain, size * 0.9, color),
-        "tree" => append_cone(vertices, instance, terrain, size * 0.8, color),
-        "peasant" => append_tetra(vertices, instance, terrain, size * 0.55, color),
+        "town-hall" => append_box(vertices, &pose, terrain, size * 0.9, size * 1.4, color),
+        "barracks" => append_box(vertices, &pose, terrain, size * 0.7, size * 0.9, color),
+        "gold-mine" => append_octahedron(vertices, &pose, terrain, size * 0.9, color),
+        "tree" => append_cone(vertices, &pose, terrain, size * 0.8, color),
+        "peasant" => append_tetra(vertices, &pose, terrain, size * 0.55, color),
         _ => append_unit_marker(vertices, instance, terrain),
+    }
+}
+
+/// 静态摆放物的形状分类（由装配层按导出 `typeId`/`id` 判定）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StaticShape {
+    /// 树木 / 灌木：圆锥。
+    Tree,
+    /// 金矿：八面体。
+    GoldMine,
+    /// 建筑：长方体。
+    Building,
+    /// 岩石 / 杂物：小八面体。
+    Rock,
+    /// 起始点：小四面体。
+    StartLocation,
+    /// 其它单位 / 中立建筑：小四面体。
+    Generic,
+}
+
+/// 导出地图的静态摆放（units.json / doodads.json）。纯表现层几何，
+/// MUST NOT 进入权威状态、状态哈希或快照；由 [`Scene::set_static_markers`]
+/// 一次性注入，`consume` 不触碰。
+#[derive(Clone, Debug, PartialEq)]
+pub struct StaticMarker {
+    pub x: f32,
+    pub y: f32,
+    pub size: f32,
+    pub color: [f32; 4],
+    pub shape: StaticShape,
+}
+
+impl StaticMarker {
+    fn pose(&self) -> MarkerPose {
+        MarkerPose {
+            x: self.x,
+            y: self.y,
+            facing: 0.0,
+        }
+    }
+}
+
+/// 追加一个静态摆放物；颜色由装配层给出（不用队伍色）。
+fn append_static_marker(
+    vertices: &mut Vec<SceneVertex>,
+    marker: &StaticMarker,
+    terrain: &TerrainMesh,
+) {
+    let pose = marker.pose();
+    let size = marker.size;
+    let color = marker.color;
+    match marker.shape {
+        StaticShape::Tree => append_cone(vertices, &pose, terrain, size, color),
+        StaticShape::GoldMine => append_octahedron(vertices, &pose, terrain, size * 0.9, color),
+        StaticShape::Building => {
+            append_box(vertices, &pose, terrain, size * 0.7, size * 1.3, color)
+        }
+        StaticShape::Rock => append_octahedron(vertices, &pose, terrain, size * 0.5, color),
+        StaticShape::StartLocation => append_tetra(vertices, &pose, terrain, size * 0.5, color),
+        StaticShape::Generic => append_tetra(vertices, &pose, terrain, size * 0.6, color),
     }
 }
 
@@ -417,10 +534,23 @@ impl Scene {
         }
     }
 
-    /// 生成一帧的非索引 GPU 顶点：地形三角形 + 可见单位标记。
+    /// 注入导出地图的静态摆放（纯表现层）；`consume` 不会清除它们。
+    /// 数据来自本机导出 JSON，MUST NOT 进入权威状态 / 状态哈希 / 快照。
+    pub fn set_static_markers(&mut self, markers: Vec<StaticMarker>) {
+        self.static_markers = markers;
+    }
+
+    /// 静态摆放数量（只读，供验收与诊断）。
+    pub fn static_marker_count(&self) -> usize {
+        self.static_markers.len()
+    }
+
+    /// 生成一帧的非索引 GPU 顶点：地形三角形 + 静态摆放 + 可见单位标记。
     /// 纯函数，稳定顺序、无随机源，便于 GPU readback 逐帧比对。
     pub fn build_vertices(&self, terrain: &TerrainMesh) -> Vec<SceneVertex> {
-        let mut vertices = Vec::with_capacity(terrain.indices.len() + self.instances.len() * 12);
+        let mut vertices = Vec::with_capacity(
+            terrain.indices.len() + (self.instances.len() + self.static_markers.len()) * 12,
+        );
         for &index in &terrain.indices {
             let vertex = &terrain.vertices[index as usize];
             vertices.push(SceneVertex {
@@ -429,6 +559,10 @@ impl Scene {
                 color: surface_color(vertex),
                 surface: vertex.surface,
             });
+        }
+        // 静态摆放先于动态单位，保证 readback 顺序稳定。
+        for marker in &self.static_markers {
+            append_static_marker(&mut vertices, marker, terrain);
         }
         for instance in self.instances.values() {
             if !instance.alive {
@@ -695,5 +829,116 @@ mod tests {
             library.resolve(&entity(2, 1, 0)).as_deref(),
             Some("default")
         );
+    }
+
+    fn terrain_vertex(height: f32, surface: f32, cliff: f32, water: f32) -> TerrainVertex {
+        TerrainVertex {
+            position: [0.0, height, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            surface,
+            cliff,
+            layer: 4.0,
+            water,
+        }
+    }
+
+    #[test]
+    fn surface_color_water_requires_water_above_ground() {
+        // 真实导出 waterHeights 恒为正；只有水面高于地面顶点才是水。
+        let dry = surface_color(&terrain_vertex(722.0, 0.0, 15.0, 384.0));
+        let wet = surface_color(&terrain_vertex(226.0, 0.0, 15.0, 384.0));
+        assert_ne!(dry, wet, "同一 waterHeights 下陆地与水下必须不同");
+        // dry 走地表调色板（非蓝），wet 走水体蓝。
+        assert!(dry[1] > dry[2], "陆地偏绿而非水蓝");
+        assert!(wet[2] > wet[1], "水下偏蓝");
+    }
+
+    #[test]
+    fn surface_color_cliff_sentinel_is_not_a_cliff() {
+        // cliffTextures=15 是「无悬崖」哨兵，不能刷成崖色。
+        let no_cliff = surface_color(&terrain_vertex(500.0, 0.0, 15.0, 0.0));
+        let real_cliff = surface_color(&terrain_vertex(500.0, 0.0, 1.0, 0.0));
+        assert_ne!(no_cliff, real_cliff);
+    }
+
+    #[test]
+    fn ground_tileset_indices_produce_distinct_colors() {
+        let mut seen = std::collections::BTreeSet::new();
+        for index in 0..6 {
+            let color = surface_color(&terrain_vertex(500.0, index as f32, 15.0, 0.0));
+            let key = color.map(|c| (c * 1000.0) as i64);
+            seen.insert(key);
+        }
+        assert_eq!(seen.len(), 6, "6 种地表 tileset 必须呈现 6 种可区分颜色");
+    }
+
+    #[test]
+    fn static_markers_render_and_survive_consume() {
+        let mesh = terrain();
+        let mut scene = Scene::default();
+        let markers = vec![
+            StaticMarker {
+                x: 0.0,
+                y: 0.0,
+                size: 6.0,
+                color: [0.1, 0.5, 0.2, 1.0],
+                shape: StaticShape::Tree,
+            },
+            StaticMarker {
+                x: 1.0,
+                y: 0.0,
+                size: 6.0,
+                color: [0.9, 0.8, 0.1, 1.0],
+                shape: StaticShape::GoldMine,
+            },
+        ];
+        scene.set_static_markers(markers);
+        assert_eq!(scene.static_marker_count(), 2);
+
+        let before = scene.build_vertices(&mesh);
+        assert!(before.len() > mesh.indices.len(), "静态摆放必须进入顶点");
+
+        // consume 只同步动态实例，不清除静态摆放。
+        let empty_view = view(2, vec![]);
+        scene.consume(
+            FrameInput {
+                view: &empty_view,
+                events: &[],
+            },
+            &ModelLibrary::default(),
+        );
+        assert_eq!(scene.static_marker_count(), 2);
+        let after = scene.build_vertices(&mesh);
+        assert_eq!(before, after, "静态摆放顶点必须稳定可复现");
+        assert!(after.iter().any(|v| v.color[1] > 0.4 && v.surface < 0.0));
+    }
+
+    #[test]
+    fn static_shapes_produce_distinct_geometry() {
+        let mesh = terrain();
+        let shapes = [
+            StaticShape::Tree,
+            StaticShape::GoldMine,
+            StaticShape::Building,
+            StaticShape::Rock,
+            StaticShape::StartLocation,
+            StaticShape::Generic,
+        ];
+        let mut counts = Vec::new();
+        for shape in shapes {
+            let marker = StaticMarker {
+                x: 0.0,
+                y: 0.0,
+                size: 6.0,
+                color: [0.5, 0.5, 0.5, 1.0],
+                shape,
+            };
+            let mut vertices = Vec::new();
+            append_static_marker(&mut vertices, &marker, &mesh);
+            assert!(!vertices.is_empty());
+            counts.push(vertices.len());
+        }
+        let distinct: std::collections::BTreeSet<usize> = counts.iter().copied().collect();
+        assert!(distinct.len() >= 3, "静态摆放形状必须可区分");
     }
 }

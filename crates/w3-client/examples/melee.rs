@@ -1,24 +1,31 @@
-//! 可玩的一局 1v1 Melee 入口（change `melee-playable-loop`）。
+//! 真实 Echo Isles 地图上的一局 1v1 Melee（对齐 `godot_warcraft3` 水位）。
 //!
-//! 用法：`cargo run -p w3-client --example melee`。
+//! 用法：`cargo run -p w3-client --example melee`（在本仓库根目录执行）。
 //!
-//! 本 example 只做**装配**：把 `w3-client::melee` 提供的合成冻结定义、
-//! 开局 `Spawn` 脚本、确定性外部 AI 命令源与既有 `ClientApp` 串成一局，
-//! 从开局采集、建造、训练、进攻到分出胜负全程可在窗口内完成。
+//! 本 example 只做**装配**，把三条既有链路串起来：
 //!
-//! 全部数据为内存合成：不读取 `config.toml`、导出 JSON 或任何游戏资产
-//! （ADR 0001）；`w3-core` 零改动，权威状态、状态哈希与
-//! `SNAPSHOT_VERSION`（当前 3）定义的快照不受影响（ADR 0002）。
+//! - 真实地图：读取本机 `map-parsed/echoisles/` 导出数据，经
+//!   [`w3_client::real_map`] 缩放到玩法世界尺度，生成真实高度场地形
+//!   （129×97 网格、Lordaeron Summer 地表分区、悬崖 / 水体、97 个单位摆放
+//!   与 2491 个装饰物摆放）。路径由 gitignored 的本机 `config.toml` 提供
+//!   （ADR 0001）；缺配置或导出数据无效时**显式失败**，MUST NOT 静默回落到
+//!   合成 demo。仓库不含任何导出资产。
+//! - 玩法闭环：`w3_client::melee` 的合成冻结定义、开局 `Spawn` 脚本、
+//!   确定性外部 AI 命令源与既有 `ClientApp` 原样保留（玩法坐标 -96..96
+//!   落在真实地形范围内，相机 / 拾取 / `StaticWorld` 均无需改动）。
+//! - `w3-core` 零改动；真实导出坐标、`StaticMarker`、类型标签全部是表现层
+//!   数据，MUST NOT 进入权威状态、状态哈希或 `SNAPSHOT_VERSION`（当前 3）
+//!   定义的快照（ADR 0002）。
 //!
-//! 呈现层通过 `ModelLibrary::bind_entity` 把实体类型标签映射为不同的
-//! 程序化几何（农民 / 士兵 / 建筑 / 资源点），全部为表现层数据，
-//! MUST NOT 进入权威状态、状态哈希或快照。
+//! 阶段 1 的静态摆放用程序化几何 + 6 种地表调色板；真实 BLP→PNG 贴图与
+//! glTF 模型（上游 convert 已产出）由后续阶段接入。
+
+use std::path::Path;
 
 use w3_client::melee::{MeleeDriver, MeleeSetup, synthetic_definitions, synthetic_world};
 use w3_client::{ClientApp, FixedStepClient};
-use w3_content::CenterOffset;
 use w3_core::{MatchConfig, RtsMatch};
-use w3_render::{Model, ModelLibrary, TerrainMesh};
+use w3_render::{Model, ModelLibrary};
 
 /// 固定种子，与既有确定性基线一致。
 const SEED: u64 = 0x5eed;
@@ -26,59 +33,13 @@ const SEED: u64 = 0x5eed;
 const CONTENT_HASH: u64 = 0xC0FFEE;
 /// 冻结的逻辑帧率，与 `FixedStepClient` 的 `LOGIC_FPS` 一致。
 const LOGIC_FPS: u32 = 30;
-/// 合成世界格数与格距（与 `melee::setup::synthetic_world` 一致）。
-const WORLD_WIDTH: u32 = 32;
-const CELL_SIZE: i64 = 8;
 /// 呈现帧上限：不限帧数，由人工关闭窗口退出（表现层参数）。
 const MAX_FRAMES: u32 = u32::MAX;
 /// AI 外部命令脚本的预生成帧数上限。
 const AI_HORIZON: u64 = 3600;
-/// 合成高度场网格边长 = 世界格数 + 1。
-const TERRAIN_SIZE: usize = (WORLD_WIDTH + 1) as usize;
 
-/// 无本机导出数据时的合成高度场：很浅的碗状地形，尺度与 `synthetic_world`
-/// 对齐，使相机观察中心、拾取映射与单位坐标都落在世界原点附近。
-///
-/// 这里的 `f64` 只用于 `TerrainHeightfield` → `TerrainMesh` 的表现层几何，
-/// 不产生 `SimFixed`，也不进入权威状态 / 状态哈希 / 快照。
-fn fallback_terrain() -> TerrainMesh {
-    let mut heights = Vec::with_capacity(TERRAIN_SIZE * TERRAIN_SIZE);
-    for y in 0..TERRAIN_SIZE {
-        for x in 0..TERRAIN_SIZE {
-            let dx = x as f64 - (TERRAIN_SIZE / 2) as f64;
-            let dy = y as f64 - (TERRAIN_SIZE / 2) as f64;
-            heights.push((dx * dx + dy * dy).sqrt() * 0.15);
-        }
-    }
-    let half_offset = -(WORLD_WIDTH as f64) * (CELL_SIZE as f64) * 0.5;
-    let hf = w3_content::TerrainHeightfield {
-        tilepoint_width: TERRAIN_SIZE,
-        tilepoint_height: TERRAIN_SIZE,
-        map_width: WORLD_WIDTH as usize,
-        map_height: WORLD_WIDTH as usize,
-        center_offset: Some(CenterOffset {
-            x: half_offset,
-            y: half_offset,
-        }),
-        main_tileset: None,
-        main_tileset_name: None,
-        ground_tilesets: Vec::new(),
-        cliff_tilesets: Vec::new(),
-        tile_size: Some(CELL_SIZE as f64),
-        heights,
-        ground_textures: Vec::new(),
-        ground_variations: Vec::new(),
-        cliff_textures: Vec::new(),
-        cliff_variations: Vec::new(),
-        layer_heights: Vec::new(),
-        water_heights: Vec::new(),
-        flags_packed: Vec::new(),
-    };
-    TerrainMesh::from_heightfield(&hf).expect("melee example: reason=invalid_synthetic_heightfield")
-}
-
-/// 纯内存模型库：为每种实体类型插入一个空模型键，并按开局实体 ID 绑定
-/// 类型标签，使 `Scene` 生成对应程序化几何（零资产读取）。
+/// 纯内存模型库：为每种动态实体类型插入一个空模型键，并按开局实体 ID
+/// 绑定类型标签，使 `Scene` 生成对应程序化几何（零资产读取）。
 fn synthetic_library(setup: &MeleeSetup) -> ModelLibrary {
     let mut library = ModelLibrary::default();
     for key in [
@@ -101,6 +62,25 @@ fn synthetic_library(setup: &MeleeSetup) -> ModelLibrary {
 fn main() {
     // 装配既有 stderr 日志后端，让库内英文结构化 key=value 日志可观测。
     w3_net::init_logging();
+
+    // 真实地图：缺 config.toml / 导出数据无效 → 显式失败，不回落合成 demo。
+    let (real_map, _paths) = w3_client::real_map::assemble(Path::new("config.toml")).unwrap_or_else(
+        |error| {
+            log::error!(
+                target: "w3_client",
+                "real map unavailable: error={} hint=create gitignored config.toml with map_dir pointing to the local Echo Isles export",
+                error
+            );
+            panic!("melee example: reason=real_map_unavailable error={error}");
+        },
+    );
+    log::info!(
+        target: "w3_client",
+        "real map loaded: vertices={} static_markers={} tiles={:?}",
+        real_map.terrain.vertices.len(),
+        real_map.markers.len(),
+        real_map.terrain.columns,
+    );
 
     let setup = MeleeSetup::new();
     let config = MatchConfig {
@@ -125,7 +105,8 @@ fn main() {
     let kinds = setup.kinds.clone();
     let library = synthetic_library(&setup);
 
-    ClientApp::new(driver, fallback_terrain(), library, MAX_FRAMES)
+    ClientApp::new(driver, real_map.terrain, library, MAX_FRAMES)
+        .with_static_markers(real_map.markers)
         .with_entity_kinds(kinds)
         .run()
         .expect("melee example: reason=window_run_failed");

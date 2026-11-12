@@ -44,6 +44,7 @@ pub mod input;
 pub mod melee;
 pub mod net_driver;
 pub mod presentation;
+pub mod real_map;
 
 pub use accumulator::{
     FrameAccumulator, FrameAdvance, LOGIC_FPS, MAX_CATCHUP_STEPS, TICKS_PER_LOGIC_FRAME,

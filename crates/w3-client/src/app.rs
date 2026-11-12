@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use egui_wgpu::ScreenDescriptor;
+use w3_content::RgbaImage;
 use w3_core::{CommandError, Event, GameplayCommandError, Snapshot, WorldView};
 use w3_render::{
     Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene, StaticMarker,
@@ -37,12 +38,14 @@ use winit::window::{Window, WindowId};
 use crate::accumulator::{FrameAdvance, TICKS_PER_SECOND};
 use crate::camera::{CameraAction, CameraState, PAN_STEP, YAW_STEP, ZOOM_STEP};
 use crate::client::FixedStepClient;
-use crate::hud::{self, HudAssets, HudModel};
+use crate::hud::{self, HudAssets, HudModel, MinimapBackdrop, minimap_backdrop};
 use crate::i18n::{Texts, ZH};
 use crate::input::{ClientCommand, InputAction, InputError, InputState, ScreenMapper};
 use crate::melee::EntityKind;
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
+/// 小地图底图的降采样网格边长（纯表现层参数，不进权威状态 / 哈希）。
+const MINIMAP_GRID: usize = 32;
 
 /// F1..F9 映射到编组编号（表现层，不进权威状态）。
 fn assign_group_number(key: KeyCode) -> Option<u8> {
@@ -190,6 +193,8 @@ pub struct ClientApp<P: StepDriver> {
     input: InputState,
     hud_assets: HudAssets,
     texts: Texts,
+    /// 真实小地图底图的 CPU 降采样颜色网格（纯表现层，注入后 HUD 只读绘制）。
+    minimap_backdrop: Option<MinimapBackdrop>,
     /// 装配层注入的实体类型标签（表现层专属，不进权威状态 / 哈希 / 快照）。
     entity_kinds: BTreeMap<u64, EntityKind>,
     /// 命令卡点击待翻译的输入动作（表现层，在 GPU 借用结束后提交）。
@@ -225,6 +230,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             input: InputState::default(),
             hud_assets: HudAssets::degraded(),
             texts: ZH,
+            minimap_backdrop: None,
             entity_kinds: BTreeMap::new(),
             pending_input_action: None,
             window: None,
@@ -253,6 +259,19 @@ impl<P: StepDriver + 'static> ClientApp<P> {
     /// `consume` 不触碰这些标记；既有入口不受影响。
     pub fn with_static_markers(mut self, markers: Vec<StaticMarker>) -> Self {
         self.scene.set_static_markers(markers);
+        self
+    }
+
+    /// 注入真实地表 tileset 贴图（6 层 RGBA8，纯表现层 CPU 采样数据）。
+    /// `None` 时地形回退到 6 色调色板；既有入口不受影响。
+    pub fn with_terrain_tiles(mut self, tiles: Option<Vec<RgbaImage>>) -> Self {
+        self.scene.set_terrain_tiles(tiles);
+        self
+    }
+
+    /// 注入真实小地图底图并降采样为颜色网格（纯 CPU，不上传 GPU 纹理）。
+    pub fn with_minimap_image(mut self, image: Option<RgbaImage>) -> Self {
+        self.minimap_backdrop = image.map(|image| minimap_backdrop(&image, MINIMAP_GRID));
         self
     }
 
@@ -291,6 +310,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             self.input.local_player(),
         )
         .with_kinds(self.entity_kinds.clone())
+        .with_minimap_backdrop(self.minimap_backdrop.clone())
     }
 
     /// 最近一次显式错误（输入 / 命令提交失败），供验收读取。
@@ -423,7 +443,8 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             &mapper,
             self.input.local_player(),
         )
-        .with_kinds(self.entity_kinds.clone());
+        .with_kinds(self.entity_kinds.clone())
+        .with_minimap_backdrop(self.minimap_backdrop.clone());
         self.last_events = events.clone();
 
         let texts = self.texts;

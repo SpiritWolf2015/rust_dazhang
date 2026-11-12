@@ -11,14 +11,19 @@
 //! - 缩放目标是让 `columns * cell_size` 与既有玩法世界（约 256 单位）一致，
 //!   这样相机、拾取、`StaticWorld`、玩法单位坐标全部无需改动。
 //! - 阶段 1 用 6 种 Lordaeron Summer 地表调色板 + 程序化几何区分摆放；
-//!   真实 BLP→PNG 贴图与 glTF 模型由后续阶段接入（资产已由上游产出）。
+//!   阶段 2 起从本机 `tileset_dir` / `minimap_image` 读取真实 BLP→PNG
+//!   地表贴图与小地图底图（纯表现层数据，不进权威状态 / 哈希 / 快照），
+//!   未配置时回退阶段 1 调色板；glTF 骨骼模型留后续阶段。
 //!
 //! 路径来源：gitignored 的本机 `config.toml`（ADR 0001 / CODEBUDDY.md §6）。
 //! 为避免新增依赖，这里只做极简 `key = "value"` 解析；仓库不含任何导出资产。
 
 use std::path::{Path, PathBuf};
 
-use w3_content::{CenterOffset, DoodadPlacement, ParsedMap, TerrainHeightfield, UnitPlacement};
+use w3_content::{
+    CenterOffset, DoodadPlacement, ParsedMap, RgbaImage, TerrainHeightfield, UnitPlacement,
+    load_rgba, load_tileset,
+};
 use w3_render::{StaticMarker, StaticShape, TerrainMesh};
 
 /// 上游导出的瓦片边长（Echo Isles `tileSize=128`）。
@@ -47,6 +52,8 @@ pub struct RealMapPaths {
     pub tileset_table: Option<PathBuf>,
     /// 可选：`war3mapMap.png`（阶段 2 小地图底图用）。
     pub minimap_image: Option<PathBuf>,
+    /// 可选：6 张 BLP→PNG 地表贴图目录（阶段 2 真实地表用）。
+    pub tileset_dir: Option<PathBuf>,
 }
 
 /// 装配错误；错误文本一律英文（CODEBUDDY.md §3）。
@@ -60,6 +67,8 @@ pub enum RealMapError {
     MapLoad { message: String },
     /// 缩放后的高度场无法生成地形网格。
     Terrain { message: String },
+    /// 已配置的贴图资源读取 / 解码失败（不静默回落）。
+    Texture { path: PathBuf, message: String },
 }
 
 impl std::fmt::Display for RealMapError {
@@ -73,6 +82,9 @@ impl std::fmt::Display for RealMapError {
             }
             Self::MapLoad { message } => write!(f, "cannot load exported map: {message}"),
             Self::Terrain { message } => write!(f, "cannot build terrain: {message}"),
+            Self::Texture { path, message } => {
+                write!(f, "cannot decode {}: {message}", path.display())
+            }
         }
     }
 }
@@ -89,6 +101,7 @@ pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
     let mut map_dir = None;
     let mut tileset_table = None;
     let mut minimap_image = None;
+    let mut tileset_dir = None;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
@@ -105,6 +118,7 @@ pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
             "map_dir" => map_dir = Some(PathBuf::from(value)),
             "tileset_table" => tileset_table = Some(PathBuf::from(value)),
             "minimap_image" => minimap_image = Some(PathBuf::from(value)),
+            "tileset_dir" => tileset_dir = Some(PathBuf::from(value)),
             _ => {}
         }
     }
@@ -116,6 +130,7 @@ pub fn load_paths(config_path: &Path) -> Result<RealMapPaths, RealMapError> {
         map_dir,
         tileset_table,
         minimap_image,
+        tileset_dir,
     })
 }
 
@@ -193,7 +208,12 @@ pub fn assemble_from(parsed: &ParsedMap) -> Result<RealMap, RealMapError> {
     for doodad in &parsed.doodads {
         markers.push(doodad_marker(doodad));
     }
-    Ok(RealMap { terrain, markers })
+    Ok(RealMap {
+        terrain,
+        markers,
+        terrain_tiles: None,
+        minimap_image: None,
+    })
 }
 
 /// 装配产物：真实地形网格 + 静态摆放（全部为表现层数据）。
@@ -201,6 +221,11 @@ pub fn assemble_from(parsed: &ParsedMap) -> Result<RealMap, RealMapError> {
 pub struct RealMap {
     pub terrain: TerrainMesh,
     pub markers: Vec<StaticMarker>,
+    /// 真实地表 tileset 贴图的 CPU 副本（6 层 RGBA8）；`None` 回退调色板。
+    /// 纯表现层数据，MUST NOT 进入权威状态 / 状态哈希 / 快照。
+    pub terrain_tiles: Option<Vec<RgbaImage>>,
+    /// 真实 `war3mapMap.png` 小地图底图（RGBA8）；`None` 用纯色底。
+    pub minimap_image: Option<RgbaImage>,
 }
 
 /// 从本机 `config.toml` 指向的导出目录装配真实地图。
@@ -211,7 +236,22 @@ pub fn assemble(config_path: &Path) -> Result<(RealMap, RealMapPaths), RealMapEr
     let parsed = w3_content::load_map(&paths.map_dir).map_err(|error| RealMapError::MapLoad {
         message: error.to_string(),
     })?;
-    let map = assemble_from(&parsed)?;
+    let mut map = assemble_from(&parsed)?;
+    // 贴图是可选的本机资产：未配置时优雅回退到调色板（CI / 未跑 convert 的
+    // 环境）；已配置但读取 / 解码失败 MUST 显式报错，不静默回落成色块 demo。
+    // 两者都是纯表现层数据，不进权威状态 / 状态哈希 / 快照（ADR 0002）。
+    if let Some(dir) = &paths.tileset_dir {
+        map.terrain_tiles = Some(load_tileset(dir).map_err(|error| RealMapError::Texture {
+            path: dir.clone(),
+            message: error.to_string(),
+        })?);
+    }
+    if let Some(image) = &paths.minimap_image {
+        map.minimap_image = Some(load_rgba(image).map_err(|error| RealMapError::Texture {
+            path: image.clone(),
+            message: error.to_string(),
+        })?);
+    }
     Ok((map, paths))
 }
 
@@ -384,7 +424,7 @@ mod tests {
         let path = dir.join("config.toml");
         std::fs::write(
             &path,
-            "# local export paths\nmap_dir = \"C:/maps/echoisles\"\ntileset_table = 'C:/slk/Terrain.json'\nunknown = 1\n",
+            "# local export paths\nmap_dir = \"C:/maps/echoisles\"\ntileset_table = 'C:/slk/Terrain.json'\ntileset_dir = 'C:/converted/LordaeronSummer'\nunknown = 1\n",
         )
         .unwrap();
         let paths = load_paths(&path).unwrap();
@@ -392,6 +432,10 @@ mod tests {
         assert_eq!(
             paths.tileset_table,
             Some(PathBuf::from("C:/slk/Terrain.json"))
+        );
+        assert_eq!(
+            paths.tileset_dir,
+            Some(PathBuf::from("C:/converted/LordaeronSummer"))
         );
         assert_eq!(paths.minimap_image, None);
         std::fs::remove_file(&path).unwrap();
@@ -411,5 +455,14 @@ mod tests {
             })
         );
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn assemble_from_has_no_embedded_textures() {
+        // 纯装配函数不读任何文件；贴图只由 `assemble` 按配置注入。
+        // 无本机资产的 CI 走 6 色调色板回退，字段契约必须稳定。
+        let map = assemble_from(&fixture()).unwrap();
+        assert!(map.terrain_tiles.is_none());
+        assert!(map.minimap_image.is_none());
     }
 }

@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use w3_content::RgbaImage;
 use w3_core::{Event, SCALE, Snapshot, WorldView};
 use w3_render::{display_hints, team_color};
 
@@ -144,12 +145,69 @@ pub struct MinimapPoint {
     pub selected: bool,
 }
 
+/// 小地图底图的 CPU 降采样颜色网格（纯表现层数据，无 GPU 纹理句柄）。
+///
+/// 把真实 `war3mapMap.png` 在每个网格单元内做 RGBA 均值，转成 `[0,1]` 的
+/// 归一化颜色；HUD 用 egui 既有 `rect_filled` 逐格绘制，避免引入 GPU 纹理
+/// 上传 / shader 等 CLI 侧不可验证的画面路径（与地表贴图同一策略）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct MinimapBackdrop {
+    /// 每边网格数；`colors.len() == grid * grid`，行优先。
+    pub grid: usize,
+    pub colors: Vec<[f32; 4]>,
+}
+
+/// 把一张 RGBA8 图像降采样成 `grid × grid` 颜色网格；纯函数、确定性。
+/// 空图像 / `grid == 0` 时返回空网格，绝不 panic。
+pub fn minimap_backdrop(image: &RgbaImage, grid: usize) -> MinimapBackdrop {
+    if grid == 0 || image.width == 0 || image.height == 0 || image.pixels.len() < 4 {
+        return MinimapBackdrop {
+            grid,
+            colors: Vec::new(),
+        };
+    }
+    let gw = image.width as usize;
+    let gh = image.height as usize;
+    let mut colors = Vec::with_capacity(grid * grid);
+    for gy in 0..grid {
+        let y0 = gy * gh / grid;
+        let y1 = ((gy + 1) * gh / grid).max(y0 + 1).min(gh);
+        for gx in 0..grid {
+            let x0 = gx * gw / grid;
+            let x1 = ((gx + 1) * gw / grid).max(x0 + 1).min(gw);
+            let mut sum = [0u64; 4];
+            let mut count = 0u64;
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let index = (y * gw + x) * 4;
+                    if let Some(pixel) = image.pixels.get(index..index + 4) {
+                        for channel in 0..4 {
+                            sum[channel] += pixel[channel] as u64;
+                        }
+                        count += 1;
+                    }
+                }
+            }
+            let divisor = (count.max(1) * 255) as f32;
+            colors.push([
+                sum[0] as f32 / divisor,
+                sum[1] as f32 / divisor,
+                sum[2] as f32 / divisor,
+                sum[3] as f32 / divisor,
+            ]);
+        }
+    }
+    MinimapBackdrop { grid, colors }
+}
+
 /// 小地图只读模型。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MinimapModel {
     pub points: Vec<MinimapPoint>,
     /// 世界跨度，供把点击换算回相机平移（表现层参数）。
     pub extent: f32,
+    /// 真实小地图底图（CPU 降采样颜色网格）；`None` 时用纯色底。
+    pub backdrop: Option<MinimapBackdrop>,
 }
 
 /// 一帧 HUD 的全部只读展示数据；纯派生、owned，不持有权威状态句柄。
@@ -197,7 +255,11 @@ fn derive_minimap(view: &WorldView, selection: &BTreeSet<u64>, extent: f32) -> M
             selected: selection.contains(&entity.id),
         })
         .collect();
-    MinimapModel { points, extent }
+    MinimapModel {
+        points,
+        extent,
+        backdrop: None,
+    }
 }
 
 /// 由选中集合与类型标签派生命令卡；空选中返回空列表。
@@ -331,6 +393,12 @@ impl HudModel {
         self.command_actions = derive_commands(&self.units, &kinds);
         self.selection_panel = derive_selection_panel(&self.units, &kinds);
         self.kinds = kinds;
+        self
+    }
+
+    /// 注入真实小地图底图（纯表现层 CPU 降采样数据）；不改变任何权威状态。
+    pub fn with_minimap_backdrop(mut self, backdrop: Option<MinimapBackdrop>) -> Self {
+        self.minimap.backdrop = backdrop;
         self
     }
 }
@@ -467,7 +535,25 @@ pub fn draw_with_minimap(
         let size = egui::vec2(160.0, 160.0);
         let (response, painter) = ui.allocate_painter(size, egui::Sense::click());
         let rect = response.rect;
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, egui::Color32::from_gray(24));
+        if let Some(backdrop) = &model.minimap.backdrop {
+            if !backdrop.colors.is_empty() && backdrop.grid > 0 {
+                let cell_w = rect.width() / backdrop.grid as f32;
+                let cell_h = rect.height() / backdrop.grid as f32;
+                for (index, color) in backdrop.colors.iter().enumerate() {
+                    let gx = (index % backdrop.grid) as f32;
+                    let gy = (index / backdrop.grid) as f32;
+                    let cell = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x + gx * cell_w, rect.min.y + gy * cell_h),
+                        egui::vec2(cell_w.ceil(), cell_h.ceil()),
+                    );
+                    painter.rect_filled(cell, egui::CornerRadius::ZERO, to_color(*color));
+                }
+            } else {
+                painter.rect_filled(rect, egui::CornerRadius::ZERO, egui::Color32::from_gray(24));
+            }
+        } else {
+            painter.rect_filled(rect, egui::CornerRadius::ZERO, egui::Color32::from_gray(24));
+        }
         for point in &model.minimap.points {
             let center = egui::pos2(
                 rect.min.x + point.nx * rect.width(),
@@ -577,5 +663,50 @@ mod tests {
         assert!((minimap.points[0].nx - 0.5).abs() < 1.0e-6);
         assert!(minimap.points[0].selected);
         assert_eq!(minimap.extent, 256.0);
+        // 纯派生路径不注入底图；底图由装配层显式注入。
+        assert!(minimap.backdrop.is_none());
+    }
+
+    fn solid_rgba(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for _ in 0..(width as usize * height as usize) {
+            pixels.extend_from_slice(&color);
+        }
+        RgbaImage {
+            width,
+            height,
+            pixels,
+        }
+    }
+
+    #[test]
+    fn minimap_backdrop_downsamples_and_is_deterministic() {
+        let image = solid_rgba(8, 8, [100, 150, 200, 255]);
+        let a = minimap_backdrop(&image, 4);
+        let b = minimap_backdrop(&image, 4);
+        assert_eq!(a, b);
+        assert_eq!(a.grid, 4);
+        assert_eq!(a.colors.len(), 16);
+        // 纯色图每个网格都应等于该颜色的归一化值。
+        for color in &a.colors {
+            assert!((color[0] - 100.0 / 255.0).abs() < 1.0e-6);
+            assert!((color[1] - 150.0 / 255.0).abs() < 1.0e-6);
+            assert!((color[2] - 200.0 / 255.0).abs() < 1.0e-6);
+            assert!((color[3] - 1.0).abs() < 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn minimap_backdrop_handles_degenerate_inputs_without_panic() {
+        let empty = RgbaImage {
+            width: 0,
+            height: 0,
+            pixels: Vec::new(),
+        };
+        assert!(minimap_backdrop(&empty, 8).colors.is_empty());
+        let image = solid_rgba(2, 2, [10, 20, 30, 255]);
+        assert!(minimap_backdrop(&image, 0).colors.is_empty());
+        // 网格数大于像素数时仍不 panic、尺寸正确。
+        assert_eq!(minimap_backdrop(&image, 16).colors.len(), 256);
     }
 }

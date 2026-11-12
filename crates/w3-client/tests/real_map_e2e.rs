@@ -7,19 +7,25 @@
 //! CI / 无本机导出资产时自动跳过（不依赖本机资产、不开 GPU 窗口）。
 //! 跳过原因以英文结构化 `key=value` 打印，便于排查。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use w3_client::real_map::{RealMap, assemble_from, load_paths};
+use w3_client::real_map::{RealMap, assemble, assemble_from, load_paths};
 use w3_core::SNAPSHOT_VERSION;
+
+/// gitignored `config.toml` 位于 workspace 根；`cargo test` 的工作目录是
+/// crate 根，用编译期 `CARGO_MANIFEST_DIR` 定位，避免真实资产测试静默跳过。
+fn config_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config.toml")
+}
 
 /// 真实地图存在时返回装配产物；不存在则返回 `None`（测试跳过）。
 fn local_real_map() -> Option<RealMap> {
-    let config = Path::new("config.toml");
+    let config = config_path();
     if !config.exists() {
         eprintln!("skip=real_map_e2e reason=no_local_config");
         return None;
     }
-    let paths = match load_paths(config) {
+    let paths = match load_paths(&config) {
         Ok(paths) => paths,
         Err(error) => {
             eprintln!("skip=real_map_e2e reason=invalid_config error={error}");
@@ -92,4 +98,76 @@ fn static_markers_enter_gpu_vertices() {
     let again = scene.build_vertices(&map.terrain);
     assert_eq!(vertices, again);
     assert_eq!(SNAPSHOT_VERSION, 3, "真实地图装配不触碰快照版本");
+}
+
+/// 真实贴图资产存在时返回完整装配产物；否则跳过（CI 无本机资产）。
+fn local_full_map() -> Option<RealMap> {
+    let config = config_path();
+    if !config.exists() {
+        eprintln!("skip=real_map_textures reason=no_local_config");
+        return None;
+    }
+    let paths = load_paths(&config).ok()?;
+    if paths.tileset_dir.is_none() || paths.minimap_image.is_none() {
+        eprintln!("skip=real_map_textures reason=no_texture_config");
+        return None;
+    }
+    let (map, _) = assemble(&config).expect("full real map must assemble");
+    Some(map)
+}
+
+#[test]
+fn real_tileset_feeds_scene_vertex_colors() {
+    use w3_render::Scene;
+
+    let Some(map) = local_full_map() else {
+        return;
+    };
+    let tiles = map.terrain_tiles.as_ref().expect("6 tileset pngs loaded");
+    assert_eq!(tiles.len(), 6, "真实地表贴图必须 6 层");
+    let (w, h) = (tiles[0].width, tiles[0].height);
+    assert!(w > 0 && h > 0);
+    for tile in tiles {
+        assert_eq!((tile.width, tile.height), (w, h), "tileset 尺寸一致");
+        assert_eq!(tile.pixels.len(), (w * h * 4) as usize, "RGBA8 长度一致");
+    }
+
+    // 真实贴图颜色确实改变地形顶点色（而非回退的 6 色调色板色块）。
+    let mut scene = Scene::default();
+    let palette = scene.build_vertices(&map.terrain);
+    scene.set_terrain_tiles(map.terrain_tiles.clone());
+    let textured = scene.build_vertices(&map.terrain);
+    assert_eq!(palette.len(), textured.len());
+    let changed = palette
+        .iter()
+        .zip(&textured)
+        .filter(|(a, b)| a.surface >= 0.0 && a.color != b.color)
+        .count();
+    assert!(changed > 0, "真实贴图采样必须体现在地形顶点色");
+    // 确定性：同一贴图两次生成完全一致的顶点流。
+    assert_eq!(textured, scene.build_vertices(&map.terrain));
+}
+
+#[test]
+fn real_minimap_decodes_into_nonflat_hud_backdrop() {
+    let Some(map) = local_full_map() else {
+        return;
+    };
+    let image = map.minimap_image.as_ref().expect("minimap png loaded");
+    assert!(image.width > 0 && image.height > 0);
+    let backdrop = w3_client::hud::minimap_backdrop(image, 32);
+    assert_eq!(backdrop.grid, 32);
+    assert_eq!(backdrop.colors.len(), 32 * 32);
+    assert!(
+        backdrop
+            .colors
+            .iter()
+            .all(|c| c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)))
+    );
+    // 真实小地图不是单色纯色块：至少呈现多种颜色。
+    let mut seen = std::collections::BTreeSet::new();
+    for color in &backdrop.colors {
+        seen.insert(color.map(|c| (c * 256.0) as i64));
+    }
+    assert!(seen.len() > 4, "真实小地图底图应含多种颜色");
 }

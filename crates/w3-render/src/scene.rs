@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use w3_content::RgbaImage;
 use w3_core::{ANGLE_SCALE, Event, EventKind, SCALE, WorldView};
 
 use crate::model::{ModelLibrary, team_color};
@@ -80,6 +81,10 @@ pub struct Scene {
     /// 权威状态 / 状态哈希 / 快照；由 `set_static_markers` 注入，
     /// `consume` 不触碰。
     static_markers: Vec<StaticMarker>,
+    /// 真实地表 tileset 贴图的 CPU 副本（6 层 RGBA8）。纯表现层数据，
+    /// 顶点色由它按 `surface` 层索引 + 世界 XZ 平铺采样得到；
+    /// `None` 时回退到 6 色调色板（既有路径 / CI 无本机资产）。
+    terrain_tiles: Option<Vec<RgbaImage>>,
     /// 已消费事件的最高 sequence，用于重复投递去重。
     max_sequence: Option<u64>,
     /// 最近消费的逻辑帧号。
@@ -130,7 +135,39 @@ pub const LORDAERON_SUMMER_TILES: [[f32; 4]; 6] = [
 /// `cliffTextures` 中 15 表示「无悬崖」，0..14 才是真实悬崖层。
 const NO_CLIFF: f32 = 15.0;
 
-fn surface_color(vertex: &TerrainVertex) -> [f32; 4] {
+/// 真实 tileset 贴图在世界 XZ 上的平铺周期（缩放后玩法世界单位）。
+const TILE_REPEAT_WORLD: f32 = 16.0;
+
+/// 从一张 RGBA8 tileset 贴图按世界 XZ 平铺采样一个像素，转为线性 RGBA。
+/// 固定算法、同机可复现，供 CPU 侧把真实贴图颜色烘进地形顶点色（无需 GPU
+/// 纹理采样 / shader 改动，避免真窗口画面在 CLI 侧无法验证的风险）；仅表现层
+/// 派生数据，不进入权威状态 / 状态哈希 / 快照，不声称跨平台确定性。
+fn sample_tile(image: &RgbaImage, world_x: f32, world_z: f32) -> [f32; 4] {
+    if image.width == 0 || image.height == 0 || image.pixels.len() < 4 {
+        return LORDAERON_SUMMER_TILES[0];
+    }
+    let u = (world_x / TILE_REPEAT_WORLD).rem_euclid(1.0);
+    // 上游 BLP→PNG 未做 1-V 翻转（见 convert 报告）；这里按俯视方向翻转 V。
+    let v = 1.0 - (world_z / TILE_REPEAT_WORLD).rem_euclid(1.0);
+    let px = ((u * image.width as f32) as u32).min(image.width - 1);
+    let py = ((v * image.height as f32) as u32).min(image.height - 1);
+    let index = (py * image.width + px) as usize * 4;
+    let Some(pixel) = image.pixels.get(index..index + 4) else {
+        return LORDAERON_SUMMER_TILES[0];
+    };
+    // sRGB→线性近似（gamma 2.2），保证光照叠加后颜色不发灰；固定算法、
+    // 仅用于表现层顶点色，同机可复现，不进入权威状态 / 哈希 / 快照。
+    let to_linear = |c: u8| (c as f32 / 255.0).powf(2.2);
+    [
+        to_linear(pixel[0]),
+        to_linear(pixel[1]),
+        to_linear(pixel[2]),
+        pixel[3] as f32 / 255.0,
+    ]
+}
+
+/// 地形顶点色：优先真实 tileset 贴图采样，否则回退 6 色调色板。
+fn terrain_color(vertex: &TerrainVertex, tiles: Option<&[RgbaImage]>) -> [f32; 4] {
     // 只有水面高度高于地面顶点时才呈现水体；`waterHeights` 恒定为正，
     // 不能用 `water > 0` 判定（否则整张地图被刷成蓝色）。
     if vertex.water > vertex.position[1] + 1.0e-3 {
@@ -140,14 +177,16 @@ fn surface_color(vertex: &TerrainVertex) -> [f32; 4] {
     if vertex.cliff >= 0.0 && vertex.cliff < NO_CLIFF && vertex.layer > 0.0 {
         return [0.42, 0.37, 0.31, 1.0];
     }
-    // 地表：按 groundTextures 索引取调色板，越界回退到主地表。
     let index = vertex.surface as i64;
+    if let Some(image) = tiles.and_then(|t| t.get(index as usize)) {
+        return sample_tile(image, vertex.position[0], vertex.position[2]);
+    }
+    // 回退：groundTextures 索引取调色板，越界回退到主地表。
     let tile = if (0..6).contains(&index) {
         LORDAERON_SUMMER_TILES[index as usize]
     } else {
         LORDAERON_SUMMER_TILES[0]
     };
-    // 用 groundVariations 做稳定的小幅明暗变化，不引入随机源，保证 readback 可复现。
     let shade = (vertex.layer * 0.07).fract();
     [
         tile[0] * (0.92 + shade * 0.12),
@@ -155,6 +194,14 @@ fn surface_color(vertex: &TerrainVertex) -> [f32; 4] {
         tile[2] * (0.92 + shade * 0.12),
         tile[3],
     ]
+}
+
+/// 测试用回退路径入口：`None` 贴图即 6 色调色板。生产路径由
+/// `build_vertices` 直接调用 `terrain_color(vertex, tiles)`，故本函数仅在
+/// 测试编译中存在，用于验证无本机资产时的降级表现。
+#[cfg(test)]
+fn surface_color(vertex: &TerrainVertex) -> [f32; 4] {
+    terrain_color(vertex, None)
 }
 
 fn triangle_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
@@ -545,9 +592,16 @@ impl Scene {
         self.static_markers.len()
     }
 
+    /// 注入真实 tileset 贴图（6 层 RGBA8，纯表现层数据）。
+    /// `None` 时地形回退到 6 色调色板；`consume` 不触碰本字段。
+    pub fn set_terrain_tiles(&mut self, tiles: Option<Vec<RgbaImage>>) {
+        self.terrain_tiles = tiles;
+    }
+
     /// 生成一帧的非索引 GPU 顶点：地形三角形 + 静态摆放 + 可见单位标记。
     /// 纯函数，稳定顺序、无随机源，便于 GPU readback 逐帧比对。
     pub fn build_vertices(&self, terrain: &TerrainMesh) -> Vec<SceneVertex> {
+        let tiles = self.terrain_tiles.as_deref();
         let mut vertices = Vec::with_capacity(
             terrain.indices.len() + (self.instances.len() + self.static_markers.len()) * 12,
         );
@@ -556,7 +610,7 @@ impl Scene {
             vertices.push(SceneVertex {
                 position: vertex.position,
                 normal: vertex.normal,
-                color: surface_color(vertex),
+                color: terrain_color(vertex, tiles),
                 surface: vertex.surface,
             });
         }
@@ -940,5 +994,62 @@ mod tests {
         }
         let distinct: std::collections::BTreeSet<usize> = counts.iter().copied().collect();
         assert!(distinct.len() >= 3, "静态摆放形状必须可区分");
+    }
+
+    fn solid_tile(color: [u8; 4]) -> RgbaImage {
+        RgbaImage {
+            width: 2,
+            height: 2,
+            pixels: color.repeat(4),
+        }
+    }
+
+    #[test]
+    fn terrain_color_uses_real_tile_pixels_not_palette() {
+        let vertex = terrain_vertex(500.0, 2.0, 15.0, 0.0);
+        // 无贴图：走 6 色调色板（index 2）。
+        let palette = terrain_color(&vertex, None);
+        // 有 6 层贴图：index 2 是纯红，采样结果应接近红色而非调色板绿。
+        let tiles: Vec<RgbaImage> = (0..6).map(|_| solid_tile([40, 200, 40, 255])).collect();
+        let mut red_tiles = tiles.clone();
+        red_tiles[2] = solid_tile([220, 30, 30, 255]);
+        let sampled = terrain_color(&vertex, Some(&red_tiles));
+        assert_ne!(sampled, palette, "贴图路径必须与调色板路径不同");
+        assert!(
+            sampled[0] > sampled[1],
+            "采样应取到红色 tile，红通道大于绿通道"
+        );
+    }
+
+    #[test]
+    fn sample_tile_is_deterministic_and_oob_safe() {
+        let image = solid_tile([100, 150, 200, 255]);
+        let a = sample_tile(&image, 3.0, 7.0);
+        let b = sample_tile(&image, 3.0, 7.0);
+        assert_eq!(a, b);
+        // 任意世界坐标（含负 / 越界）都落在 [0,1]，不 panic。
+        for (x, z) in [(-130.0, -97.0), (0.0, 0.0), (1.0e6, -1.0e6)] {
+            let c = sample_tile(&image, x, z);
+            assert!(c.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+        }
+    }
+
+    #[test]
+    fn build_vertices_real_tiles_survive_consume_and_are_stable() {
+        let mesh = terrain();
+        let mut scene = Scene::default();
+        let tiles: Vec<RgbaImage> = (0..6).map(|_| solid_tile([90, 120, 60, 255])).collect();
+        scene.set_terrain_tiles(Some(tiles));
+        let before = scene.build_vertices(&mesh);
+        let view = view(3, vec![]);
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &ModelLibrary::default(),
+        );
+        let after = scene.build_vertices(&mesh);
+        assert_eq!(before, after, "真实贴图采样可复现、consume 不改地形顶点色");
     }
 }

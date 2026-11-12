@@ -91,6 +91,26 @@ P6 `p6-playable-client` change 新增 `crates/w3-client`（可玩客户端集成
 - 内置字体不含 CJK 字形，故 `w3-client` 的 HUD 文案为 ASCII；中文上屏需另内嵌 CJK 字体，留后续独立 change。
 - 字体数据由 crates.io 依赖在构建期内嵌，**未复制任何字体文件进仓库**；`Cargo.lock` 为依赖图权威清单。
 
+## 第三方 crate 依赖（真实地图视觉 / PNG 解码）
+
+`melee-playable-loop` 阶段 2 在 `w3-content` 新增 `image`（仅启用 `png` feature，`default-features = false`），用于把本机导出的 BLP→PNG 地表贴图与 `war3mapMap.png` 小地图底图解码为 RGBA8。许可证结论由 `cargo metadata` 的 `license` 字段逐一核对；均为 crates.io 依赖、版本由 `Cargo.lock` 锁定，**未复制任何上游源码进仓库**：
+
+| crate | 版本 | 许可证 |
+|---|---|---|
+| `image`（直接依赖） | 0.25.10 | MIT OR Apache-2.0 |
+| `png`（传递依赖） | 0.18.1 | MIT OR Apache-2.0 |
+| `flate2` / `fdeflate`（DEFLATE 解码） | 1.1.11 / 0.3.7 | MIT OR Apache-2.0 |
+| `miniz_oxide`（DEFLATE 解码，两个版本并存） | 0.8.9 / 0.9.1 | MIT OR Zlib OR Apache-2.0 |
+| `crc32fast` / `adler2` / `simd-adler32`（校验链） | 1.5.4 / 2.0.1 / 0.3.10 | MIT OR Apache-2.0 / 0BSD OR MIT OR Apache-2.0 / MIT |
+| `zlib-rs` | 0.6.8 | Zlib |
+| `byteorder-lite` | 0.1.0 | Unlicense OR MIT |
+| `moxcms` / `pxfm`（色彩管理） | 0.8.1 / 0.1.30 | BSD-3-Clause OR Apache-2.0 |
+
+- 兼容性结论：上述均为 MIT / Apache-2.0 / BSD-3-Clause / Zlib / 0BSD / Unlicense 宽松许可，与本项目 GPLv3 兼容；`miniz_oxide` 取 MIT 或 Apache-2.0 一侧、`byteorder-lite` 取 MIT 一侧以消除争议。
+- `image` 仅启用 `png` feature，未启用其它编解码器 / 默认 feature，依赖面最小；`naga` 已是 P3 `wgpu` 的既有传递依赖，本节不重复登记。
+- 资产边界不变：解码的 PNG 派生自玩家本机合法获得的经典客户端，留在本机、绝不入库（见 [ADR 0001](docs/decisions/0001-license.md)）；本 crate 只含读取器，测试用合成 fixture。
+- 其余传递依赖未逐一核验，`Cargo.lock` 为依赖图权威清单。
+
 ## 第三方资产与商标
 
 Warcraft、Warcraft III、The Frozen Throne 及相关名称、美术、音乐与游戏内容归其各自权利人所有。本项目与暴雪娱乐无关联、未获其授权或背书。玩家须自备合法获得的经典客户端；仓库不分发任何资产或由资产派生的文件。

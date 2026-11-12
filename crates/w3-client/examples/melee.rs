@@ -17,8 +17,10 @@
 //!   数据，MUST NOT 进入权威状态、状态哈希或 `SNAPSHOT_VERSION`（当前 3）
 //!   定义的快照（ADR 0002）。
 //!
-//! 阶段 1 的静态摆放用程序化几何 + 6 种地表调色板；真实 BLP→PNG 贴图与
-//! glTF 模型（上游 convert 已产出）由后续阶段接入。
+//! 阶段 2 接入真实 BLP→PNG 地表贴图（CPU 采样进地形顶点色）与
+//! `war3mapMap.png` 小地图底图（CPU 降采样颜色网格）；静态摆放仍用
+//! 程序化几何，glTF 骨骼模型留后续阶段。以上全部是表现层数据，MUST NOT
+//! 进入权威状态、状态哈希或快照（ADR 0002）。
 
 use std::path::Path;
 
@@ -76,10 +78,12 @@ fn main() {
     );
     log::info!(
         target: "w3_client",
-        "real map loaded: vertices={} static_markers={} tiles={:?}",
+        "real map loaded: vertices={} static_markers={} columns={} terrain_tiles={} minimap={}",
         real_map.terrain.vertices.len(),
         real_map.markers.len(),
         real_map.terrain.columns,
+        real_map.terrain_tiles.as_ref().map_or(0, |tiles| tiles.len()),
+        real_map.minimap_image.is_some(),
     );
 
     let setup = MeleeSetup::new();
@@ -107,6 +111,8 @@ fn main() {
 
     ClientApp::new(driver, real_map.terrain, library, MAX_FRAMES)
         .with_static_markers(real_map.markers)
+        .with_terrain_tiles(real_map.terrain_tiles)
+        .with_minimap_image(real_map.minimap_image)
         .with_entity_kinds(kinds)
         .run()
         .expect("melee example: reason=window_run_failed");

@@ -10,11 +10,11 @@
 
 ### Requirement: 一局 Melee 对战可装配并打完
 
-系统 SHALL 提供一局 1v1 Melee 对战的确定性会话：开局为双方布置主城、农民与资源点，玩家经窗口输入完成采集、建造、训练、进攻，直到分出胜负；全程 MUST NOT 依赖任何本机导出资产或配置文件。
+系统 SHALL 提供一局 1v1 Melee 对战的确定性会话：开局为双方布置主城、农民与资源点，玩家经窗口输入完成采集、建造、训练、进攻，直到分出胜负。对局的**权威逻辑闭环**（`FrozenDefinitions`、开局命令脚本、内核推进与胜负结算）MUST NOT 依赖任何本机导出资产或配置文件；真实地图表现层（地形 / 地表贴图 / 小地图底图）经 gitignored 的本机 `config.toml` 可选接入，属只读表现层接缝，MUST NOT 进入权威状态、状态哈希或快照（ADR 0001 / ADR 0002）。
 
 #### Scenario: 开局布置
 
-- **WHEN** 启动可玩入口
+- **WHEN** 启动 `melee` 可玩入口（需 gitignored `config.toml` 指向本机 Echo Isles 导出）
 - **THEN** 双方各有主城、农民与资源点，资源与人口有确定初值，且全部权威坐标由冻结整数常量构造
 
 #### Scenario: 打完一局
@@ -22,14 +22,23 @@
 - **WHEN** 玩家依次采集资源、建造兵营、训练战斗单位并摧毁敌方主城
 - **THEN** 内核按既有结算阶段产生唯一胜负结果，HUD 显示胜负，且玩家可重开新一局
 
-#### Scenario: 零资产环境
+#### Scenario: CPU 对局装配零资产
 
-- **WHEN** 在不含 `config.toml` 与任何导出目录的干净环境运行
-- **THEN** 一局仍能启动并打完，不读取任何资产文件
+- **WHEN** 在不含 `config.toml` 与任何导出目录的干净环境运行 CPU 对局装配（`MeleeDriver` / `melee_loop.rs`）或既有 `playable` 合成入口
+- **THEN** 一局仍能启动并打完，权威逻辑不读取任何资产文件
+
+#### Scenario: 真实视觉入口依赖本机导出
+
+- **WHEN** 启动 `melee` 可玩 example，且已提供 gitignored 的 `config.toml` 指向本机 Echo Isles 导出
+- **THEN** 真实地形 / 地表贴图 / 小地图底图作为只读表现层呈现，权威状态、状态哈希与快照不变
+- **WHEN** 启动 `melee` 可玩 example 但 `config.toml` 缺失或导出数据无效
+- **THEN** 显式失败、不回落合成色块 demo（与 `proposal.md` / `design.md` D7 一致）
+
+> 该入口对 gitignored 本机 `config.toml` 的依赖属表现层接缝，MUST NOT 进入权威状态、状态哈希或快照（ADR 0001 / ADR 0002）。
 
 ### Requirement: 冻结内容定义零资产
 
-对局 SHALL 以编译期整数常量构造的冻结定义启动，至少覆盖农民、主城、兵营、战斗单位、资源点、技能与升级；内容哈希 MUST 进入快照头部；MUST NOT 读取 `config.toml`、导出 JSON 或任何游戏资产。
+对局 SHALL 以编译期整数常量构造的冻结定义启动，至少覆盖农民、主城、兵营、战斗单位、资源点、技能与升级；内容哈希 MUST 进入快照头部；**`FrozenDefinitions` 构造路径** MUST NOT 读取 `config.toml`、导出 JSON 或任何游戏资产（真实导出数据仅用于只读表现层，见「一局 Melee 对战可装配并打完」的边界澄清）。
 
 #### Scenario: 定义冻结
 

@@ -26,6 +26,7 @@ pub mod heightfield;
 pub mod load;
 pub mod placements;
 pub mod table;
+pub mod textures;
 
 pub use definitions::{
     AbilityDef, CONTENT_HASH_SCHEMA, DefinitionError, DefinitionKind, DefinitionTables,
@@ -37,3 +38,4 @@ pub use placements::{
     DoodadPlacement, DoodadsFile, PlacementError, Position3, UnitPlacement, UnitsFile,
 };
 pub use table::{SlkTable, TableError};
+pub use textures::{LORDAERON_SUMMER_FILES, RgbaImage, TextureError, load_rgba, load_tileset};

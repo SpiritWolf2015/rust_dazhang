@@ -12,3 +12,6 @@ path = "src/lib.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 真实地表 tileset / 小地图 PNG 解码（BLP→PNG 由上游产出）；只启用 png，
+# 保持最小依赖面。MIT OR Apache-2.0，与 GPLv3 兼容（见 NOTICE.md）。
+image = { version = "0.25", default-features = false, features = ["png"] }

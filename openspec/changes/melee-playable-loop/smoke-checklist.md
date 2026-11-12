@@ -10,8 +10,8 @@
 - 入口：`cargo run -p w3-client --example melee`
 - 窗口：`MAX_FRAMES = u32::MAX`，不会自动退出，验收完手动关闭窗口
 - 环境：有 GPU / 显示设备的桌面；预期 1920×1080 逻辑尺寸，本机物理 2880×1620 / `scale_factor=1.5`
-- 数据：全部内存合成，不读取 `config.toml` / 导出 JSON / 任何游戏资产（ADR 0001）
-- 失败定位：贴回 `window created: ... scale_factor=...` 与 `input action rejected: ...` 日志
+- 数据（阶段 1/2 真实地图）：`melee` 入口读取 gitignored 本机 `config.toml` 指向的 Echo Isles 导出——`terrain-heightfield.json` / 6 张 BLP→PNG 地表贴图 / `war3mapMap.png` 小地图底图；**资产仅留本机、绝不入库**（ADR 0001）。缺 `config.toml` 或导出无效时 example 显式失败、不回落合成 demo（启动日志 `real map unavailable` + panic）。玩法定义与 CPU 测试仍零资产
+- 失败定位：贴回 `window created: ... scale_factor=...`、`real map loaded: ...` 与 `input action rejected: ...` 日志
 
 ## A. 启动与日志（对应 6.3 / 8.1）
 
@@ -21,13 +21,16 @@
 - [ ] **A4** 以下为**已知无害**告警，不算失败：`wgpu_hal::vulkan::instance` 的 layer manifest 提示、`egui_wgpu` 的 `Bgra8UnormSrgb` 偏好提示、启动瞬间 `catch-up limit exceeded: cap=8 dropped_ticks=...`（GPU 初始化耗时的追帧保护，纯表现层，不改权威状态）
 - [ ] **A5** 关闭窗口可正常退出，无 panic / 卡死
 
-## B. 画面与 HUD（对应 8.1）
+## B. 真实地图画面与 HUD（对应 8.1）
 
-- [ ] **B1** 可见 3D 地形（浅碗状）与双方共 12 个实体；无「四面体都一样」的观感
-- [ ] **B2** 类型可辨：农民=小四面体、士兵=四面体、主城/兵营=长方体、金矿=八面体、树=圆锥；敌我按队伍色区分
-- [ ] **B3** `Status` 窗口含：Tick、Resources（Gold / Lumber / Supply）、Selection 面板、Commands 命令卡、Production 队列、Minimap 小地图、底部按键提示；**文字全部可读、无缺字方块**
-- [ ] **B4** 所有存活单位有血条；选中单位额外有绿色选中环/框
-- [ ] **B5** 小地图显示蓝/红实体点与相机视口框，位置与 3D 画面对应
+> 阶段 1/2 已接入真实 Echo Isles 视觉，本组判据由「合成浅碗 + 12 四面体」同步为真实地形 / 贴图 / 摆放 / 底图。
+
+- [ ] **B1** 可见真实 Echo Isles 地形：129×97 高度场（地表分区、水体、崖层可辨），**非合成浅碗**；6 种地表呈现真实 BLP→PNG 贴图颜色（CPU 采样进顶点色上屏），**非 6 色调色板色块**
+- [ ] **B2** 97 单位 + 2491 装饰物静态摆放（树 / 岩石 / 金矿 / 中立建筑 / 起始点）可见、与地形贴合、无整体错位或悬空
+- [ ] **B3** 动态单位类型可辨：农民=小四面体、士兵=四面体、主城/兵营=长方体、金矿=八面体、树=圆锥；敌我按队伍色区分（静态摆放仍为程序化几何，glTF 模型属阶段 3 已知限制）
+- [ ] **B4** `Status` 窗口含：Tick、Resources（Gold / Lumber / Supply）、Selection 面板、Commands 命令卡、Production 队列、Minimap 小地图、底部按键提示；**文字全部可读、无缺字方块**
+- [ ] **B5** 所有存活单位有血条；选中单位额外有绿色选中环/框
+- [ ] **B6** 小地图显示真实 `war3mapMap.png` 的 CPU 降采样底图（32×32 颜色网格，多色、非纯灰底），蓝/红实体点与相机视口框叠加在底图之上、位置与 3D 画面对应
 
 ## C. 选择、命令与失败反馈（对应 8.2）
 
@@ -66,8 +69,8 @@
 
 ## G. 日志与合规（对应 8.5）
 
-- [ ] **G1** 所有日志为英文结构化 `key=value`；无任何中文文案进日志
-- [ ] **G2** 全程无 `config.toml` / 导出文件 / MPQ 派生数据读取；零资产依赖
+- [ ] **G1** 所有日志为英文结构化 `key=value`；无任何中文文案进日志；启动含 `real map loaded: vertices=12513 static_markers=2588 columns=129 terrain_tiles=6 minimap=true`
+- [ ] **G2** `config.toml` 与导出目录仅位于本机且被 `.gitignore` 忽略；`git status` 无新增地形 / 贴图 / 底图 / MPQ 派生资产文件；日志不写回资产内容；**仓库零资产**（ADR 0001）——注意 `melee` 入口**确实读取** gitignored 本机路径，这是合规行为，不得据此放宽资产入库禁令
 - [ ] **G3** 记录「CI 只覆盖编译 + CPU 测试，未验证 GPU 链路」，不以 CI 绿灯代替本清单
 
 ## 验收记录
@@ -75,7 +78,7 @@
 | 分组 | 结论 | 证据（截图 / 日志片段） |
 |---|---|---|
 | A1–A5 启动与日志 | ☐ 通过 ☐ 不通过 ☐ 未执行 | |
-| B1–B5 画面与 HUD | ☐ 通过 ☐ 不通过 ☐ 未执行 | |
+| B1–B6 真实地图画面与 HUD | ☐ 通过 ☐ 不通过 ☐ 未执行 | |
 | C1–C10 选择与命令 | ☐ 通过 ☐ 不通过 ☐ 未执行 | |
 | D1–D2 小地图与相机 | ☐ 通过 ☐ 不通过 ☐ 未执行 | |
 | E1–E6 打完一局 | ☐ 通过 ☐ 不通过 ☐ 未执行 | |
@@ -85,5 +88,5 @@
 ## 验收后回填
 
 1. 把各分组结论同步到 `openspec/changes/melee-playable-loop/tasks.md` 的 `6.3` 与 `8.1`–`8.5`，逐项勾 `- [x]`；无证据项如实标注「未执行 / 待补验」，**不冒充通过**。
-2. 若某组不通过，把 `window created: ... scale_factor=...` 与 `input action rejected: ...` 日志贴回给实施方定位；清单未逐项勾选前不得归档。
-3. 已知限制（窗口内重开按键、命令卡 Move/Attack 以光标为目标、AI 脚本 horizon 3600 帧、中文上屏与真实 WC3 资产留后续 change）见 `design.md` Risks，不计为本清单失败项。
+2. 若某组不通过，把 `window created: ... scale_factor=...`、`real map loaded: ...` 与 `input action rejected: ...` 日志贴回给实施方定位；清单未逐项勾选前不得归档。
+3. 已知限制（窗口内重开按键、命令卡 Move/Attack 以光标为目标、AI 脚本 horizon 3600 帧、中文上屏，以及**阶段 3 待办**：真实 glTF/MDX 骨骼模型、逐像素 GPU 纹理、静态摆放仍为程序化几何）见 `design.md` Risks / D7，不计为本清单失败项。真实地形 / 地表贴图 / 小地图底图**本期已接入**，不再是「留后续 change」。

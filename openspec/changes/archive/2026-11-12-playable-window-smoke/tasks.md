@@ -60,6 +60,8 @@
 
 ## 8. 归档
 
+> **用户拍板（2026-11-12）：立即归档，豁免 4.6 / 4.7 的人工补验。** 用户已人工 `git push`，并在知悉第 4 组 4.6（`Resized` 拖拽改窗口尺寸）/ 4.7（高刷 144 Hz 逐帧恒定 30）本轮人工会话未执行、且 `spec.md` 有「清单未逐项勾选前不得归档」字面约束的前提下，明确拍板「现在就归档」。据此：4.6 / 4.7 保持未勾、如实记录为已豁免的人工缺口，不冒充通过；CI 双平台门禁结果与 `push` 由人工核实（AI 不执行任何远端命令、无法读取远端 CI 状态）；归档动作 `openspec archive playable-window-smoke -y` 由编排者本地执行，8.1 / 8.2 随归档完成视为达成，不在此预勾。用户同时明确：当前最小可玩版本「根本没法玩」，归档后立即启动下一轮迭代，目标对齐只读参考项目 `godot_warcraft3` 的进度水平。
+
 - [ ] 8.1 人工 GPU 冒烟清单（第 4 组）逐项勾选、`critic` 复审无阻塞、CI 双平台门禁通过后，由编排者执行 `openspec archive playable-window-smoke -y`；验证：命令成功且归档目录带日期前缀
 - [ ] 8.2 确认主 `openspec/specs/` 新增 `playable-window-entry/spec.md`，既有 11 个 capability 未被改写、无其它 change 争用（当前仅 1 个 active change：`playable-window-smoke`；`gameplay-command-wire-format` 已归档）；验证：`openspec list --specs` 列出新 capability，`git diff -- openspec/specs/` 只新增该目录
 

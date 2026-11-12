@@ -467,12 +467,14 @@ impl Model {
     }
 }
 
-/// 本机模型库：`key → Model` 与 `owner → key` 绑定。
+/// 本机模型库：`key → Model`、`owner → key` 与 `实体 ID → key` 绑定。
 /// 资源缺失时 `resolve` 返回 `None`，实例降级为不显示（spec Scenario）。
 #[derive(Default)]
 pub struct ModelLibrary {
     models: BTreeMap<String, Model>,
     bindings: BTreeMap<u8, String>,
+    /// 按实体 ID 绑定的类型标签（表现层专属，不进权威状态）。
+    entity_bindings: BTreeMap<u64, String>,
 }
 
 impl ModelLibrary {
@@ -484,15 +486,23 @@ impl ModelLibrary {
         self.bindings.insert(owner, key.to_string());
     }
 
+    /// 按实体 ID 绑定类型标签，使不同单位类型呈现不同几何；
+    /// 该绑定是纯表现层数据，MUST NOT 进入权威状态、状态哈希或快照。
+    pub fn bind_entity(&mut self, entity_id: u64, key: &str) {
+        self.entity_bindings.insert(entity_id, key.to_string());
+    }
+
     pub fn get(&self, key: &str) -> Option<&Model> {
         self.models.get(key)
     }
 
-    /// 把实体的 `owner` 映射到模型 key；库里没有该 key 时返回 `None`。
+    /// 把实体映射到模型 key：优先按实体 ID 的类型绑定，其次按 `owner`
+    /// 的队伍绑定，最后回退 `"default"`；库里没有该 key 时返回 `None`。
     pub fn resolve(&self, entity: &EntityView) -> Option<String> {
         let key = self
-            .bindings
-            .get(&entity.owner)
+            .entity_bindings
+            .get(&entity.id)
+            .or_else(|| self.bindings.get(&entity.owner))
             .cloned()
             .unwrap_or_else(|| "default".to_string());
         self.models.contains_key(&key).then_some(key)

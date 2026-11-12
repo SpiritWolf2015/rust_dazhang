@@ -25,5 +25,8 @@ pub use model::{
     Attachment, Bone, FilterMode, GeosetAnim, Material, Model, ModelDocument, ModelLibrary,
     ResolvedMaterial, Sequence, TEAM_COLORS, Track, team_color,
 };
-pub use scene::{FrameInput, Instance, Scene, SceneVertex, facing_to_radians, world_to_f32};
+pub use scene::{
+    DisplayHints, FrameInput, Instance, Scene, SceneVertex, UNIT_MARKER_SIZE, display_hints,
+    facing_to_radians, world_to_f32,
+};
 pub use terrain::{TerrainMesh, TerrainVertex};

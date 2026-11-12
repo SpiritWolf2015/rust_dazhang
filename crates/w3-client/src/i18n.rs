@@ -24,12 +24,22 @@ pub struct Texts {
     pub empty_queue: &'static str,
     pub font_unavailable: &'static str,
     pub action_hint: &'static str,
+    /// 命令卡标题。
+    pub commands: &'static str,
+    /// 选择面板标题。
+    pub selection_panel: &'static str,
+    /// 小地图标题。
+    pub minimap: &'static str,
+    /// 胜者标签。
+    pub winner: &'static str,
+    /// 胜负结算标题。
+    pub victory: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
 /// 常量名沿用 i18n 层既有导出，避免改动既有公开签名。
 pub const ZH: Texts = Texts {
-    window_title: "w3-client playable",
+    window_title: "w3-client",
     hud_title: "Status",
     selection: "Selected",
     resources: "Resources",
@@ -42,5 +52,10 @@ pub const ZH: Texts = Texts {
     no_selection: "none",
     empty_queue: "queue empty",
     font_unavailable: "font unavailable, text hidden",
-    action_hint: "LMB drag: select | RMB: move/attack | Q: cast | T: train | C: cancel | WASD: pan | Wheel: zoom | Z/X: rotate",
+    action_hint: "LMB drag: select | RMB: move/attack | G: gather | B: build | T: train | C: cancel | H: stop | Q: cast | F1..F9: group | 1..9: select group | WASD: pan | Wheel: zoom | Z/X: rotate",
+    commands: "Commands",
+    selection_panel: "Selection",
+    minimap: "Minimap",
+    winner: "Winner",
+    victory: "VICTORY",
 };

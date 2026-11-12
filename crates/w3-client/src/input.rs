@@ -12,13 +12,15 @@
 //! 坐标都 MUST 经既有冻结边界 [`w3_app::freeze_f64`]（ADR 0004）转成 `SimFixed`，
 //! 不新增浮点到权威状态的路径。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use w3_app::freeze_f64;
 use w3_core::{
     Command, CommandKind, EntityId, Event, Frame, GameplayCommand, GameplayCommandKind, SCALE,
     SimFixed, WorldView,
 };
+
+use crate::melee::defs::BARRACKS;
 
 /// 命令提前量：执行帧 = 当前冻结逻辑帧号 + 该常量（整数帧，ADR 0002 §2）。
 /// 固定值，与 `Instant` / 呈现帧号 / 刷新率无关。
@@ -209,10 +211,20 @@ pub enum InputAction {
     ContextAction([f64; 2]),
     /// 施法（`Q`）：以选中首个单位为施法者、该屏幕点拾取的敌方单位为目标。
     Cast([f64; 2]),
-    /// 生产（`T`）：以选中首个单位为生产者。
+    /// 生产（`T`）：以选中首个单位为生产者，训练战斗单位。
     Train,
     /// 取消生产（`C`）：以选中首个单位为生产者，取消队首。
     CancelTrain,
+    /// 采集（`G`）：对选中农民逐一下达 `Gather`。
+    Gather,
+    /// 建造（`B`）：以选中单位为生产者，建造兵营。
+    Build,
+    /// 停止（`H`）：清空选中单位当前订单。
+    Stop,
+    /// 编组（F1..F9）：把当前选中集合记入表现层编组。
+    AssignGroup(u8),
+    /// 按组选择（1..9）：恢复表现层编组选中集合。
+    SelectGroup(u8),
 }
 
 /// 表现层输入状态：选中集合、框选矩形、命令序号。全部非权威。
@@ -223,6 +235,10 @@ pub struct InputState {
     drag_start: Option<[f64; 2]>,
     drag_current: Option<[f64; 2]>,
     next_sequence: u32,
+    /// 编组（表现层专属，不进权威状态 / 哈希 / 快照）。
+    groups: BTreeMap<u8, BTreeSet<u64>>,
+    /// 群体移动分组号（非 0，按稳定实体 ID 分配落点）。
+    next_group: u32,
 }
 
 impl Default for InputState {
@@ -240,7 +256,16 @@ impl InputState {
             drag_start: None,
             drag_current: None,
             next_sequence: 1,
+            groups: BTreeMap::new(),
+            next_group: 1,
         }
+    }
+
+    /// 取下一个非 0 群体移动分组号；表现层单调递增，不进权威状态。
+    fn take_group(&mut self) -> u32 {
+        let group = self.next_group.max(1);
+        self.next_group = group.wrapping_add(1).max(1);
+        group
     }
 
     /// 只读选中集合（`BTreeSet` 稳定顺序，不引入 `HashMap` 迭代顺序）。
@@ -420,6 +445,12 @@ impl InputState {
                         .collect())
                 } else {
                     let (x, y) = mapper.freeze_point(point)?;
+                    // 多选时共用一个非 0 分组号，由内核按稳定实体 ID 分配落点。
+                    let group = if selected.len() > 1 {
+                        self.take_group()
+                    } else {
+                        0
+                    };
                     Ok(selected
                         .into_iter()
                         .map(|entity| {
@@ -429,7 +460,7 @@ impl InputState {
                                     entity,
                                     x,
                                     y,
-                                    group: 0,
+                                    group,
                                     append: false,
                                 },
                             )
@@ -468,6 +499,57 @@ impl InputState {
                     view,
                     GameplayCommandKind::CancelTrain { producer, index: 0 },
                 )])
+            }
+            InputAction::Gather => {
+                if self.selection.is_empty() {
+                    return Err(InputError::NoSelection);
+                }
+                let selected: Vec<EntityId> = self
+                    .selection
+                    .iter()
+                    .copied()
+                    .filter_map(EntityId::new)
+                    .collect();
+                Ok(selected
+                    .into_iter()
+                    .map(|unit| self.gameplay(view, GameplayCommandKind::Gather { unit }))
+                    .collect())
+            }
+            InputAction::Build => {
+                let producer = self.first_selected().ok_or(InputError::NoSelection)?;
+                Ok(vec![self.gameplay(
+                    view,
+                    GameplayCommandKind::Train {
+                        producer,
+                        unit_def: BARRACKS,
+                        is_building: true,
+                    },
+                )])
+            }
+            InputAction::Stop => {
+                if self.selection.is_empty() {
+                    return Err(InputError::NoSelection);
+                }
+                let selected: Vec<EntityId> = self
+                    .selection
+                    .iter()
+                    .copied()
+                    .filter_map(EntityId::new)
+                    .collect();
+                Ok(selected
+                    .into_iter()
+                    .map(|entity| self.simulation(view, CommandKind::Stop { entity }))
+                    .collect())
+            }
+            InputAction::AssignGroup(group) => {
+                self.groups.insert(group, self.selection.clone());
+                Ok(Vec::new())
+            }
+            InputAction::SelectGroup(group) => {
+                if let Some(members) = self.groups.get(&group) {
+                    self.selection = members.clone();
+                }
+                Ok(Vec::new())
             }
         }
     }

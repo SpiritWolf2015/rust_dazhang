@@ -74,6 +74,22 @@ impl FixedStepClient {
         plan
     }
 
+    /// 喂入整数节拍，并在每个推进的逻辑帧**之前**以可写句柄回调
+    /// `before_step`，供装配层在该帧确定性地提交外部命令；`step()` 全程
+    /// 无参。与 `advance_with_observer` 的区别是回调发生在 `step()` 之前且
+    /// 可写，用于避免「按墙钟调用粒度提交命令」破坏逐帧哈希一致性。
+    pub fn advance_with_hook<F>(&mut self, elapsed_ticks: u64, mut before_step: F) -> FrameAdvance
+    where
+        F: FnMut(&mut RtsMatch),
+    {
+        let plan = self.accumulator.advance(elapsed_ticks);
+        for _ in 0..plan.steps {
+            before_step(&mut self.sim);
+            self.sim.step();
+        }
+        plan
+    }
+
     /// 便捷入口：按一个逻辑帧的整数步长推进恰好一帧。
     pub fn advance_one_frame(&mut self) -> FrameAdvance {
         self.advance(TICKS_PER_LOGIC_FRAME)

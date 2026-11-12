@@ -18,6 +18,7 @@
 //! - 命令只经 `submit_command` / `submit_gameplay_command` 提交，失败显式报错；
 //! - HUD 只读，选中集合 / 相机位姿 / 累加器余数一律表现层专属。
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -38,8 +39,41 @@ use crate::client::FixedStepClient;
 use crate::hud::{self, HudAssets, HudModel};
 use crate::i18n::{Texts, ZH};
 use crate::input::{ClientCommand, InputAction, InputError, InputState, ScreenMapper};
+use crate::melee::EntityKind;
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+/// F1..F9 映射到编组编号（表现层，不进权威状态）。
+fn assign_group_number(key: KeyCode) -> Option<u8> {
+    match key {
+        KeyCode::F1 => Some(1),
+        KeyCode::F2 => Some(2),
+        KeyCode::F3 => Some(3),
+        KeyCode::F4 => Some(4),
+        KeyCode::F5 => Some(5),
+        KeyCode::F6 => Some(6),
+        KeyCode::F7 => Some(7),
+        KeyCode::F8 => Some(8),
+        KeyCode::F9 => Some(9),
+        _ => None,
+    }
+}
+
+/// 数字键 1..9 映射到按组选择编号。
+fn select_group_number(key: KeyCode) -> Option<u8> {
+    match key {
+        KeyCode::Digit1 => Some(1),
+        KeyCode::Digit2 => Some(2),
+        KeyCode::Digit3 => Some(3),
+        KeyCode::Digit4 => Some(4),
+        KeyCode::Digit5 => Some(5),
+        KeyCode::Digit6 => Some(6),
+        KeyCode::Digit7 => Some(7),
+        KeyCode::Digit8 => Some(8),
+        KeyCode::Digit9 => Some(9),
+        _ => None,
+    }
+}
 
 /// 宿主错误；错误文本一律英文（CODEBUDDY.md §3）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +189,10 @@ pub struct ClientApp<P: StepDriver> {
     input: InputState,
     hud_assets: HudAssets,
     texts: Texts,
+    /// 装配层注入的实体类型标签（表现层专属，不进权威状态 / 哈希 / 快照）。
+    entity_kinds: BTreeMap<u64, EntityKind>,
+    /// 命令卡点击待翻译的输入动作（表现层，在 GPU 借用结束后提交）。
+    pending_input_action: Option<InputAction>,
 
     window: Option<Arc<Window>>,
     gpu: Option<GpuContext>,
@@ -186,6 +224,8 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             input: InputState::default(),
             hud_assets: HudAssets::degraded(),
             texts: ZH,
+            entity_kinds: BTreeMap::new(),
+            pending_input_action: None,
             window: None,
             gpu: None,
             egui_ctx: egui::Context::default(),
@@ -199,6 +239,13 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             frames: 0,
             last_error: None,
         }
+    }
+
+    /// 注入实体类型标签（表现层数据），供命令卡 / 选择面板只读派生。
+    /// 不改动既有 `new` 签名，既有入口不受影响。
+    pub fn with_entity_kinds(mut self, kinds: BTreeMap<u64, EntityKind>) -> Self {
+        self.entity_kinds = kinds;
+        self
     }
 
     /// 运行 winit 事件循环直到关闭或达到 `max_frames`。
@@ -235,6 +282,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             &mapper,
             self.input.local_player(),
         )
+        .with_kinds(self.entity_kinds.clone())
     }
 
     /// 最近一次显式错误（输入 / 命令提交失败），供验收读取。
@@ -366,7 +414,8 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             &events,
             &mapper,
             self.input.local_player(),
-        );
+        )
+        .with_kinds(self.entity_kinds.clone());
         self.last_events = events.clone();
 
         let texts = self.texts;
@@ -376,9 +425,36 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             .as_mut()
             .ok_or_else(|| RenderError::Surface("egui state not ready".into()))?
             .take_egui_input(window.as_ref());
+        let mut interaction = hud::HudInteraction::default();
         let output = self.egui_ctx.run_pass(raw_input, |ctx| {
-            hud::draw(ctx, &hud_model, &texts, hud_assets)
+            interaction = hud::draw_with_minimap(ctx, &hud_model, &texts, hud_assets);
         });
+        // 小地图点击只平移表现层相机，MUST NOT 生成权威命令或改变哈希。
+        if let Some(click) = interaction.minimap_click {
+            let extent = hud_model.minimap.extent;
+            let target = [(click[0] - 0.5) * extent, (click[1] - 0.5) * extent];
+            let current = self.camera.pan();
+            self.camera.apply(CameraAction::Pan([
+                target[0] - current[0],
+                target[1] - current[1],
+            ]));
+        }
+        // 命令卡点击：翻译为归一化输入动作，只经既有公开提交入口入队。
+        if let Some(action) = interaction.command_action {
+            let input_action = match action {
+                hud::CommandAction::Gather => InputAction::Gather,
+                hud::CommandAction::Build => InputAction::Build,
+                hud::CommandAction::Train => InputAction::Train,
+                hud::CommandAction::Cancel => InputAction::CancelTrain,
+                hud::CommandAction::Stop => InputAction::Stop,
+                hud::CommandAction::Move | hud::CommandAction::Attack => {
+                    InputAction::ContextAction(self.cursor)
+                }
+            };
+            // `gpu` 的不可变借用仍在，故只记录待处理动作；由
+            // `RedrawRequested` 分支在借用结束后统一提交。
+            self.pending_input_action = Some(input_action);
+        }
         let egui::FullOutput {
             platform_output,
             mut textures_delta,
@@ -493,6 +569,15 @@ impl<P: StepDriver + 'static> ClientApp<P> {
                     PhysicalKey::Code(KeyCode::KeyC) => {
                         self.report_input(InputAction::CancelTrain);
                     }
+                    PhysicalKey::Code(KeyCode::KeyG) => {
+                        self.report_input(InputAction::Gather);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyB) => {
+                        self.report_input(InputAction::Build);
+                    }
+                    PhysicalKey::Code(KeyCode::KeyH) => {
+                        self.report_input(InputAction::Stop);
+                    }
                     PhysicalKey::Code(KeyCode::KeyW) => {
                         self.camera.apply(CameraAction::Pan([0.0, -PAN_STEP]));
                     }
@@ -510,6 +595,13 @@ impl<P: StepDriver + 'static> ClientApp<P> {
                     }
                     PhysicalKey::Code(KeyCode::KeyX) => {
                         self.camera.apply(CameraAction::Rotate(YAW_STEP));
+                    }
+                    PhysicalKey::Code(key) => {
+                        if let Some(group) = assign_group_number(key) {
+                            self.report_input(InputAction::AssignGroup(group));
+                        } else if let Some(group) = select_group_number(key) {
+                            self.report_input(InputAction::SelectGroup(group));
+                        }
                     }
                     _ => {}
                 }
@@ -605,6 +697,10 @@ impl<P: StepDriver + 'static> ApplicationHandler<()> for ClientApp<P> {
                 // 呈现只读：逻辑帧数在 about_to_wait 由整数 tick 决定。
                 if let Err(error) = self.render_one() {
                     log::error!(target: "w3_client", "render failed: frame={} error={}", self.frames, error);
+                }
+                // 命令卡点击：GPU 借用结束后，经既有公开提交入口入队。
+                if let Some(action) = self.pending_input_action.take() {
+                    self.report_input(action);
                 }
             }
             _ => {}

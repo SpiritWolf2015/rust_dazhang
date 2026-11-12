@@ -138,12 +138,54 @@ fn triangle_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
 }
 
 /// 单位占位标记（四面体）的基准尺寸；拾取平面高度由它推导。
+/// 只读派生的实体展示提示（design D5）：队伍色、选中环与血条比例。
+/// 纯函数，不写回任何状态、不进入 FNV-1a 状态哈希或快照。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayHints {
+    pub team_color: [f32; 4],
+    pub selection_ring: Option<[f32; 4]>,
+    pub hp_fraction: f32,
+}
+
+/// 由只读字段派生展示提示；`selected` 来自表现层选中集合。
+pub fn display_hints(team: u8, hp: i64, max_hp: i64, selected: bool) -> DisplayHints {
+    DisplayHints {
+        team_color: team_color(team),
+        selection_ring: selected.then_some([0.40, 1.0, 0.40, 1.0]),
+        hp_fraction: (hp as f32 / max_hp.max(1) as f32).clamp(0.0, 1.0),
+    }
+}
+
 pub const UNIT_MARKER_SIZE: f32 = 24.0;
 
-/// 追加一个朝向标记（四面体）作为单位占位呈现，贴地并应用队伍色。
-fn append_unit_marker(vertices: &mut Vec<SceneVertex>, instance: &Instance, terrain: &TerrainMesh) {
+/// 压入一个三角形（单位几何统一入口），应用给定队伍色。
+fn push_triangle(
+    vertices: &mut Vec<SceneVertex>,
+    p0: [f32; 3],
+    p1: [f32; 3],
+    p2: [f32; 3],
+    color: [f32; 4],
+) {
+    let normal = triangle_normal(p0, p1, p2);
+    for position in [p0, p1, p2] {
+        vertices.push(SceneVertex {
+            position,
+            normal,
+            color,
+            surface: -1.0,
+        });
+    }
+}
+
+/// 追加可缩放、可着色的四面体（单位占位标记）。
+fn append_tetra(
+    vertices: &mut Vec<SceneVertex>,
+    instance: &Instance,
+    terrain: &TerrainMesh,
+    size: f32,
+    color: [f32; 4],
+) {
     let base_y = terrain.height_at_world(instance.x, instance.y);
-    let size = UNIT_MARKER_SIZE;
     let (sin, cos) = instance.facing.sin_cos();
     let forward = [cos, sin];
     let apex = [instance.x, base_y + size * 1.6, instance.y];
@@ -162,22 +204,116 @@ fn append_unit_marker(vertices: &mut Vec<SceneVertex>, instance: &Instance, terr
         base_y,
         instance.y - forward[1] * size * 0.5 - forward[0] * size * 0.6,
     ];
-    let color = team_color(instance.team);
     for &(p0, p1, p2) in &[
         (apex, front, left),
         (apex, left, right),
         (apex, right, front),
         (front, right, left),
     ] {
-        let normal = triangle_normal(p0, p1, p2);
-        for position in [p0, p1, p2] {
-            vertices.push(SceneVertex {
-                position,
-                normal,
-                color,
-                surface: -1.0,
-            });
-        }
+        push_triangle(vertices, p0, p1, p2, color);
+    }
+}
+
+/// 追加一个朝向标记（四面体）作为单位占位呈现，贴地并应用队伍色。
+fn append_unit_marker(vertices: &mut Vec<SceneVertex>, instance: &Instance, terrain: &TerrainMesh) {
+    let color = team_color(instance.team);
+    append_tetra(vertices, instance, terrain, UNIT_MARKER_SIZE, color);
+}
+
+/// 追加长方体（建筑）：四个侧面与顶面，不含底面（贴地）。
+fn append_box(
+    vertices: &mut Vec<SceneVertex>,
+    instance: &Instance,
+    terrain: &TerrainMesh,
+    half: f32,
+    height: f32,
+    color: [f32; 4],
+) {
+    let base_y = terrain.height_at_world(instance.x, instance.y);
+    let (x, z) = (instance.x, instance.y);
+    let b0 = [x - half, base_y, z - half];
+    let b1 = [x + half, base_y, z - half];
+    let b2 = [x + half, base_y, z + half];
+    let b3 = [x - half, base_y, z + half];
+    let t0 = [x - half, base_y + height, z - half];
+    let t1 = [x + half, base_y + height, z - half];
+    let t2 = [x + half, base_y + height, z + half];
+    let t3 = [x - half, base_y + height, z + half];
+    push_triangle(vertices, b0, b1, t1, color);
+    push_triangle(vertices, b0, t1, t0, color);
+    push_triangle(vertices, b1, b2, t2, color);
+    push_triangle(vertices, b1, t2, t1, color);
+    push_triangle(vertices, b2, b3, t3, color);
+    push_triangle(vertices, b2, t3, t2, color);
+    push_triangle(vertices, b3, b0, t0, color);
+    push_triangle(vertices, b3, t0, t3, color);
+    push_triangle(vertices, t0, t1, t2, color);
+    push_triangle(vertices, t0, t2, t3, color);
+}
+
+/// 追加八面体（金矿）：上下两顶点与四个赤道点。
+fn append_octahedron(
+    vertices: &mut Vec<SceneVertex>,
+    instance: &Instance,
+    terrain: &TerrainMesh,
+    size: f32,
+    color: [f32; 4],
+) {
+    let base_y = terrain.height_at_world(instance.x, instance.y);
+    let (x, z) = (instance.x, instance.y);
+    let top = [x, base_y + size * 1.6, z];
+    let bottom = [x, base_y, z];
+    let east = [x + size, base_y + size * 0.8, z];
+    let south = [x, base_y + size * 0.8, z + size];
+    let west = [x - size, base_y + size * 0.8, z];
+    let north = [x, base_y + size * 0.8, z - size];
+    for &(a, b) in &[(east, south), (south, west), (west, north), (north, east)] {
+        push_triangle(vertices, top, a, b, color);
+        push_triangle(vertices, bottom, b, a, color);
+    }
+}
+
+/// 追加圆锥（树）：六段侧面三角形。
+fn append_cone(
+    vertices: &mut Vec<SceneVertex>,
+    instance: &Instance,
+    terrain: &TerrainMesh,
+    size: f32,
+    color: [f32; 4],
+) {
+    let base_y = terrain.height_at_world(instance.x, instance.y);
+    let (x, z) = (instance.x, instance.y);
+    let apex = [x, base_y + size * 2.2, z];
+    let segments = 6usize;
+    let ring: Vec<[f32; 3]> = (0..segments)
+        .map(|index| {
+            let angle = (index as f32) * std::f32::consts::TAU / segments as f32;
+            [x + angle.cos() * size, base_y, z + angle.sin() * size]
+        })
+        .collect();
+    for index in 0..segments {
+        let next = (index + 1) % segments;
+        push_triangle(vertices, apex, ring[index], ring[next], color);
+    }
+}
+
+/// 按类型键分派几何；不同键输出不同形状（design D5）。
+/// 全部为程序化几何、零资产读取，且不写回任何权威状态。
+fn append_typed_marker(
+    vertices: &mut Vec<SceneVertex>,
+    instance: &Instance,
+    terrain: &TerrainMesh,
+    key: &str,
+) {
+    let color = team_color(instance.team);
+    let size = UNIT_MARKER_SIZE;
+    match key {
+        "town-hall" => append_box(vertices, instance, terrain, size * 0.9, size * 1.4, color),
+        "barracks" => append_box(vertices, instance, terrain, size * 0.7, size * 0.9, color),
+        "gold-mine" => append_octahedron(vertices, instance, terrain, size * 0.9, color),
+        "tree" => append_cone(vertices, instance, terrain, size * 0.8, color),
+        "peasant" => append_tetra(vertices, instance, terrain, size * 0.55, color),
+        _ => append_unit_marker(vertices, instance, terrain),
     }
 }
 
@@ -295,9 +431,13 @@ impl Scene {
             });
         }
         for instance in self.instances.values() {
-            if instance.alive && instance.model_key.is_some() {
-                append_unit_marker(&mut vertices, instance, terrain);
+            if !instance.alive {
+                continue;
             }
+            let Some(key) = instance.model_key.as_deref() else {
+                continue;
+            };
+            append_typed_marker(&mut vertices, instance, terrain, key);
         }
         vertices
     }
@@ -480,5 +620,80 @@ mod tests {
         // 地形 6 索引 + 1 个单位标记 12 顶点 = 18。
         assert_eq!(a.len(), mesh.indices.len() + 12);
         assert!(a.iter().any(|v| v.surface < 0.0), "应含单位标记");
+    }
+
+    fn test_instance(key: &str, team: u8) -> Instance {
+        Instance {
+            id: 1,
+            x: 0.0,
+            y: 0.0,
+            prev_x: 0.0,
+            prev_y: 0.0,
+            target_x: 0.0,
+            target_y: 0.0,
+            facing: 0.0,
+            team,
+            hp: 100,
+            alive: true,
+            model_key: Some(key.to_string()),
+            sequence: 0,
+        }
+    }
+
+    #[test]
+    fn typed_markers_produce_distinct_geometry() {
+        let mesh = terrain();
+        let keys = [
+            "default",
+            "peasant",
+            "soldier",
+            "town-hall",
+            "barracks",
+            "gold-mine",
+            "tree",
+        ];
+        let mut counts = Vec::new();
+        for key in keys {
+            let instance = test_instance(key, 1);
+            let mut vertices = Vec::new();
+            append_typed_marker(&mut vertices, &instance, &mesh, key);
+            assert!(!vertices.is_empty());
+            assert!(vertices.iter().all(|v| v.surface < 0.0));
+            counts.push(vertices.len());
+        }
+        let distinct: std::collections::BTreeSet<usize> = counts.iter().copied().collect();
+        assert!(distinct.len() >= 3, "不同实体类型必须呈现不同几何");
+        assert_ne!(counts[3], counts[5], "主城与金矿几何必须不同");
+        assert_ne!(counts[1], counts[3], "农民与主城几何必须不同");
+    }
+
+    #[test]
+    fn display_hints_derive_team_color_ring_and_hp() {
+        let red = display_hints(1, 50, 100, false);
+        let blue = display_hints(2, 50, 100, false);
+        assert_ne!(red.team_color, blue.team_color, "敌我队伍色必须不同");
+        assert_eq!(red.selection_ring, None);
+        let selected = display_hints(1, 50, 100, true);
+        assert!(selected.selection_ring.is_some());
+        assert!((selected.hp_fraction - 0.5).abs() < 1.0e-6);
+        assert_eq!(display_hints(1, 200, 100, false).hp_fraction, 1.0);
+    }
+
+    #[test]
+    fn entity_binding_takes_priority_in_resolve() {
+        let mut library = ModelLibrary::default();
+        for key in ["default", "town-hall", "peasant"] {
+            library.insert(key, crate::model::Model::default());
+        }
+        library.bind_team(1, "default");
+        library.bind_entity(1, "town-hall");
+        assert_eq!(
+            library.resolve(&entity(1, 1, 0)).as_deref(),
+            Some("town-hall")
+        );
+        assert_eq!(
+            library.resolve(&entity(2, 1, 0)).as_deref(),
+            Some("default")
+        );
     }
 }

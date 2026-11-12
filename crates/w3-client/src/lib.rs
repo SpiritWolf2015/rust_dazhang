@@ -41,6 +41,7 @@ pub mod client;
 pub mod hud;
 pub mod i18n;
 pub mod input;
+pub mod melee;
 pub mod net_driver;
 pub mod presentation;
 

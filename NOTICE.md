@@ -74,10 +74,22 @@ P6 `p6-playable-client` change 新增 `crates/w3-client`（可玩客户端集成
 - 兼容性结论：`egui` 家族明确取 MIT 一侧、`self_cell` 明确取 Apache-2.0 一侧，均与本项目 GPLv3 兼容；均为 crates.io 依赖，版本由 `Cargo.lock` 锁定，**未复制任何上游源码进仓库**，沿用「本项目为独立从零编写」的声明。
 - `self_cell` 为双许可（`Apache-2.0 OR GPL-2.0-only`）：`GPL-2.0-only` 一侧与 GPLv3 不兼容，本项目明确选择 `Apache-2.0` 一侧以消除合规争议。它是 egui / epaint 文本栅格化链路（`vello_cpu` / `skrifa` / `read-fonts`）的传递依赖，非直接依赖。
 - `egui-winit` 以 `default-features = false` 引入，避免拉入 `ab_glyph` / wayland / x11 等平台装饰依赖，与 `w3-render` 保持最小 `winit` feature 集（`rwh_06`）一致；不影响许可证结论。
-- `egui` 的 `default_fonts` feature **未启用**：该 feature 会引入 `epaint_default_fonts`（许可证 `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`，含非 MIT 字体许可证），属 `CODEBUDDY.md` 第 10 节所列人工独占的许可证变更，本轮不启用，故本文件不登记字体许可证。
+- `egui` 的 `default_fonts` feature **已启用**（`playable-window-smoke` change，经用户拍板）：引入 `epaint_default_fonts`，其许可证为 `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`。字体许可证登记见下节；属 `CODEBUDDY.md` 第 10 节人工独占的许可证变更，已由程序员本人授权。内置字体为 egui/epaint 编译时内嵌的开源字体，**仓库不新增任何字体资产文件**。
 - 待复核：另有 4 个新增包（`objc2-app-kit` / `objc2-ui-kit` / `wgpu-core-deps-wasm` 属其他平台 target，另一个为本地 `w3-client` crate 自身）本机未逐一核验许可证，建议 CI 双平台时由 `docs-owner` 补齐；本轮不编造其许可证。
 - 其余传递依赖未逐一核验，`Cargo.lock` 为依赖图权威清单。
 - 资产边界不变：导出 JSON / PNG / GLB 等资产留在本机，绝不入库（见 [ADR 0001](docs/decisions/0001-license.md)）。
+
+## 内置开源字体（playable-window-smoke）
+
+`w3-client` 启用 `egui/default_fonts` 后，`epaint_default_fonts` 在编译期把开源字体内嵌进二进制，用于 HUD 文字渲染；运行时不读取本机字体文件、不加载仓库资产（ADR 0001）：
+
+| 字体 / crate | 许可证 | 版权 |
+|---|---|---|
+| `epaint_default_fonts`（Ubuntu Font 与若干 emoji 字体集合） | `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0` | 字体作者与 Canonical Ltd.（Ubuntu Font Licence 1.0）、各 OFL 字体作者 |
+
+- 兼容性结论：crate 代码为 MIT OR Apache-2.0，字体数据为 OFL-1.1 / Ubuntu-font-1.0；OFL-1.1 与 GPLv3 兼容，Ubuntu Font Licence 1.0 允许随应用分发且不要求应用改用同许可证，故与本项目 GPLv3 组合可接受。许可证变更已由程序员本人拍板（`CODEBUDDY.md` 第 10 节人工独占）。
+- 内置字体不含 CJK 字形，故 `w3-client` 的 HUD 文案为 ASCII；中文上屏需另内嵌 CJK 字体，留后续独立 change。
+- 字体数据由 crates.io 依赖在构建期内嵌，**未复制任何字体文件进仓库**；`Cargo.lock` 为依赖图权威清单。
 
 ## 第三方资产与商标
 

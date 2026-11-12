@@ -137,10 +137,13 @@ fn triangle_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     [n[0] / len, n[1] / len, n[2] / len]
 }
 
+/// 单位占位标记（四面体）的基准尺寸；拾取平面高度由它推导。
+pub const UNIT_MARKER_SIZE: f32 = 24.0;
+
 /// 追加一个朝向标记（四面体）作为单位占位呈现，贴地并应用队伍色。
 fn append_unit_marker(vertices: &mut Vec<SceneVertex>, instance: &Instance, terrain: &TerrainMesh) {
     let base_y = terrain.height_at_world(instance.x, instance.y);
-    let size = 24.0_f32;
+    let size = UNIT_MARKER_SIZE;
     let (sin, cos) = instance.facing.sin_cos();
     let forward = [cos, sin];
     let apex = [instance.x, base_y + size * 1.6, instance.y];

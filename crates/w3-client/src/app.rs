@@ -300,6 +300,20 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         let extent = (self.terrain.columns.max(self.terrain.rows) as f64
             * self.terrain.cell_size as f64)
             .max(1.0);
+        // 拾取复用与 `render_one` 同源的 `Camera::matrix` 投影，消除
+        // 「渲染用透视、拾取用线性」两套口径造成的框选 / 命中错位。
+        let projection = w3_render::ScreenProjection::new(
+            &self.camera.camera(),
+            &self.terrain,
+            width as f32,
+            height as f32,
+        );
+        // winit 鼠标与 GPU 交换链是物理像素，egui HUD 是逻辑像素；把窗口
+        // 缩放比交给 `ScreenMapper`，HUD 绘制前经 `to_logical` 换算。
+        let pixels_per_point = self
+            .window
+            .as_ref()
+            .map_or(1.0, |window| window.scale_factor() as f64);
         ScreenMapper::new(
             width,
             height,
@@ -307,6 +321,14 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             [self.camera.pan()[0] as f64, self.camera.pan()[1] as f64],
             self.camera.zoom() as f64,
         )
+        .with_projection(projection)
+        .with_pixels_per_point(pixels_per_point)
+    }
+
+    /// 当前拾取映射（供验收 / 诊断读取，不推进模拟）。
+    pub fn screen_mapper(&self) -> ScreenMapper {
+        let (width, height) = self.viewport_size();
+        self.mapper(width, height)
     }
 
     fn render_one(&mut self) -> Result<(), RenderError> {
@@ -511,9 +533,12 @@ impl<P: StepDriver + 'static> ApplicationHandler<()> for ClientApp<P> {
             return;
         }
         // 窗口标题走 i18n 层，只存在于表现层，不进日志 / 权威状态 / 状态哈希。
-        let window = match event_loop
-            .create_window(Window::default_attributes().with_title(self.texts.window_title))
-        {
+        // 默认 1920×1080 逻辑尺寸，便于人工窗口冒烟；高 DPI 由 winit 换算。
+        let window = match event_loop.create_window(
+            Window::default_attributes()
+                .with_title(self.texts.window_title)
+                .with_inner_size(winit::dpi::LogicalSize::new(1920.0, 1080.0)),
+        ) {
             Ok(window) => Arc::new(window),
             Err(error) => {
                 log::error!(target: "w3_client", "window creation failed: error={}", error);
@@ -522,6 +547,7 @@ impl<P: StepDriver + 'static> ApplicationHandler<()> for ClientApp<P> {
             }
         };
         let size = window.inner_size();
+        log::info!(target: "w3_client", "window created: width={} height={} scale_factor={}", size.width, size.height, window.scale_factor());
         let gpu = match GpuContext::new(&window, size.width, size.height) {
             Ok(gpu) => gpu,
             Err(error) => {

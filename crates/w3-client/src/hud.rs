@@ -5,8 +5,9 @@
 //! 句柄，因此结构上无法反写模拟（ADR 0002 §5）。
 //!
 //! - 选中框 / 血条 / 资源 / 生产队列只从 `HudModel` 读取；
-//! - UI 中文文案来自 [`crate::i18n`]，MUST NOT 进入日志、权威状态或状态哈希；
-//! - 字体使用 egui 内置默认字体，不加载任何资产文件（ADR 0001）；
+//! - UI 文案来自 [`crate::i18n`]，MUST NOT 进入日志、权威状态或状态哈希；
+//! - 字体使用 egui 内置开源默认字体（`default_fonts`），不加载任何资产
+//!   文件（ADR 0001）；内置字体无 CJK 字形，故文案为 ASCII；
 //! - 字体 / 资源不可用时以英文结构化 `key=value` 日志报告并降级为不绘制
 //!   文字元素，MUST NOT 改变模拟推进。
 
@@ -42,7 +43,8 @@ impl HudAssets {
     /// 用给定的字体定义准备 HUD。字体数据为空即视为资源不可用，显式报错。
     ///
     /// 字体数据来自 crate 内编译的定义（`FontDefinitions`），不读取任何文件、
-    /// 不引入仓库资产；是否随 `egui/default_fonts` 提供属部署决策（见交付回报）。
+    /// 不引入仓库资产；本 change 启用 `egui/default_fonts` 内置开源字体，
+    /// 故默认定义非空、文字元素正常绘制。
     pub fn from_fonts(
         ctx: &egui::Context,
         fonts: egui::FontDefinitions,
@@ -78,6 +80,9 @@ pub struct HudUnit {
     pub selected: bool,
     /// 屏幕像素坐标（表现层投影，不进权威状态）。
     pub screen: [f32; 2],
+    /// 单位占位标记的屏幕包围盒，选中框按它绘制以贴合 3D 实体。
+    pub bounds_min: [f32; 2],
+    pub bounds_max: [f32; 2],
 }
 
 /// 生产队列条目的只读展示数据。
@@ -99,6 +104,8 @@ pub struct HudModel {
     pub queue: Vec<HudQueueItem>,
     pub selected_count: usize,
     pub event_count: usize,
+    /// 本地玩家编号，用于按队伍区分 HUD 标记颜色。
+    pub local_player: u8,
 }
 
 impl HudModel {
@@ -106,7 +113,8 @@ impl HudModel {
     ///
     /// `WorldView` 提供单位生命 / 位置 / 归属；只读 `Snapshot` 提供资源与
     /// 生产队列（这些字段不在 `WorldView` 内，见交付回报）。两者都是只读
-    /// API，本函数 MUST NOT 写回任何权威状态。
+    /// API，本函数 MUST NOT 写回任何权威状态。`ScreenMapper` 的投影输出是
+    /// 物理像素，HUD 绘制在 egui 逻辑空间，故 MUST 经 `to_logical` 换算。
     pub fn collect(
         view: &WorldView,
         snapshot: &Snapshot,
@@ -124,10 +132,13 @@ impl HudModel {
                     .iter()
                     .find(|position| position.entity == entity.id)
                     .map_or(entity.hp.max(1), |position| position.max_hp.max(1));
-                let screen = mapper.world_to_screen([
+                let world = [
                     entity.x as f64 / SCALE as f64,
                     entity.y as f64 / SCALE as f64,
-                ]);
+                ];
+                let screen = mapper.to_logical(mapper.world_to_screen(world));
+                let (bounds_min, bounds_max) =
+                    mapper.to_logical_bounds(mapper.unit_screen_bounds(world));
                 HudUnit {
                     id: entity.id,
                     hp: entity.hp,
@@ -136,6 +147,8 @@ impl HudModel {
                     alive: entity.alive,
                     selected: selection.contains(&entity.id),
                     screen: [screen[0] as f32, screen[1] as f32],
+                    bounds_min: [bounds_min[0] as f32, bounds_min[1] as f32],
+                    bounds_max: [bounds_max[0] as f32, bounds_max[1] as f32],
                 }
             })
             .collect();
@@ -162,29 +175,38 @@ impl HudModel {
             queue,
             selected_count: selection.len(),
             event_count: events.len(),
+            local_player,
         }
     }
 }
 
-/// 绘制一帧 HUD：只读 `HudModel` + 中文 i18n 文案，MUST NOT 触碰权威状态。
+/// 绘制一帧 HUD：只读 `HudModel` + i18n 文案，MUST NOT 触碰权威状态。
 ///
-/// `assets.text_enabled == false` 时只保留几何元素（选中框 / 血条），
-/// 不绘制任何文字标签（资源缺失降级路径）。
+/// 所有存活单位都绘制队伍色标记与血条（拾取对象 MUST 可见、可分辨敌我），
+/// 选中单位额外绘制绿色选中框；`assets.text_enabled == false` 时只保留
+/// 几何元素，不绘制任何文字标签（资源缺失降级路径）。
 pub fn draw(ctx: &egui::Context, model: &HudModel, texts: &Texts, assets: HudAssets) {
-    // 选中框与血条：纯几何，字体不可用时仍可呈现。
     egui::Area::new(egui::Id::unique("w3_client_hud_overlay")).show(ctx, |ui| {
         let painter = ui.painter();
-        for unit in model
-            .units
-            .iter()
-            .filter(|unit| unit.selected && unit.alive)
-        {
-            let center = egui::pos2(unit.screen[0], unit.screen[1]);
-            let frame = egui::Rect::from_center_size(center, egui::vec2(40.0, 40.0));
+        for unit in model.units.iter().filter(|unit| unit.alive) {
+            let frame = egui::Rect::from_min_max(
+                egui::pos2(unit.bounds_min[0], unit.bounds_min[1]),
+                egui::pos2(unit.bounds_max[0], unit.bounds_max[1]),
+            );
+            let team_color = if unit.owner == model.local_player {
+                egui::Color32::from_rgb(90, 170, 255)
+            } else {
+                egui::Color32::from_rgb(255, 90, 90)
+            };
+            let stroke = if unit.selected {
+                egui::Stroke::new(3.0, egui::Color32::LIGHT_GREEN)
+            } else {
+                egui::Stroke::new(1.0, team_color)
+            };
             painter.rect_stroke(
                 frame,
                 egui::CornerRadius::ZERO,
-                egui::Stroke::new(2.0, egui::Color32::LIGHT_GREEN),
+                stroke,
                 egui::StrokeKind::Outside,
             );
             let fraction = (unit.hp as f32 / unit.max_hp as f32).clamp(0.0, 1.0);
@@ -195,7 +217,7 @@ pub fn draw(ctx: &egui::Context, model: &HudModel, texts: &Texts, assets: HudAss
             painter.rect_filled(bar, egui::CornerRadius::ZERO, egui::Color32::DARK_RED);
             let filled =
                 egui::Rect::from_min_size(bar.min, egui::vec2(bar.width() * fraction, 4.0));
-            painter.rect_filled(filled, egui::CornerRadius::ZERO, egui::Color32::GREEN);
+            painter.rect_filled(filled, egui::CornerRadius::ZERO, team_color);
         }
     });
 

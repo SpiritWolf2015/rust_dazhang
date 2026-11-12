@@ -20,7 +20,7 @@ pub mod scene;
 pub mod terrain;
 
 pub use error::RenderError;
-pub use gpu::{Camera, FrameProducer, GpuContext, RendererApp};
+pub use gpu::{Camera, FrameProducer, GpuContext, RendererApp, ScreenProjection};
 pub use model::{
     Attachment, Bone, FilterMode, GeosetAnim, Material, Model, ModelDocument, ModelLibrary,
     ResolvedMaterial, Sequence, TEAM_COLORS, Track, team_color,

@@ -62,6 +62,77 @@ example SHALL 只调用 `w3-core` / `w3-client` / `w3-render` / `w3-app` 既有�
 - **WHEN** 假设将来把某字段转为权威状态却未加入哈希或由 `SNAPSHOT_VERSION` 定义的快照
 - **THEN** `cargo test -p w3-core --test determinism` 失败；本 change 不新增权威字段，故无需扩展哈希或快照字段集合
 
+### Requirement: 拾取映射与呈现投影一致
+
+系统 SHALL 让输入拾取（框选 / 命中 / HUD 位置）复用与 `Camera::matrix` 同源的投影，MUST NOT 出现「渲染用透视斜视投影、拾取用轴对齐线性映射」两套口径。`world_to_screen` SHALL 以单位占位标记中心平面为基准，`screen_to_world` SHALL 以 y=0 地面为基准；投影矩阵与逆矩阵 MUST NOT 进入权威状态、状态哈希或由 `SNAPSHOT_VERSION`（当前 3）定义的快照。既有公开 API 签名 MUST NOT 改变，新增项限于 `ScreenProjection` / `ScreenMapper::with_projection` / `ClientApp::screen_mapper` / `UNIT_MARKER_SIZE`。
+
+#### Scenario: 框选命中按呈现投影定位的单位
+
+- **WHEN** 在真窗口按屏幕上看到的 3D 单位拖框或单击
+- **THEN** 选中集合包含该单位，`ContextAction` / `Cast` 不再因坐标错位报 `no unit selected` / `no target entity picked`
+
+#### Scenario: 相机变换后仍保持一致
+
+- **WHEN** 平移 / 缩放 / 旋转相机或拖拽改变窗口尺寸后再次框选
+- **THEN** 拾取仍与当前呈现投影一致，逻辑帧推进不受影响
+
+#### Scenario: CPU 回归守住一致性
+
+- **WHEN** 运行 `w3-render` 投影同源 / 地面反投影测试与 `w3-client` 的 `selection_uses_the_render_projection`
+- **THEN** 全部通过，且证明注入的精确投影与旧线性映射结果不同、按呈现投影拖框能命中单位
+
+### Requirement: 拾取按单位屏幕包围盒判定
+
+系统 SHALL 以单位占位标记在屏幕上的保守包围盒判定框选 / 单击 / 敌方拾取，MUST NOT 用固定小半径或硬编码小矩形判定；HUD 选中框 SHALL 使用同一包围盒绘制，使几何与 3D 实体贴合。包围盒 MUST NOT 进入权威状态、状态哈希或快照。
+
+#### Scenario: 点中四面体任意位置即命中
+
+- **WHEN** 在真窗口单击或框选 3D 单位占位四面体的可见区域（含边缘）
+- **THEN** 选中集合包含该单位，敌方拾取不再报 `no target entity picked`
+
+#### Scenario: HUD 选中框贴合实体
+
+- **WHEN** 单位被选中
+- **THEN** 选中框与血条按该单位包围盒绘制，尺寸与 3D 四面体一致，不使用固定 40×40 矩形
+
+#### Scenario: 空地右键仍生成移动命令
+
+- **WHEN** 在远离所有单位包围盒的空地右键
+- **THEN** 生成 `Move` 命令（而非 `Attack`），坐标经既有冻结边界产出
+
+### Requirement: 高 DPI 坐标空间一致
+
+系统 SHALL 在高 DPI 下让输入拾取（winit 物理像素）与 HUD 绘制（egui 逻辑像素）各用正确的坐标空间：`ScreenMapper` SHALL 携带窗口 `pixels_per_point` 并提供物理→逻辑换算，`HudModel` SHALL 以逻辑坐标输出，MUST NOT 把物理坐标直接交给 egui。系统 SHALL 为所有存活单位绘制 HUD 标记并按队伍区分敌我，使拾取对象可见。
+
+#### Scenario: 1.5 倍缩放下 HUD 贴合实体
+
+- **WHEN** 在 `scale_factor = 1.5` 的窗口运行 example 并选中单位
+- **THEN** 选中框与血条绘制在该单位 3D 占位标记的逻辑屏幕包围盒上，无 1.5 倍偏移
+
+#### Scenario: 敌方单位可分辨
+
+- **WHEN** 观察含敌方单位的窗口
+- **THEN** 未选中的敌方单位也按队伍色绘制标记与血条，用户可据此定位施法目标
+
+#### Scenario: CPU 回归守住坐标换算
+
+- **WHEN** 运行 `logical_coordinates_are_physical_divided_by_scale_factor` 与 `physical_mouse_picks_enemy_under_high_dpi`
+- **THEN** 逻辑坐标与逻辑视口投影逐位一致，物理鼠标点击敌方包围盒能生成施法命令
+
+### Requirement: 合成冻结玩法定义
+
+example SHALL 为对局注入纯内存合成的冻结玩法定义（至少 `unit_def = 1` 与 `ability = 10`），使 Q 施法 / T 生产 / C 取消在内核中产生可观测效果；MUST NOT 读取任何资产文件。
+
+#### Scenario: 生产与施法生效
+
+- **WHEN** 在真窗口按 T 生产或选中单位后对敌方目标按 Q 施法
+- **THEN** 内核写入生产队列 / 施法引导运行态，命令经既有公开入口提交，不再 NoEffect
+
+#### Scenario: CPU 回归守住生效链路
+
+- **WHEN** 运行 `frozen_definitions_make_train_and_cast_effective` 与 `client_app_train_command_reaches_the_kernel`
+- **THEN** 内核层与 `ClientApp` 输入层均证明生产 / 施法命令生效
+
 ### Requirement: 30 Hz 整数帧与表现层状态隔离
 
 逻辑帧 SHALL 由冻结 `logic_fps = 30` 的整数帧累加器驱动无参 `step()`（ADR 0002 §2）；`step()` MUST NOT 接受 delta / 墙钟 / 刷新率。累加器余数、插值 `alpha`、相机位姿、选中集合、HUD 布局与窗口尺寸 MUST NOT 进入 FNV-1a 状态哈希或由 `SNAPSHOT_VERSION`（当前 3）定义的快照；`Resized` MUST NOT 触发 `step()`。
@@ -78,7 +149,7 @@ example SHALL 只调用 `w3-core` / `w3-client` / `w3-render` / `w3-app` 既有�
 
 ### Requirement: 人工 GPU 冒烟清单与人工边界
 
-系统 SHALL 提供可逐项勾选的人工 GPU 冒烟清单，MUST 至少覆盖：窗口能开、`GpuContext::new` 成功、egui HUD overlay pass 正常提交、中文标签按已裁定不显示且有英文降级日志、左键框选 / 右键移动 / 施法 / 生产键、WASD / 滚轮相机、`Resized` 后画面正常且逻辑帧不跳、高刷下逻辑帧恒定 30。清单项 MUST 标注为**只能人工在有 GPU 与显示设备的桌面执行**。
+系统 SHALL 提供可逐项勾选的人工 GPU 冒烟清单，MUST 至少覆盖：1920×1080 窗口能开、`GpuContext::new` 成功、egui HUD overlay pass 正常提交、HUD 文字（含按键提示）以 ASCII 正常显示、左键框选 / 右键移动 / 施法 / 生产键、WASD / 滚轮相机、`Resized` 后画面正常且逻辑帧不跳、高刷下逻辑帧恒定 30。清单项 MUST 标注为**只能人工在有 GPU 与显示设备的桌面执行**。
 
 #### Scenario: 窗口与 HUD 呈现
 
@@ -105,28 +176,42 @@ example SHALL 只调用 `w3-core` / `w3-client` / `w3-render` / `w3-app` 既有�
 - **WHEN** CI 在 `ubuntu-latest` / `windows-latest` 跑 `python tools/verify_all.py`
 - **THEN** 只覆盖编译与 CPU 测试（含 `w3-core/tests/determinism.rs`、`w3-render/tests/isolation.rs`），且 MUST NOT 声称 CI 已验证 GPU 窗口链路
 
-### Requirement: 字体降级与许可证边界
+### Requirement: 内置开源字体与 HUD 文字可见
 
-系统 SHALL 保持 egui 0.37 不启用 `default_fonts`；`FontDefinitions::default()` 返回空 `font_data` 时，中文标签 MUST NOT 上屏，且 MUST 走 `HudAssets::degraded()` + 英文结构化 `key=value` 降级日志（tasks 6.6）。启用 `default_fonts` 会引入 OFL-1.1 / Ubuntu-font-1.0 字体许可证，属 CODEBUDDY.md §10 人工独占且仍无 CJK 字形，故 MUST NOT 在本 change 启用；中文上屏 SHALL 留作后续独立 change。
+系统 SHALL 启用 egui 0.37 的 `default_fonts` feature，使用编译期内嵌的开源字体让 HUD 文字层（含按键提示）正常显示；MUST NOT 复制任何字体文件进仓库、MUST NOT 运行时读取本机字体路径（ADR 0001）。内置字体无 CJK 字形，故 i18n 文案 SHALL 为 ASCII；中文上屏 SHALL 留作后续独立 change。字体许可证 SHALL 在 `NOTICE.md` 登记，变更由程序员本人拍板（CODEBUDDY.md §10 人工独占）。字体数据为空时 MUST 走 `HudAssets::degraded()` + 英文结构化 `key=value` 降级日志。
 
-#### Scenario: 中文字体降级
+#### Scenario: HUD 文字与按键提示可见
 
-- **WHEN** 运行 example 且 egui 内置字体数据为空
-- **THEN** `HudAssets::prepare` 显式返回 `EmptyFontData`，中文文字元素不绘制，英文日志 `hud font unavailable` 明确报告，模拟推进不变
+- **WHEN** 在有显示设备的桌面运行 example
+- **THEN** HUD 窗口显示资源 / 人口 / 生产队列与 `LMB drag` / `RMB` / `Q` / `T` / `C` / `WASD` / `Wheel` / `Z/X` 操作提示，无 `hud font unavailable` 降级日志
 
-#### Scenario: 许可证边界不被突破
+#### Scenario: 资源缺失仍显式降级
 
-- **WHEN** 校验 `w3-client/Cargo.toml` 与依赖图
-- **THEN** `default_fonts` 未启用、`Cargo.lock` 无变化、`NOTICE.md` 无需登记，OFL-1.1 / Ubuntu-font-1.0 许可证未进入依赖树
+- **WHEN** `FontDefinitions::default()` 的 `font_data` 为空
+- **THEN** `HudAssets::prepare` 返回 `EmptyFontData`，文字元素不绘制、英文日志明确报告，模拟推进不变
 
-### Requirement: 不新增依赖且产物不入库
+#### Scenario: 字体许可证边界
 
-本 change MUST NOT 新增任何 Cargo 依赖或修改 `Cargo.lock`；人工冒烟产物（截图 / 日志）MUST NOT 提交进仓库，SHALL 落在已 gitignored 的本机路径（如 `target/`）。清单项 MUST NOT 把 MPQ 派生数据、真实导出 JSON / PNG / GLB / 音效或任何游戏资产写进仓库（ADR 0001）。
+- **WHEN** 校验 `w3-client/Cargo.toml`、`Cargo.lock` 与 `NOTICE.md`
+- **THEN** `default_fonts` 已启用、`Cargo.lock` 仅新增 `epaint_default_fonts` 传递包、`NOTICE.md` 登记 `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`，仓库无任何字体资产文件
+
+### Requirement: 默认 1920×1080 窗口
+
+系统 SHALL 以 1920×1080 逻辑尺寸创建 winit 窗口，并 SHALL 以英文结构化 `key=value` 日志记录实际宽高与 `scale_factor`。该尺寸纯属表现层，MUST NOT 进入权威状态、状态哈希或快照。
+
+#### Scenario: 窗口尺寸与诊断
+
+- **WHEN** 运行 example 并抵达 `resumed`
+- **THEN** 窗口按 1920×1080 逻辑尺寸创建，日志含 `window created: width=... height=... scale_factor=...`
+
+### Requirement: 不新增直接依赖且产物不入库
+
+本 change MUST NOT 新增任何直接 Cargo 依赖；`Cargo.lock` SHALL 仅因 `default_fonts` 新增 `epaint_default_fonts` 传递包。人工冒烟产物（截图 / 日志）MUST NOT 提交进仓库，SHALL 落在已 gitignored 的本机路径（如 `target/`）。清单项 MUST NOT 把 MPQ 派生数据、真实导出 JSON / PNG / GLB / 音效或任何游戏资产写进仓库（ADR 0001）。
 
 #### Scenario: 依赖与资产扫描
 
 - **WHEN** 跑 `python tools/verify_all.py` 的资产扫描与 `git status`
-- **THEN** 无新增依赖、无 `Cargo.lock` diff、无任何 MPQ 派生数据 / 导出资产 / 截图 / 日志被跟踪
+- **THEN** 无新增直接依赖、`Cargo.lock` 仅新增 `epaint_default_fonts`、无任何 MPQ 派生数据 / 导出资产 / 截图 / 日志被跟踪
 
 #### Scenario: 产物留本机
 

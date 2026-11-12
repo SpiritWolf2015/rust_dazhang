@@ -67,11 +67,13 @@ impl std::fmt::Display for InputError {
     }
 }
 
-/// 屏幕 → 世界（XZ 平面）的可逆线性映射，纯表现层 `f64`。
+/// 屏幕 ↔ 世界（XZ 平面）的拾取映射，纯表现层 `f64`。
 ///
 /// `world_span` 为视口覆盖的世界宽度，`pan` / `zoom` 来自表现层相机状态。
-/// 该映射只用于拾取与生成命令目标；结果 MUST 经 `freeze_f64` 冻结后才进入
-/// 权威状态。不使用三角函数或超越函数，跨平台差异与确定性无关。
+/// 注入 `ScreenProjection` 后，`world_to_screen` 以单位占位标记中心平面
+/// 为基准、`screen_to_world` 以 y=0 地面为基准，二者各司其职；未注入时
+/// 退回轴对齐线性映射（供单元测试）。结果 MUST 经 `freeze_f64` 冻结后
+/// 才进入权威状态。不使用三角函数或超越函数，跨平台差异与确定性无关。
 #[derive(Clone, Copy, Debug)]
 pub struct ScreenMapper {
     pub width: f64,
@@ -79,6 +81,10 @@ pub struct ScreenMapper {
     pub world_span: f64,
     pub pan: [f64; 2],
     pub zoom: f64,
+    /// 与渲染相机同源的精确投影；`None` 时退回线性映射（供单元测试）。
+    projection: Option<w3_render::ScreenProjection>,
+    /// 物理像素 / 逻辑像素（窗口 `scale_factor`）；默认 1.0 表示无缩放。
+    pixels_per_point: f64,
 }
 
 impl ScreenMapper {
@@ -90,7 +96,48 @@ impl ScreenMapper {
             world_span,
             pan,
             zoom,
+            projection: None,
+            pixels_per_point: 1.0,
         }
+    }
+
+    /// 注入与 `Camera::matrix` 同源的精确投影，使拾取与呈现口径一致。
+    pub fn with_projection(mut self, projection: w3_render::ScreenProjection) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    /// 注入窗口缩放比：winit 鼠标与 GPU 交换链是物理像素，egui HUD 是
+    /// 逻辑像素；HUD 绘制前 MUST 经 `to_logical` 换算，否则高 DPI 下
+    /// 选中框 / 血条会整体偏移 `pixels_per_point` 倍。
+    pub fn with_pixels_per_point(mut self, pixels_per_point: f64) -> Self {
+        self.pixels_per_point = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
+            pixels_per_point
+        } else {
+            1.0
+        };
+        self
+    }
+
+    /// 物理屏幕坐标 → egui 逻辑坐标。
+    pub fn to_logical(&self, point: [f64; 2]) -> [f64; 2] {
+        [
+            point[0] / self.pixels_per_point,
+            point[1] / self.pixels_per_point,
+        ]
+    }
+
+    /// 物理屏幕包围盒 → egui 逻辑包围盒。
+    pub fn to_logical_bounds(&self, bounds: ([f64; 2], [f64; 2])) -> ([f64; 2], [f64; 2]) {
+        (self.to_logical(bounds.0), self.to_logical(bounds.1))
+    }
+
+    /// 逻辑视口尺寸（物理尺寸 / 缩放比），供 HUD 布局与自测使用。
+    pub fn logical_size(&self) -> [f64; 2] {
+        [
+            self.width / self.pixels_per_point,
+            self.height / self.pixels_per_point,
+        ]
     }
 
     /// 屏幕像素坐标 → 世界 `f64` 坐标（尚未冻结，仅表现层使用）。
@@ -104,6 +151,11 @@ impl ScreenMapper {
         {
             return Err(InputError::InvalidScreenPoint);
         }
+        if let Some(projection) = self.projection {
+            return projection
+                .screen_to_world(point)
+                .ok_or(InputError::InvalidScreenPoint);
+        }
         let scale = self.world_span / self.zoom;
         Ok([
             self.pan[0] + (point[0] / self.width - 0.5) * scale,
@@ -113,11 +165,26 @@ impl ScreenMapper {
 
     /// 世界 `f64` 坐标 → 屏幕像素坐标（用于框选 / 命中测试，不进权威状态）。
     pub fn world_to_screen(&self, world: [f64; 2]) -> [f64; 2] {
+        if let Some(projection) = self.projection {
+            return projection.world_to_screen(world);
+        }
         let scale = (self.world_span / self.zoom).max(f64::MIN_POSITIVE);
         [
             ((world[0] - self.pan[0]) / scale + 0.5) * self.width,
             ((world[1] - self.pan[1]) / scale + 0.5) * self.height,
         ]
+    }
+
+    /// 单位占位标记在屏幕上的保守包围盒，供框选 / 命中 / HUD 使用。
+    pub fn unit_screen_bounds(&self, world: [f64; 2]) -> ([f64; 2], [f64; 2]) {
+        if let Some(projection) = self.projection {
+            return projection.unit_screen_bounds(world);
+        }
+        let center = self.world_to_screen(world);
+        (
+            [center[0] - PICK_RADIUS, center[1] - PICK_RADIUS],
+            [center[0] + PICK_RADIUS, center[1] + PICK_RADIUS],
+        )
     }
 
     /// 屏幕坐标 → 冻结的 `SimFixed` 世界坐标，走既有冻结边界（ADR 0004）。
@@ -233,7 +300,8 @@ impl InputState {
         let max_x = start[0].max(end[0]);
         let min_y = start[1].min(end[1]);
         let max_y = start[1].max(end[1]);
-        let is_click = (max_x - min_x).abs() < PICK_RADIUS && (max_y - min_y).abs() < PICK_RADIUS;
+        // 阈值只区分「单击」与「拖框」，命中判定改用单位标记屏幕包围盒。
+        let is_click = (max_x - min_x).abs() < 4.0 && (max_y - min_y).abs() < 4.0;
 
         for entity in &view.entities {
             if !entity.alive {
@@ -243,11 +311,17 @@ impl InputState {
                 entity.x as f64 / SCALE as f64,
                 entity.y as f64 / SCALE as f64,
             ];
-            let screen = mapper.world_to_screen(world);
+            let (unit_min, unit_max) = mapper.unit_screen_bounds(world);
             let inside = if is_click {
-                (screen[0] - end[0]).hypot(screen[1] - end[1]) <= PICK_RADIUS
+                end[0] >= unit_min[0] - PICK_RADIUS
+                    && end[0] <= unit_max[0] + PICK_RADIUS
+                    && end[1] >= unit_min[1] - PICK_RADIUS
+                    && end[1] <= unit_max[1] + PICK_RADIUS
             } else {
-                screen[0] >= min_x && screen[0] <= max_x && screen[1] >= min_y && screen[1] <= max_y
+                unit_min[0] <= max_x
+                    && unit_max[0] >= min_x
+                    && unit_min[1] <= max_y
+                    && unit_max[1] >= min_y
             };
             if inside {
                 self.selection.insert(entity.id);
@@ -257,7 +331,7 @@ impl InputState {
         self.drag_current = None;
     }
 
-    /// 拾取屏幕点附近的敌方单位（`owner != local_player`），返回其 `EntityId`。
+    /// 拾取屏幕点处的敌方单位（`owner != local_player`），返回其 `EntityId`。
     fn pick_enemy(
         &self,
         view: &WorldView,
@@ -273,10 +347,17 @@ impl InputState {
                 entity.x as f64 / SCALE as f64,
                 entity.y as f64 / SCALE as f64,
             ];
-            let screen = mapper.world_to_screen(world);
-            let distance = (screen[0] - point[0]).hypot(screen[1] - point[1]);
-            if distance <= PICK_RADIUS && best.is_none_or(|(d, _)| distance < d) {
-                best = Some((distance, entity.id));
+            let (unit_min, unit_max) = mapper.unit_screen_bounds(world);
+            let inside = point[0] >= unit_min[0] - PICK_RADIUS
+                && point[0] <= unit_max[0] + PICK_RADIUS
+                && point[1] >= unit_min[1] - PICK_RADIUS
+                && point[1] <= unit_max[1] + PICK_RADIUS;
+            if inside {
+                let center = mapper.world_to_screen(world);
+                let distance = (center[0] - point[0]).hypot(center[1] - point[1]);
+                if best.is_none_or(|(d, _)| distance < d) {
+                    best = Some((distance, entity.id));
+                }
             }
         }
         let (_, id) = best?;

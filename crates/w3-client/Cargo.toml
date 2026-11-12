@@ -25,8 +25,10 @@ wgpu = "30"
 # 结构化日志门面：追帧超限 / 资源失败以英文 key=value 明确报告（CODEBUDDY.md §3）。
 log = "0.4"
 # 轻量 UI 依赖：egui 家族 0.37.0，取 MIT 一侧（与 GPLv3 兼容，ADR 0001 / design D4）。
-# 批次 A 已核验与 wgpu 30.0.1 / winit 0.30.13 对齐；MSRV 1.95；NOTICE.md 登记交 docs-owner。
-egui = "0.37"
+# 启用 default_fonts 使用内置开源字体（Ubuntu Font Licence 1.0，见 NOTICE.md），
+# 不加载任何资产文件；内置字体无 CJK 字形，故 HUD 文案为 ASCII。
+# 批次 A 已核验与 wgpu 30.0.1 / winit 0.30.13 对齐；MSRV 1.95。
+egui = { version = "0.37", features = ["default_fonts"] }
 egui-wgpu = "0.37"
 # 关闭 egui-winit 默认 features：避免其 default（clipboard/wayland/x11/links）
 # 经 feature 统一重新开启 winit 的默认 feature，保持与 w3-render 一致的

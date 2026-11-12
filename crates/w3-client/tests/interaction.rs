@@ -12,14 +12,15 @@
 
 use w3_client::{
     ClientApp, ClientCommand, ClientError, FixedStepClient, FrameAdvance, HudAssetError, HudAssets,
-    HudModel, InputAction, InputError, LEAD_FRAMES, ScreenMapper, StepDriver,
+    HudModel, InputAction, InputError, InputState, LEAD_FRAMES, ScreenMapper, StepDriver,
     TICKS_PER_LOGIC_FRAME, TICKS_PER_SECOND, ZH,
 };
 use w3_core::{
-    Command, CommandError, CommandKind, EntityId, Event, Frame, GameplayCommandKind, SCALE,
-    SNAPSHOT_VERSION, SimFixed, Snapshot, StaticWorld, WorldView,
+    AbilityDef, Command, CommandError, CommandKind, EffectDef, EffectKind, EntityId, Event, Frame,
+    FrozenDefinitions, GameplayCommand, GameplayCommandKind, MatchConfig, RtsMatch, SCALE,
+    SNAPSHOT_VERSION, SimFixed, Snapshot, StaticWorld, UnitDef, WorldView,
 };
-use w3_render::{ModelLibrary, TerrainMesh, TerrainVertex};
+use w3_render::{Camera, ModelLibrary, ScreenProjection, TerrainMesh, TerrainVertex};
 
 const SEED: u64 = 0x5eed;
 const CONTENT_HASH: u64 = 0xC0FFEE;
@@ -132,10 +133,11 @@ fn font_degradation_does_not_change_authoritative_state() {
         HudAssets::from_fonts(&ctx, egui::FontDefinitions::empty()),
         Err(HudAssetError::EmptyFontData)
     );
-    // 当前 egui 依赖树未启用 `default_fonts`，内置字体数据为空：这正是
-    // 真实部署下字体资源不可用的路径，宿主会记录英文日志并降级。
-    // （是否启用带 OFL/Ubuntu 字体许可证的 default_fonts 属人工独占，见回报。）
-    assert_eq!(HudAssets::prepare(&ctx), Err(HudAssetError::EmptyFontData));
+    // 启用 `default_fonts` 后内置字体数据非空，HUD 文字元素正常绘制。
+    assert_eq!(
+        HudAssets::prepare(&ctx),
+        Ok(HudAssets { text_enabled: true })
+    );
 
     // 降级路径：文字元素不绘制、几何元素仍呈现，权威状态不变。
     let mut degraded = build_app();
@@ -175,7 +177,7 @@ fn hud_model_is_read_only_projection() {
     let app = build_app();
     let view: WorldView = app.driver().sim().read_view();
     let snap = snapshot(&app);
-    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0);
+    let mapper = app.screen_mapper();
     let events: Vec<Event> = Vec::new();
     let model = HudModel::collect(
         &view,
@@ -340,7 +342,7 @@ fn context_action_generates_move_with_frozen_frame_and_frozen_coords() {
     let mut app = build_app();
     let mut plain = build_app();
     let view = app.driver().sim().read_view();
-    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0);
+    let mapper = app.screen_mapper();
     // 框选全部己方单位（用世界坐标反推的屏幕点覆盖整屏）。
     let world = [0.0, 0.0];
     let center = mapper.world_to_screen(world);
@@ -350,7 +352,8 @@ fn context_action_generates_move_with_frozen_frame_and_frozen_coords() {
         .unwrap();
     assert!(!app.selection().is_empty());
 
-    let target_point = [center[0] + 60.0, center[1] + 30.0];
+    // 取远离单位占位包围盒的空地点，确保右键走 Move 而非 Attack 分支。
+    let target_point = [center[0] + 320.0, center[1] + 220.0];
     let commands = app
         .apply_input(InputAction::ContextAction(target_point))
         .unwrap();
@@ -373,9 +376,7 @@ fn context_action_generates_move_with_frozen_frame_and_frozen_coords() {
         assert_eq!(command.player_id, 1);
         if let CommandKind::Move { x, y, .. } = command.kind {
             // 坐标必须是冻结边界产出的 SimFixed（raw 为 Q47.16 整数）。
-            let expected = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0)
-                .freeze_point(target_point)
-                .unwrap();
+            let expected = app.screen_mapper().freeze_point(target_point).unwrap();
             assert_eq!(x, expected.0);
             assert_eq!(y, expected.1);
             let _ = (x.raw(), y.raw());
@@ -411,7 +412,7 @@ fn gameplay_actions_generate_cast_train_cancel_train() {
 
     // 施法：以敌方单位屏幕点为目标的拾取。
     let view = app.driver().sim().read_view();
-    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0);
+    let mapper = app.screen_mapper();
     let enemy = view
         .entities
         .iter()
@@ -487,5 +488,298 @@ fn commands_carry_frozen_execute_frame_player_and_sequence() {
         app.driver_mut()
             .enqueue(ClientCommand::Gameplay(*command))
             .is_ok()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 拾取映射与呈现投影一致（真实窗口框选 / 命中验收的 CPU 回归）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn selection_uses_the_render_projection() {
+    let mut app = build_app();
+    let view = app.driver().sim().read_view();
+    let entity = view.entities.first().expect("synthetic unit exists");
+    let world = [
+        entity.x as f64 / SCALE as f64,
+        entity.y as f64 / SCALE as f64,
+    ];
+
+    let projected = app.screen_mapper().world_to_screen(world);
+    let linear = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0).world_to_screen(world);
+    assert!(
+        (projected[0] - linear[0]).abs() > 1.0 || (projected[1] - linear[1]).abs() > 1.0,
+        "注入的精确投影必须与旧线性映射不同"
+    );
+
+    // 按「渲染投影算出的单位屏幕点」拖一个小框，必须命中该单位。
+    app.apply_input(InputAction::SelectStart([
+        projected[0] - 8.0,
+        projected[1] - 8.0,
+    ]))
+    .unwrap();
+    app.apply_input(InputAction::SelectEnd([
+        projected[0] + 8.0,
+        projected[1] + 8.0,
+    ]))
+    .unwrap();
+    assert!(
+        app.selection().contains(&entity.id),
+        "框选按呈现投影计算的单位屏幕点应命中该单位"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 高 DPI 坐标空间一致性 / 玩法定义生效（第四轮真窗口反馈的 CPU 回归）
+// ---------------------------------------------------------------------------
+
+/// 复现用户环境：物理 2880×1620、逻辑 1920×1080、`scale_factor = 1.5`。
+fn dpi_mapper(physical: [f64; 2], logical: [f64; 2]) -> ScreenMapper {
+    let terrain = synthetic_terrain();
+    let aspect = (physical[0] / physical[1]) as f32;
+    let camera = Camera::new(aspect);
+    let projection =
+        ScreenProjection::new(&camera, &terrain, physical[0] as f32, physical[1] as f32);
+    let extent = (terrain.columns.max(terrain.rows) as f64 * terrain.cell_size as f64).max(1.0);
+    ScreenMapper::new(physical[0], physical[1], extent, [0.0, 0.0], 1.0)
+        .with_projection(projection)
+        .with_pixels_per_point(physical[0] / logical[0])
+}
+
+#[test]
+fn logical_coordinates_are_physical_divided_by_scale_factor() {
+    let physical = [2880.0, 1620.0];
+    let logical = [1920.0, 1080.0];
+    let mapper = dpi_mapper(physical, logical);
+    assert_eq!(mapper.logical_size(), logical);
+
+    let world = [8.0, -4.0];
+    let physical_point = mapper.world_to_screen(world);
+    let logical_point = mapper.to_logical(physical_point);
+    assert!((logical_point[0] - physical_point[0] / 1.5).abs() < 1e-9);
+    assert!((logical_point[1] - physical_point[1] / 1.5).abs() < 1e-9);
+
+    // 与「直接按逻辑视口尺寸构造的投影」逐位一致：证明 HUD 逻辑坐标
+    // 与 3D 呈现在同一逻辑视口内对齐，不再整体偏移 1.5 倍。
+    let terrain = synthetic_terrain();
+    let camera = Camera::new((logical[0] / logical[1]) as f32);
+    let logical_projection =
+        ScreenProjection::new(&camera, &terrain, logical[0] as f32, logical[1] as f32);
+    let expected = logical_projection.world_to_screen(world);
+    assert!((logical_point[0] - expected[0]).abs() < 1e-6);
+    assert!((logical_point[1] - expected[1]).abs() < 1e-6);
+
+    let bounds = mapper.unit_screen_bounds(world);
+    let (logical_min, logical_max) = mapper.to_logical_bounds(bounds);
+    assert!((logical_min[0] - bounds.0[0] / 1.5).abs() < 1e-9);
+    assert!((logical_max[1] - bounds.1[1] / 1.5).abs() < 1e-9);
+}
+
+#[test]
+fn hud_marks_all_alive_units_in_logical_coordinates() {
+    let app = build_app();
+    let view: WorldView = app.driver().sim().read_view();
+    let snap = snapshot(&app);
+    let mapper = dpi_mapper([2880.0, 1620.0], [1920.0, 1080.0]);
+    let events: Vec<Event> = Vec::new();
+    let selection = std::collections::BTreeSet::new();
+
+    let model = HudModel::collect(&view, &snap, &selection, &events, &mapper, 1);
+    // 所有存活单位（含未选中的敌方）都必须有 HUD 标记，拾取对象才可见。
+    assert_eq!(model.units.len(), view.entities.len());
+    assert!(model.units.iter().any(|unit| unit.owner == 2));
+    assert_eq!(model.local_player, 1);
+
+    for unit in &model.units {
+        let entity = view
+            .entities
+            .iter()
+            .find(|entity| entity.id == unit.id)
+            .expect("unit exists in view");
+        let world = [
+            entity.x as f64 / SCALE as f64,
+            entity.y as f64 / SCALE as f64,
+        ];
+        let (_, expected_max) = mapper.to_logical_bounds(mapper.unit_screen_bounds(world));
+        assert!(
+            (f64::from(unit.bounds_max[0]) - expected_max[0]).abs() < 1e-3,
+            "HUD 包围盒必须是逻辑坐标"
+        );
+        assert!(
+            (f64::from(unit.bounds_max[1]) - expected_max[1]).abs() < 1e-3,
+            "HUD 包围盒必须是逻辑坐标"
+        );
+    }
+}
+
+#[test]
+fn physical_mouse_picks_enemy_under_high_dpi() {
+    let mapper = dpi_mapper([2880.0, 1620.0], [1920.0, 1080.0]);
+    let app = build_app();
+    let view: WorldView = app.driver().sim().read_view();
+    let events: Vec<Event> = Vec::new();
+    let mut input = InputState::new(1);
+
+    // 全屏框选（物理像素），选中己方单位。
+    input
+        .apply(
+            InputAction::SelectStart([0.0, 0.0]),
+            &view,
+            &mapper,
+            &events,
+        )
+        .unwrap();
+    input
+        .apply(
+            InputAction::SelectEnd([2880.0, 1620.0]),
+            &view,
+            &mapper,
+            &events,
+        )
+        .unwrap();
+    assert!(!input.selection().is_empty());
+
+    // 点敌方单位包围盒中心（物理像素），Cast 必须生成玩法命令。
+    let enemy = view
+        .entities
+        .iter()
+        .find(|entity| entity.owner == 2)
+        .expect("enemy exists");
+    let world = [enemy.x as f64 / SCALE as f64, enemy.y as f64 / SCALE as f64];
+    let (min, max) = mapper.unit_screen_bounds(world);
+    let center = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
+    let commands = input
+        .apply(InputAction::Cast(center), &view, &mapper, &events)
+        .unwrap();
+    assert!(matches!(
+        commands[0],
+        ClientCommand::Gameplay(ref command)
+            if matches!(command.kind, GameplayCommandKind::Cast { .. })
+    ));
+}
+
+#[test]
+fn frozen_definitions_make_train_and_cast_effective() {
+    let unit = UnitDef {
+        hp: 100,
+        mana: 100,
+        speed_raw: SimFixed::from_int(3).unwrap().raw(),
+        damage: 10,
+        range_raw: SimFixed::from_int(10).unwrap().raw(),
+        supply: 1,
+        train_frames: 30,
+    };
+    let ability = AbilityDef {
+        mana_cost: 10,
+        cooldown_frames: 5,
+        cast_frames: 3,
+        behavior: 0,
+        effects: vec![EffectDef {
+            kind: EffectKind::Damage,
+            amount: 30,
+            duration_frames: 0,
+        }],
+    };
+    // 与 example 的 `synthetic_defs` 同构：unit_def 1 / ability 10。
+    let defs = FrozenDefinitions::new(vec![(1, unit)], vec![(10, ability)], Vec::new(), Vec::new())
+        .unwrap();
+    let config = MatchConfig {
+        seed: SEED,
+        logic_fps: 30,
+        content_hash: CONTENT_HASH,
+    };
+    let mut sim = RtsMatch::create_with_definitions(config, StaticWorld::default(), defs);
+    sim.submit_command(spawn(0, 0, 1)).unwrap();
+    sim.submit_command(spawn(1, 0, 2)).unwrap();
+    sim.step();
+
+    let caster = EntityId::new(1).unwrap();
+    let target = EntityId::new(2).unwrap();
+    let frame = Frame::new(sim.read_view().tick + 1);
+    sim.submit_gameplay_command(GameplayCommand::new(
+        frame,
+        1,
+        1,
+        GameplayCommandKind::Train {
+            producer: caster,
+            unit_def: 1,
+            is_building: false,
+        },
+    ))
+    .unwrap();
+    sim.submit_gameplay_command(GameplayCommand::new(
+        frame,
+        1,
+        2,
+        GameplayCommandKind::Cast {
+            caster,
+            ability: 10,
+            target,
+        },
+    ))
+    .unwrap();
+    // 命令执行帧为 `tick + 1`，需推进两帧才会被内核执行。
+    for _ in 0..2 {
+        sim.step();
+    }
+
+    let snap = sim.capture_snapshot();
+    assert!(
+        snap.positions
+            .iter()
+            .any(|position| !position.gameplay.production.is_empty()),
+        "注入冻结定义后 T 生产必须写入生产队列"
+    );
+    assert!(
+        snap.positions
+            .iter()
+            .any(|position| position.gameplay.cast.is_some()),
+        "注入冻结定义后 Q 施法必须进入引导运行态"
+    );
+}
+
+#[test]
+fn client_app_train_command_reaches_the_kernel() {
+    let unit = UnitDef {
+        hp: 100,
+        mana: 100,
+        speed_raw: SimFixed::from_int(3).unwrap().raw(),
+        damage: 10,
+        range_raw: SimFixed::from_int(10).unwrap().raw(),
+        supply: 1,
+        train_frames: 30,
+    };
+    let defs = FrozenDefinitions::new(vec![(1, unit)], Vec::new(), Vec::new(), Vec::new()).unwrap();
+    let config = MatchConfig {
+        seed: SEED,
+        logic_fps: 30,
+        content_hash: CONTENT_HASH,
+    };
+    let mut sim = RtsMatch::create_with_definitions(config, StaticWorld::default(), defs);
+    sim.submit_command(spawn(0, 0, 1)).unwrap();
+    let driver = FixedStepClient::from_match(sim);
+    let mut app = ClientApp::new(driver, synthetic_terrain(), ModelLibrary::default(), 100);
+    app.advance_with_ticks(TICKS_PER_LOGIC_FRAME);
+
+    // 真窗口路径：框选 → 按 T → 命令经 ClientApp 提交 → 内核生效。
+    app.apply_input(InputAction::SelectStart([0.0, 0.0]))
+        .unwrap();
+    app.apply_input(InputAction::SelectEnd([1280.0, 720.0]))
+        .unwrap();
+    let commands = app.apply_input(InputAction::Train).unwrap();
+    assert!(matches!(
+        commands[0],
+        ClientCommand::Gameplay(ref command)
+            if matches!(command.kind, GameplayCommandKind::Train { .. })
+    ));
+    for _ in 0..3 {
+        app.advance_with_ticks(TICKS_PER_LOGIC_FRAME);
+    }
+    let snap = app.driver().sim().capture_snapshot();
+    assert!(
+        snap.positions
+            .iter()
+            .any(|position| !position.gameplay.production.is_empty()),
+        "T 生产命令必须经 ClientApp 提交并在内核生效"
     );
 }

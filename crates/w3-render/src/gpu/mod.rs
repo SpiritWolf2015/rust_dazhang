@@ -146,6 +146,161 @@ impl Camera {
     }
 }
 
+/// 屏幕 ↔ 世界（XZ 平面）的拾取投影，与 [`Camera::matrix`] 由同一组参数构造。
+///
+/// 输入拾取（框选 / 命中 / HUD 位置）复用它，消除「渲染用透视斜视投影、
+/// 拾取用线性正交映射」两套口径造成的错位。`world_to_screen` 以单位占位
+/// 标记的中心平面为基准（与用户看到的四面体对齐），`screen_to_world` 以
+/// y=0 地面为基准（命令目标落在地面）；二者各司其职，均为表现层 `f32` /
+/// `f64` 运算，MUST NOT 进入权威状态、状态哈希或快照。
+#[derive(Clone, Copy, Debug)]
+pub struct ScreenProjection {
+    view_proj: glam::Mat4,
+    inverse: glam::Mat4,
+    width: f32,
+    height: f32,
+}
+
+impl ScreenProjection {
+    /// 由相机与地形构造；矩阵与 [`Camera::matrix`] 输出逐位一致。
+    pub fn new(camera: &Camera, terrain: &TerrainMesh, width: f32, height: f32) -> Self {
+        let view_proj = (*camera).matrix(terrain);
+        Self {
+            view_proj,
+            inverse: view_proj.inverse(),
+            width: width.max(1.0),
+            height: height.max(1.0),
+        }
+    }
+
+    fn project_point(&self, x: f64, y: f64, z: f64) -> [f64; 2] {
+        let clip = self.view_proj * glam::Vec4::new(x as f32, y as f32, z as f32, 1.0);
+        if clip.w <= 0.0 {
+            // 点在相机背后：返回屏幕外的确定值，使命中测试自然失败。
+            return [-1.0e6, -1.0e6];
+        }
+        let ndc = clip.truncate() / clip.w;
+        [
+            (f64::from(ndc.x) + 1.0) * 0.5 * f64::from(self.width),
+            (1.0 - f64::from(ndc.y)) * 0.5 * f64::from(self.height),
+        ]
+    }
+
+    /// 单位世界坐标 `(x, z)` → 屏幕像素坐标，投影到单位占位标记中心平面。
+    pub fn world_to_screen(&self, world: [f64; 2]) -> [f64; 2] {
+        self.project_point(
+            world[0],
+            f64::from(crate::scene::UNIT_MARKER_SIZE * 0.8),
+            world[1],
+        )
+    }
+
+    /// 单位占位标记在屏幕上的保守包围盒：覆盖任意朝向的四面体，
+    /// 供框选 / 命中 / HUD 选中框使用，避免固定小半径漏点。
+    pub fn unit_screen_bounds(&self, world: [f64; 2]) -> ([f64; 2], [f64; 2]) {
+        let size = f64::from(crate::scene::UNIT_MARKER_SIZE);
+        let mut min = [f64::MAX, f64::MAX];
+        let mut max = [f64::MIN, f64::MIN];
+        for (dx, y, dz) in [
+            (0.0, size * 1.6, 0.0),
+            (-size, 0.0, -size),
+            (size, 0.0, -size),
+            (-size, 0.0, size),
+            (size, 0.0, size),
+        ] {
+            let point = self.project_point(world[0] + dx, y, world[1] + dz);
+            for axis in 0..2 {
+                min[axis] = min[axis].min(point[axis]);
+                max[axis] = max[axis].max(point[axis]);
+            }
+        }
+        (min, max)
+    }
+
+    /// 屏幕像素坐标 → 与 y=0 地面平面的交点世界坐标 `(x, z)`；
+    /// 射线与地面平行时返回 `None`，由调用方显式报错。
+    pub fn screen_to_world(&self, screen: [f64; 2]) -> Option<[f64; 2]> {
+        let nx = (screen[0] / f64::from(self.width)) * 2.0 - 1.0;
+        let ny = 1.0 - (screen[1] / f64::from(self.height)) * 2.0;
+        let unproject = |z: f32| {
+            let point = self.inverse * glam::Vec4::new(nx as f32, ny as f32, z, 1.0);
+            if point.w.abs() < 1.0e-9 {
+                None
+            } else {
+                Some(point.truncate() / point.w)
+            }
+        };
+        let near = unproject(-1.0)?;
+        let far = unproject(1.0)?;
+        let direction = far - near;
+        if direction.y.abs() < 1.0e-9 {
+            return None;
+        }
+        let t = -near.y / direction.y;
+        let hit = near + direction * t;
+        Some([f64::from(hit.x), f64::from(hit.z)])
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    fn terrain() -> TerrainMesh {
+        let hf: w3_content::TerrainHeightfield = serde_json::from_str(
+            r#"{"tilepointWidth":2,"tilepointHeight":2,"mapWidth":1,"mapHeight":1,
+                "heights":[0,0,0,0]}"#,
+        )
+        .unwrap();
+        TerrainMesh::from_heightfield(&hf).unwrap()
+    }
+
+    #[test]
+    fn screen_to_world_inverts_ground_projection() {
+        let camera = Camera::new(16.0 / 9.0);
+        let terrain = terrain();
+        let view_proj = camera.matrix(&terrain);
+        let projection = ScreenProjection::new(&camera, &terrain, 1280.0, 720.0);
+        for world in [[0.0, 0.0], [32.0, -16.0], [-32.0, 24.0], [8.0, 8.0]] {
+            // 地面点（y=0）经 `Camera::matrix` 投影到屏幕。
+            let clip = view_proj * glam::Vec4::new(world[0] as f32, 0.0, world[1] as f32, 1.0);
+            let ndc = clip.truncate() / clip.w;
+            let screen = [
+                (f64::from(ndc.x) + 1.0) * 0.5 * 1280.0,
+                (1.0 - f64::from(ndc.y)) * 0.5 * 720.0,
+            ];
+            let back = projection.screen_to_world(screen).expect("ground hit");
+            // f32 矩阵求逆带来的误差远小于 1 像素，对拾取无影响。
+            assert!(
+                (back[0] - world[0]).abs() < 0.1 && (back[1] - world[1]).abs() < 0.1,
+                "world={world:?} screen={screen:?} back={back:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn projection_matches_camera_matrix() {
+        let terrain = terrain();
+        let camera = Camera::new(1.5)
+            .with_pan([8.0, -4.0])
+            .with_zoom(1.5)
+            .with_yaw(0.3);
+        let view_proj = camera.matrix(&terrain);
+        let projection = ScreenProjection::new(&camera, &terrain, 800.0, 600.0);
+        let world = [16.0, 24.0];
+        let pick_height = crate::scene::UNIT_MARKER_SIZE * 0.8;
+        let clip = view_proj * glam::Vec4::new(world[0] as f32, pick_height, world[1] as f32, 1.0);
+        let ndc = clip.truncate() / clip.w;
+        let expected = [
+            (f64::from(ndc.x) + 1.0) * 0.5 * 800.0,
+            (1.0 - f64::from(ndc.y)) * 0.5 * 600.0,
+        ];
+        let actual = projection.world_to_screen(world);
+        assert!((actual[0] - expected[0]).abs() < 1.0e-6);
+        assert!((actual[1] - expected[1]).abs() < 1.0e-6);
+    }
+}
+
 fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("w3-render depth"),

@@ -17,7 +17,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use w3_content::{ENTITY_MODEL_FILES, ModelCatalog, ModelClass, ParsedMap, load_gltf};
-use w3_render::{BakedModel, ModelTransform, SceneVertex, TerrainMesh, bake_model, expand_model};
+use w3_render::{
+    BakedModel, MODEL_DISPLAY_SCALE, ModelTransform, SceneVertex, TerrainMesh, bake_model,
+    expand_model,
+};
 
 use crate::real_map::WORLD_SCALE;
 
@@ -184,7 +187,7 @@ fn place_one(
     let transform = ModelTransform {
         origin,
         yaw,
-        scale: 1.0,
+        scale: MODEL_DISPLAY_SCALE,
     };
     for path in &paths {
         // 借出缓存模型 → 展开后立即释放借用，避免与后续可变借用冲突。

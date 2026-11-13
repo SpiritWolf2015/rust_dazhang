@@ -13,9 +13,10 @@ pub const PAN_STEP: f32 = 32.0;
 pub const ZOOM_STEP: f32 = 0.1;
 /// 旋转步长（弧度 / 按键事件）。
 pub const YAW_STEP: f32 = 0.05;
-/// 缩放上下限，防止矩阵退化。
+/// 缩放上下限，防止矩阵退化。上限放宽到 8，让真实比例模型在局部战场视角下
+/// 可拉近到清晰可辨（RTS 常规游玩视角）；玩家滚轮可在此区间自由缩放。
 pub const MIN_ZOOM: f32 = 0.25;
-pub const MAX_ZOOM: f32 = 4.0;
+pub const MAX_ZOOM: f32 = 8.0;
 
 /// 归一化的相机输入动作；宿主把 winit 事件映射为此枚举。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,6 +57,21 @@ impl CameraState {
         Self {
             aspect,
             ..Self::default()
+        }
+    }
+
+    /// 显式设置初始缩放与平移（纯表现层，用于可玩入口一开局呈现局部战场
+    /// 视角）。直接赋值而非经增量 `Zoom(delta)`，不隐含依赖 `default().zoom`。
+    /// `zoom` 经 MIN/MAX clamp；`pan` 取有限值，非有限则忽略该轴。
+    pub fn set_initial_view(&mut self, zoom: f32, pan: [f32; 2]) {
+        if zoom.is_finite() {
+            self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+        }
+        if pan[0].is_finite() {
+            self.pan[0] = pan[0];
+        }
+        if pan[1].is_finite() {
+            self.pan[1] = pan[1];
         }
     }
 

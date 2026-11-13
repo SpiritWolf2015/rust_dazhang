@@ -6,7 +6,9 @@
 
 实施期间用户进一步判定「合成色块 demo 根本不是 War3 地图画面」，要求对齐 `godot_warcraft3` 的视觉水位，遂追加真实地图表现层阶段（阶段 1：真实 Echo Isles 高度场 / 地表分区 / 水体 / 悬崖 / 97 单位 + 2491 装饰物静态摆放；阶段 2：真实 BLP→PNG 地表贴图与 `war3mapMap.png` 小地图底图）。这些全部是**纯表现层数据**，不改 `w3-core`、不进状态哈希 / 快照；真实导出资产仍留本机 gitignored 路径、不入库（ADR 0001）。**CPU 对局逻辑闭环**（合成冻结定义 + 命令脚本，由 `melee_loop.rs` 验证）零资产、可打完一局；**`melee` 可玩 example 的视觉层**依赖 gitignored 的 `config.toml`、缺配置显式失败不回落合成 demo —— `melee-match` spec 已把「零资产环境」Scenario 收敛为 CPU 装配与 `playable` 合成入口，并新增「真实视觉入口依赖本机导出」Scenario。
 
-阶段 2 人工窗口验收后，用户再次判定「EI 地图上仍是基本几何体、未达参考项目制作水平」，遂追加**阶段 3：真实 glTF 模型**——手写 glTF 2.0 子集解析读取本机 922 个真实模型，把 2588 个静态摆放与 6 类动态单位全部替换为真实 WC3 网格 + 真实贴图，并新增 headless GPU 离屏 readback 自测：用**A/B 像素差对照**（仅地形 vs 地形+真实模型）在 CLI 断言真实模型确实改变了大量画面像素、带来多种贴图颜色（地形自身无法伪造）。真实模型 bind pose 静态网格 + 真实贴图颜色已落地；逐像素 GPU 纹理过滤、骨骼动画逐帧蒙皮留后续（见 `design.md` D8 诚实边界）。
+阶段 2 人工窗口验收后，用户再次判定「EI 地图上仍是基本几何体、未达参考项目制作水平」，遂追加**阶段 3：真实 glTF 模型**——手写 glTF 2.0 子集解析读取本机 922 个真实模型，把 2588 个静态摆放与 6 类动态单位全部替换为真实 WC3 网格 + 真实贴图，并新增 headless GPU 离屏 readback 自测：用**A/B 像素差对照**（仅地形 vs 地形+真实模型）在 CLI 断言真实模型确实改变了大量画面像素、带来多种贴图颜色（地形自身无法伪造）。真实模型 bind pose 静态网格 + 真实贴图颜色已落地；逐像素 GPU 纹理过滤、骨骼动画逐帧蒙皮留后续（见 `design.md` D8 / D9 诚实边界）。
+
+阶段 3 首次真窗口验收后，用户判定「还是基本几何体，没看见 War3 的农民 / 建筑」——日志显示模型顶点确已装配，根因是**渲染观感**（尺度 / 默认相机俯瞰全图 / 特效层被当成实体画成白纸片黑块 / 树冠 billboard 被误删）。遂追加 D9 可视性修复：`wc3FilterMode` 特效层与 UberSplat 地面贴片过滤、保守 alpha 剔除让树成林、表现层放大（静态 2× / 动态 4×）、`ClientApp::with_initial_camera` 拉近到 RTS 局部战场视角（滚轮 / WASD 仍可看全图）。全部用离屏渲染逐版自证，最终画面城堡 / 人形农民清晰可辨、白纸片黑块消失；真窗口 HUD overlay 最终观感仍须人工验收。
 
 ## What Changes
 
@@ -15,7 +17,7 @@
 - 新增合成/原创冻结内容定义（农民、主城、兵营、战斗单位、金矿、树木、技能、升级）与开局 `Spawn` 命令脚本；全部为编译期整数常量，零资产读取。
 - 新增确定性外部 AI 命令源：按冻结帧号经 `submit_gameplay_command` 提交对手命令，复用既有 `SetAi` / `Leave` / `resolve_victory`，**`w3-core` 零改动**。
 - 新增可辨识的实体呈现（按单位类型区分几何 / 队伍色 / 选中环 / 血条），履行 `3d-rendering` 既有契约；阶段 3 起静态摆放与动态单位优先用**真实 glTF/MDX 模型网格 + 真实贴图**（bind pose 静态），程序化几何降级为无本机资产 / 缺键时的回退；逐帧骨骼动画留后续。
-- 把 `w3-content` 读取本机真实导出数据的接缝落地为**表现层**装配（gitignored 本机路径 / `load_map` / `textures` PNG 解码 / `gltf` 模型解析 / `model_index` 映射）：`real_map` 缩放装配真实 Echo Isles 地形与静态摆放，`Scene` 把真实贴图 CPU 采样进地形顶点色，HUD 小地图用真实底图 CPU 降采样颜色网格；`model_assembly` 把 2588 摆放与 6 类动态单位装配成真实 glTF 网格顶点。路径缺失或导出数据无效时 `melee` example 显式失败、不回落合成色块 demo；CI / 无本机资产环境优雅降级到程序化几何并跳过真实资产 e2e，玩法闭环 CPU 测试不依赖任何资产。
+- 把 `w3-content` 读取本机真实导出数据的接缝落地为**表现层**装配（gitignored 本机路径 / `load_map` / `textures` PNG 解码 / `gltf` 模型解析 / `model_index` 映射）：`real_map` 缩放装配真实 Echo Isles 地形与静态摆放，`Scene` 把真实贴图 CPU 采样进地形顶点色，HUD 小地图用真实底图 CPU 降采样颜色网格；`model_assembly` 把 2588 摆放与 6 类动态单位装配成真实 glTF 网格顶点（覆盖 2588 静态摆放 + 开局 12 个动态实体；运行时 `Train`/`Build` 新生成实体因模型缺键回退程序化几何，见 `design.md` D9 诚实边界）。路径缺失或导出数据无效时 `melee` example 显式失败、不回落合成色块 demo；CI / 无本机资产 / 模型缺键环境优雅降级到程序化几何并跳过真实资产 e2e，玩法闭环 CPU 测试不依赖任何资产。
 - 新增 `render_headless_rgba` 离屏 GPU 自测：CLI 侧用真 adapter 渲染并读回像素。`gpu_headless.rs` 验证管线本身（合成顶点流非黑屏 / 确定性），`real_map_e2e` 用 A/B 对照（仅地形 vs 地形+真实模型）断言真实模型显著改变画面像素、非黑屏、颜色丰富——破解此前「GPU 呈现只能人工看窗口」的验证盲区；真窗口 HUD overlay 观感仍须人工验收。
 - 把可玩入口装配成「能打完一局」的 example；既有 `playable-window-entry` 入口保留，不删改。
 - **BREAKING：无**。不删除或改写既有公开签名，新增公开项限于新 capability 相关 API；不引入通用游戏引擎、不提交任何资产文件。阶段 2 新增 1 个直接依赖 `image`（仅 png feature，用于本机 PNG 解码）及 13 个传递依赖，许可证逐一核对并登记 `NOTICE.md`、`Cargo.lock` 已提交（用户已授权本轮新增依赖）；阶段 3 真实 glTF 模型**零新增依赖**（仅用已有 `serde_json` / `image`），手写解析器读取本机模型。

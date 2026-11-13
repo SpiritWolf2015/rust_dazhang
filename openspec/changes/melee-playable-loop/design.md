@@ -2,7 +2,7 @@
 
 ## Context
 
-动机见 `proposal.md` Why，不在此重述。现状（只读核实，2026-11-12）：主 `openspec/specs/` 共 12 个 capability；`w3-core` 已交付确定性内核与完整玩法命令面——`CommandKind`（`Spawn` / `Move` 含群体分组 / `Stop` / `Attack` / 障碍）与 `GameplayCommandKind`（`Cast` / `Train` / `CancelTrain` / `Research` / `BuyItem` / `Gather` / `SpawnWave` / `SetAi` / `Leave`），以及 `FrozenDefinitions`、`PlayerEconomy`、`VictoryState` + `resolve_victory`（`leave()` 置 `active=false` 后按稳定顺序结算）、`run_ai`（当前只让空闲单位发 `Gather`）。`playable-window-smoke` 已归档并交付 `ClientApp` 装配、只读 HUD、高 DPI 拾取与 `playable-window-entry` 入口，但 example 只有合成碗状地形、4 个四面体与 ASCII 状态窗。用户拍板验收线为「能打完一局」，随后进一步判定合成色块 demo 不是 War3 地图画面、要求对齐 `godot_warcraft3` 视觉水位，追加真实地图表现层阶段（阶段 1 真实 Echo Isles 地形 / 静态摆放、阶段 2 真实地表贴图 / 小地图底图）；阶段 2 人工窗口验收后，用户再次判定「EI 地图上仍是基本几何体、未达参考项目制作水平」，遂追加**阶段 3：真实 glTF 模型**（2588 个静态摆放 + 6 类动态单位全部替换为真实 WC3 网格 + 真实贴图），详见 D7 / D8。约束：ADR 0001（仓库零资产、只读参考）、ADR 0002（`w3-core` 确定性硬门禁，`SNAPSHOT_VERSION` 当前 3，头部含 `defs_hash` / `content_hash`）、ADR 0004（冻结坐标）、CODEBUDDY.md（中文注释 / 英文日志 / rustfmt / 跨平台脚本 / AI 不碰远端）。
+动机见 `proposal.md` Why，不在此重述。现状（只读核实，2026-11-12）：主 `openspec/specs/` 共 12 个 capability；`w3-core` 已交付确定性内核与完整玩法命令面——`CommandKind`（`Spawn` / `Move` 含群体分组 / `Stop` / `Attack` / 障碍）与 `GameplayCommandKind`（`Cast` / `Train` / `CancelTrain` / `Research` / `BuyItem` / `Gather` / `SpawnWave` / `SetAi` / `Leave`），以及 `FrozenDefinitions`、`PlayerEconomy`、`VictoryState` + `resolve_victory`（`leave()` 置 `active=false` 后按稳定顺序结算）、`run_ai`（当前只让空闲单位发 `Gather`）。`playable-window-smoke` 已归档并交付 `ClientApp` 装配、只读 HUD、高 DPI 拾取与 `playable-window-entry` 入口，但 example 只有合成碗状地形、4 个四面体与 ASCII 状态窗。用户拍板验收线为「能打完一局」，随后进一步判定合成色块 demo 不是 War3 地图画面、要求对齐 `godot_warcraft3` 视觉水位，追加真实地图表现层阶段（阶段 1 真实 Echo Isles 地形 / 静态摆放、阶段 2 真实地表贴图 / 小地图底图）；阶段 2 人工窗口验收后，用户再次判定「EI 地图上仍是基本几何体、未达参考项目制作水平」，遂追加**阶段 3：真实 glTF 模型**（2588 个静态摆放 + 6 类动态单位全部替换为真实 WC3 网格 + 真实贴图）；阶段 3 真窗口验收后再判定「还是基本几何体」，遂追加可视性修复（特效层过滤 / 尺度 / 默认相机 / 树冠，见 D9）。详见 D7 / D8 / D9。约束：ADR 0001（仓库零资产、只读参考）、ADR 0002（`w3-core` 确定性硬门禁，`SNAPSHOT_VERSION` 当前 3，头部含 `defs_hash` / `content_hash`）、ADR 0004（冻结坐标）、CODEBUDDY.md（中文注释 / 英文日志 / rustfmt / 跨平台脚本 / AI 不碰远端）。
 
 ## Goals / Non-Goals
 
@@ -112,7 +112,7 @@
 - **决策**：
   - `w3-content::gltf`：手写 glTF 2.0 子集解析——`.gltf` JSON（`buffers` / `bufferViews` / `accessors` / `meshes` / `materials` / `images`）+ 外链 `.bin` 交错顶点（`POSITION` / `NORMAL` / `TEXCOORD_0` + 索引）+ 相对路径 PNG 贴图；输出中立 `ModelMesh`。**零新依赖**（仅用已有 `serde_json` / `image`）；bind pose 直接取 `POSITION`（glTF 规范下即站立姿势），不采样动画 / `JOINTS` / `WEIGHTS`。
   - `w3-content::model_index`：`ModelCatalog` 扫描 `asset-converted/` 922 个 glTF，结合 SLK `unitUI.json` / `Doodads.json` 的 `file` 字段建立 `typeId` / `doodadID` → 模型路径映射；处理大小写、`numVar` 变体、树 `LTlt` 等 `file` 为空的 tileset 树兜底、上游空占位模型跳过。EI 实测 **2588/2588 摆放 + 6 类动态实体全部命中真实模型**。
-  - `w3-render::model_geometry`：把 `ModelMesh` 烘焙成表现层三角形——逐顶点 UV 采样真实贴图像素写入顶点色、按三角形重心 alpha 剔除树叶镂空（`MASK cutoff`）、按 `wc3ToGltfVec3` 坐标约定展开成 `SceneVertex`（`surface=-1`）。**保持 `SceneVertex` 布局 / shader / 单管线 / 单 draw call 零改动**（前几轮反复黑屏的经验），真实模型几何与真实贴图颜色上屏。
+  - `w3-render::model_geometry`：把 `ModelMesh` 烘焙成表现层三角形——逐顶点 UV 采样真实贴图像素写入顶点色、按「三顶点 UV 全透明」保守剔除 `MASK` 镂空（重心单点剔除会误删树冠 billboard，见 D9）、按 `wc3ToGltfVec3` 坐标约定展开成 `SceneVertex`（`surface=-1`）。**保持 `SceneVertex` 布局 / shader / 单管线 / 单 draw call 零改动**（前几轮反复黑屏的经验），真实模型几何与真实贴图颜色上屏。
   - `w3-client::model_assembly`：按摆放位姿（缩放 / 贴地 / `angle`）预展开静态模型顶点；`Scene` 用 `set_static_model_vertices` / `set_entity_models` 注入，静态摆放与动态单位优先真实网格、缺键回退程序化几何（D5）；同一 glTF 缓存解码（树占 1588 个摆放）；顶点预算与单模型三角形上限防御异常资产。
   - **headless GPU 自测**：新增 `w3-render::render_headless_rgba`（自建 `Instance`→`adapter`→`device`、复用 `build_pipeline` / `record_scene` / readback，不依赖窗口）。`gpu_headless.rs` 3 项用**合成顶点流**验证离屏管线本身（非黑屏 / 逐字节确定 / 空流纯背景）；`real_map_e2e.rs` 的 `real_gltf_models_render_on_screen_not_black` 用**A/B 像素差对照**——分别离屏渲染「仅地形」与「地形+2588 真实模型」两帧，断言 B 相对 A 有大量像素被改变且变化像素含多种模型贴图颜色（地形自身无法满足，故真正证明真实模型贡献画面）、全场景非黑屏。这破解了此前「shader / GPU 呈现只能人工看窗口」的验证盲区；真窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组）。
 - **备选方案（Alternatives considered）**：
@@ -128,6 +128,27 @@
 - **资产与许可证（ADR 0001）**：922 个 glTF / `.bin` / PNG 来自玩家本机合法导出的经典客户端，由 gitignored `config.toml` 的 `models_dir` / `slk_dir` 定位、仓库零资产、绝不入库；**零新增 Cargo 依赖**，`Cargo.lock` / `NOTICE.md` 无变化；`asset scan OK`。
 - **架构原则与分层依赖**：SRP（读取 `w3-content::gltf` / 索引 `model_index` / 烘焙 `model_geometry` / 装配 `model_assembly` 分离）、OCP（`ClientApp` builder 注入，既有入口零改动）、DIP（`Scene` 只接收 `SceneVertex` / `BakedModel`，不依赖路径 / 目录）、只读呈现边界。
 
+### D9：真实模型可视性修复（阶段 3 人工窗口验收后，用户追加）
+
+- **背景**：D8 交付后真窗口验收，用户判定「还是基本几何体，没看见 War3 的农民 / 建筑」。日志显示真实模型顶点**确实装配**（`static_vertices=373773`、`entity_models=6`），正视特写也证明 Footman / TownHall 是完整可辨的真实 WC3 模型——即代码路径正确，问题在**渲染观感**。用 headless 离屏渲染 + 单模型正视特写离线复现（不麻烦用户反复开窗）定位到三类根因：
+  1. **尺度 + 默认相机**：`MODEL_WORLD_SCALE=2/128` 把 WC3 模型换成真实比例（农民约 2、主城约 18 世界单位），而地图压到 256 单位跨度、默认 `zoom=1` 俯瞰全图时农民只有几个像素；此前程序化四面体 `UNIT_MARKER_SIZE=24` 是刻意放大占位，反而显眼。
+  2. **特效层被当成实体几何**：WC3 的 `Blend` / `Additive` / `UberSplat` 地面投影 / 辉光 / 烟雾是加色特效、不是实体表面，`Opaque` 标记的 UberSplat 尤其会画成刺眼的白色纸片 / 大黑三角。
+  3. **树冠 billboard 被误删**：树是竖直交叉 billboard 平面，早期按「三角形重心单点 alpha」剔除把大面积半透明树冠面片删光，只剩树干细杆。
+- **决策**：
+  - `w3-content::gltf` 透传 `extras.wc3FilterMode` 与 glTF `alphaMode` 到 `SubMesh.filter_mode`（`GeosetFilter` 枚举），并按贴图 URI 的「`Splats/` 目录或文件名含 `ubersplat`」路径级特征识别地面投影贴片为 `GroundDecal`（不用 `shadow` / `shockwave` 裸子串以免误判实体贴图；Shockwave 等加色特效由 `wc3FilterMode` 判定）。`w3-render::model_geometry::bake_submesh` 只烘焙 `is_entity()`（`Opaque` / `Mask`）的 geoset，特效层 / 地面贴片全部跳过——白色纸片与黑三角消失。
+  - alpha 镂空改为**保守剔除**：仅当三角形三顶点 UV 采样全透明才删整片；保留含树冠的 billboard 面片，配合 pipeline 既有 `ALPHA_BLENDING` 呈现柔和镂空。树从细杆变为有棕绿树干 / 树冠的林。
+  - **表现层显示放大**：`MODEL_DISPLAY_SCALE=2`（静态摆放）、`ENTITY_DISPLAY_SCALE=2`（动态单位额外，合计 4 倍）——由离线离屏渲染对比选定，城堡 / 人形农民清晰可辨又不过大糊屏。纯 `f32` 派生的 `SceneVertex.position`，MUST NOT 进权威状态 / 哈希 / 快照。
+  - **默认相机拉近**：`ClientApp::with_initial_camera(zoom, pan)` builder（`melee` example 用 `zoom=3.5` / `pan=[-92,0]` 对准本地出生点的 RTS 局部视角），经 `CameraState::set_initial_view` 显式赋值 + clamp（不隐含依赖默认 zoom、幂等）。`MAX_ZOOM` 4→8 留出拉近空间——**这是全局 clamp 上限放宽**（所有入口滚轮可放得更近），但 `CameraState::default()` 未改，故既有入口 / 拾取验收基线的默认位姿不变；玩家 WASD / 滚轮仍可查看全图。
+- **备选方案（Alternatives considered）**：
+  - *只放大模型、保持 zoom=1 全图视角* — **否决**。离线对比证明 zoom=1 下放大到 6 倍单位仍是小点，全图视角本身把 256 单位压到屏幕中间一小块。
+  - *改 `CameraState::default()` 全局默认* — **否决**。会影响 P3 以来所有相机 / 拾取验收基线与 `playable` 入口；改用 example 专用 builder 隔离。
+  - *为残留个别细长黑色伪影加「面积过滤」* — **否决**。量化显示建筑大墙面面积（约 16598）本就大，按面积过滤会误删正常几何；收益（去掉一个小黑锥）远小于风险，如实登记为已知限制。
+- **验证**：全部用 `render_headless_rgba` 离屏渲染 + `ViewImage` 逐版对比（特效层过滤前后主城正视特写、树冠、各放大 / zoom 组合），最终 `FINAL2` 画面确认城堡 / 农民可辨、白纸片 / 黑块消失、树成林。CPU 回归：`GeosetFilter` 分类 / `GroundDecal` 识别 / 特效层剔除 / 树冠保守剔除 / `with_initial_camera` 表现层专属，均单测覆盖；`real_map_e2e` 新增 `real_townhall_filters_effects_and_keeps_entity_geometry`（真实主城特效层被过滤、实体几何保留）。`w3-core` 零 diff。
+- **诚实边界（已知限制）**：
+  - 树 billboard 平面在斜俯视角下仍偏细长（WC3 原版靠面向相机 billboard 补齐，静态 bind pose 未做）；个别装饰物残留细长深色伪影；出生点周围是 EI 真实水域地形，模型贴地后视觉上「临水」；真窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组）。
+  - **真实 glTF 网格的覆盖范围为 2588 静态摆放 + 开局 12 个动态实体**，并非所有运行时实体：运行时经 `Train` / `Build` / `SpawnWave` 新生成的实体，其 `EntityId` 不在 `MeleeSetup::model_keys()` 的 12 个开局绑定内，`ModelLibrary::resolve` 回退 `"default"`；而 `Scene::entity_models` 仅含 `ENTITY_MODEL_FILES` 的 6 个类型键、无 `"default"`，故这些新实体走 `append_typed_marker` → `append_unit_marker`（四面体）程序化几何，且不受 `ENTITY_DISPLAY_SCALE` 放大。此即 D5 已登记的「模型缺键回退」，**并非仅「无本机资产」时才发生**；`smoke-checklist.md` C6「新增兵营」属此回退（四面体占位、非长方体、非真实 glTF 兵营），登记为已知限制、不计失败项、不冒充真实模型。故「全部替换 / 2588+6 类全部命中」指静态摆放全量 + 6 个类型键都烘焙成功 + 开局 12 实体命中，**不等于每个运行时新实例都是真实网格**。
+  - D9 观感结论（白纸片 / 黑块消失、树成林、城堡可辨）已由离屏渲染逐版 `ViewImage` 目视确认，但**仓库内无对应像素级自动化断言**：`real_gltf_models_render_on_screen_not_black` 是 D8 遗留的「地形 vs 地形+模型」A/B，不能证明 D9 过滤后的画面；D9 的自动化覆盖是 CPU 层（`GeosetFilter` 分类、特效层三角形剔除、树冠保守剔除单测）与真实资产 e2e。截图按清单约定不入库，最终观感仍交人工 B7（未勾），不冒充 GPU 验收。
+
 ## Risks / Trade-offs
 
 - [AI 太弱导致「没有对手感」或打不完一局] → D3 命令源至少覆盖采集、训练与周期性进攻；人工验收清单逐项勾「一局可打完」；若强度仍不足，作为后续独立 change 增强，**不在本 change 扩内核**。
@@ -138,6 +159,7 @@
 - [人工 GPU 冒烟被 CI 绿灯冒充] → CI 只覆盖编译 + CPU 测试；真窗口「打完一局」只能人工在有 GPU / 显示设备桌面执行，清单未逐项勾选前不得归档。
 - [新增依赖 / 许可证越界] → 阶段 2 经用户授权新增 `image`（png only）及 13 个传递依赖，`cargo metadata` 逐一核对 license 均为宽松许可、与 GPLv3 兼容，已登记 `NOTICE.md` / `Cargo.lock`；阶段 3 真实 glTF 模型**零新增依赖**（仅用已有 `serde_json` / `image`）。CJK 字体、GPU 图集 / 开源资产若后续引入，仍走 CODEBUDDY.md §10 人工拍板 + `NOTICE.md` 登记 + `Cargo.lock` 提交。
 - [阶段 3 真实 glTF 模型的诚实边界] → 真实 glTF 网格 + 真实贴图颜色**已实现**（2588 摆放 + 6 类动态单位，D8）；如实登记为**后续已知限制**：逐像素 GPU 纹理过滤（现为逐顶点 UV 采样进顶点色）、骨骼动画逐帧蒙皮（现为 bind pose 静态）、少数非 EI 子集装饰物用同类真实模型兜底、真 GPU 窗口 HUD 叠加观感须人工验收。不冒充已完成，也不再把「真实模型上屏」整体留后续（D8 / `tasks.md` 第 12 组）。
+- [真实模型「装配了却看不见」/ 被判基本几何体] → 阶段 3 首版真窗口验收即触发（用户判定「还是基本几何体」）。根因是尺度 / 相机 / 特效层 / 树冠（三类：尺度+相机、特效层、树冠）观感问题而非装配缺失，已由 D9 修复：过滤特效层与 GroundDecal（消白纸片 / 黑块）、保守 alpha 剔除（树成林）、表现层放大（静态 2× / 动态 4×）与 `with_initial_camera` 局部战场视角（城堡 / 农民可辨）。全部用离屏渲染逐版自证，非拍脑袋；`with_initial_camera` 经单测证明纯表现层、不改哈希 / 快照。残留：树 billboard 斜俯视仍偏细、个别装饰物细长深色伪影（面积量化后否决高风险过滤，如实登记）、出生点临水为 EI 真实地形特征（D9）。
 - [GPU 呈现链路只在真窗口可验、前几轮反复黑屏] → 新增 `render_headless_rgba`：`gpu_headless.rs`（合成顶点流，验管线非黑屏 / 确定性）+ `real_map_e2e` 的 A/B 像素差对照（仅地形 vs 地形+真实模型，断言模型显著改变画面像素）用真 adapter 在 CLI 证明离屏 3D 链路与真实模型贡献画面；人工 GPU 冒烟（第 6.3 / 8 组）仍须执行以确认 HUD overlay 与最终观感，CI / headless 测试不覆盖 overlay。
 - [真实视觉最终上屏效果未经人工验收] → CLI 侧已验证贴图加载 / 顶点色改变 / 颜色网格非纯色 / 确定性，并用真 adapter 离屏渲染 + A/B 像素差对照证明真实模型贡献画面（非黑屏）；但 egui 底图叠加、HUD overlay、真 GPU 窗口的最终观感，以及第 6.3 / 8 组全部人工 GPU 冒烟项，仍须用户在有显示设备桌面按 `smoke-checklist.md` 逐项执行。CI 不覆盖真窗口 GPU 链路与 HUD overlay，清单未勾前不归档。
 - [参考项目代码被复制或 AGPLv3 组合] → 四个参考项目只读；`WarsmashModEngine`(AGPLv3) 仅作语义参考，未经 ADR 复核不得引入其代码。

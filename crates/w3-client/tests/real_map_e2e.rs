@@ -173,7 +173,7 @@ fn real_minimap_decodes_into_nonflat_hud_backdrop() {
 }
 
 /// 真实模型资产存在时返回完整装配产物；否则跳过（CI 无本机资产）。
-fn local_model_map() -> Option<RealMap> {
+fn local_model_paths() -> Option<w3_client::real_map::RealMapPaths> {
     let config = config_path();
     if !config.exists() {
         eprintln!("skip=real_map_models reason=no_local_config");
@@ -184,7 +184,12 @@ fn local_model_map() -> Option<RealMap> {
         eprintln!("skip=real_map_models reason=no_model_config");
         return None;
     }
-    let (map, _) = assemble(&config).expect("full real map with models must assemble");
+    Some(paths)
+}
+
+fn local_model_map() -> Option<RealMap> {
+    local_model_paths()?;
+    let (map, _) = assemble(&config_path()).expect("full real map with models must assemble");
     Some(map)
 }
 
@@ -225,6 +230,51 @@ fn real_gltf_models_replace_all_programmatic_geometry() {
     // 建筑 / 单位模型比程序化四面体复杂得多。
     assert!(map.entity_models["town-hall"].triangle_count() > 500);
     assert!(map.entity_models["barracks"].triangle_count() > 500);
+}
+
+#[test]
+fn real_townhall_filters_effects_and_keeps_entity_geometry() {
+    // 直接验证真实主城 glTF：特效层 / 地面 UberSplat 被过滤，实体几何保留。
+    let Some(paths) = local_model_paths() else {
+        return;
+    };
+    let Some(models_dir) = paths.models_dir.as_ref() else {
+        return;
+    };
+    let townhall = models_dir.join("buildings/Human/TownHall/TownHall.gltf");
+    if !townhall.exists() {
+        eprintln!("skip=real_townhall_effects reason=no_townhall_model");
+        return;
+    }
+    let mesh = w3_content::load_gltf(&townhall).expect("TownHall.gltf loads");
+    assert!(!mesh.submeshes.is_empty());
+    // 至少有一个特效层和一个 GroundDecal（TownHall 含 UberSplat / 辉光）。
+    let effects = mesh
+        .submeshes
+        .iter()
+        .filter(|s| !s.filter_mode.is_entity())
+        .count();
+    assert!(effects > 0, "主城应含被识别的特效 / 地面贴片层");
+    let ground_decals = mesh
+        .submeshes
+        .iter()
+        .filter(|s| s.filter_mode == w3_content::GeosetFilter::GroundDecal)
+        .count();
+    assert!(ground_decals > 0, "UberSplat 应被识别为 GroundDecal");
+    // 烘焙后只保留实体层三角形（少于原始总数），且非空。
+    let baked = w3_render::bake_model(&mesh);
+    assert!(!baked.is_empty(), "实体几何不能全被剔除");
+    assert!(
+        baked.triangle_count() < mesh.triangle_count(),
+        "烘焙应剔除特效层三角形"
+    );
+    // 顶点色不出现纯白异常面片（特效层已过滤，实体贴图着色）。
+    assert!(
+        baked
+            .triangles
+            .iter()
+            .all(|t| t.color.iter().all(|c| c.iter().all(|v| v.is_finite())))
+    );
 }
 
 #[test]

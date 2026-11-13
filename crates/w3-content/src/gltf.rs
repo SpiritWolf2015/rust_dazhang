@@ -156,6 +156,14 @@ struct GltfPbr {
     base_color_factor: Option<[f32; 4]>,
 }
 
+/// 上游 WC3 材质元数据（`extras` 里的 `wc3FilterMode` 等）。
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GltfMaterialExtras {
+    #[serde(default)]
+    wc3_filter_mode: Option<u32>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GltfMaterial {
@@ -167,6 +175,8 @@ struct GltfMaterial {
     alpha_cutoff: Option<f32>,
     #[serde(default)]
     double_sided: bool,
+    #[serde(default)]
+    extras: GltfMaterialExtras,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -202,7 +212,68 @@ struct GltfDoc {
 
 // ---- 输出：中立模型网格 ----
 
-/// 一个材质子网格：交错顶点展开成并行数组 + 三角形索引 + 贴图与 alpha 设定。
+/// WC3 geoset 的混合模式（上游 `extras.wc3FilterMode`）。
+///
+/// `Opaque` / `Mask` 是**实体几何**（建筑、单位、树叶面片）；`Blend` /
+/// `Additive` / `AddAlpha` / `Modulate` / `Modulate2x` 是**特效层**（法术光环、
+/// 队伍辉光、地面 UberSplat、死亡烟雾等），在 WC3 里按加色 / alpha 混合叠加，
+/// 不是实体表面。表现层烘焙 MUST 过滤掉特效层，否则会画成白色纸片 / 黑块。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GeosetFilter {
+    /// 0：不透明实体。
+    #[default]
+    Opaque,
+    /// 1：alpha 镂空实体（树叶 / 旗帜），按 alphaCutoff 剔除。
+    Mask,
+    /// 2：alpha 混合特效。
+    Blend,
+    /// 3：加色特效（辉光 / 光效）。
+    Additive,
+    /// 4：加 alpha 特效。
+    AddAlpha,
+    /// 5：调制特效。
+    Modulate,
+    /// 6：2x 调制特效。
+    Modulate2x,
+    /// 地面投影贴片（UberSplat / Splats / 阴影）：`wc3FilterMode` 常为 0，
+    /// 但它是铺在地面的大四边形投影、不是实体几何，放大后会变成刺眼的大
+    /// 黑 / 白三角。按贴图 URI 特征识别并过滤。
+    GroundDecal,
+}
+
+impl GeosetFilter {
+    /// 从 `wc3FilterMode` 数字构造；未知值保守视为实体（不误删几何）。
+    pub fn from_wc3(value: u32) -> Self {
+        match value {
+            1 => Self::Mask,
+            2 => Self::Blend,
+            3 => Self::Additive,
+            4 => Self::AddAlpha,
+            5 => Self::Modulate,
+            6 => Self::Modulate2x,
+            _ => Self::Opaque,
+        }
+    }
+
+    /// 是否为实体几何（应被烘焙成 3D 网格）。特效层 / 地面贴片返回 false。
+    pub fn is_entity(self) -> bool {
+        matches!(self, Self::Opaque | Self::Mask)
+    }
+
+    /// 贴图 URI 是否为地面投影贴片（UberSplat / Splats 目录）。
+    ///
+    /// 仅按「`Splats/` 目录」或「文件名含 `ubersplat`」这类**路径/文件名级**
+    /// 特征识别，不用 `shadow` / `shockwave` 等裸子串（可能误判含这些字样的
+    /// 实体贴图而丢几何）。Shockwave 等加色特效已由 `wc3FilterMode` 判定为
+    /// 非实体，无需 URI 兜底。
+    fn is_ground_decal_uri(uri: &str) -> bool {
+        let lower = uri.replace('\\', "/").to_ascii_lowercase();
+        let filename = lower.rsplit('/').next().unwrap_or(&lower);
+        lower.contains("/splats/") || filename.contains("ubersplat")
+    }
+}
+
+/// 一个材质子网格：交错顶点展开成并行数组 + 三角形索引 + 贴图与混合设定。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubMesh {
     pub positions: Vec<[f32; 3]>,
@@ -215,6 +286,8 @@ pub struct SubMesh {
     /// `alphaMode=MASK` 的阈值（缺省 0.5）；`OPAQUE`/`BLEND` 为 0。
     pub alpha_cutoff: f32,
     pub double_sided: bool,
+    /// geoset 混合模式（决定实体 / 特效层）。
+    pub filter_mode: GeosetFilter,
     /// 解码后的 RGBA8 贴图（纯数据）。`load_gltf` 填充；`parse_gltf` 为 `None`。
     pub texture: Option<RgbaImage>,
     /// 贴图相对 URI（供图集打包 / 诊断）。
@@ -443,6 +516,24 @@ fn parse_submesh(
         .and_then(|source| doc.images.get(source))
         .and_then(|image| image.uri.clone());
 
+    // geoset 混合模式：优先用上游 `extras.wc3FilterMode`（WC3 语义最准）；
+    // 缺失时按 glTF `alphaMode` 兜底推断（BLEND 视为特效层）。
+    let mut filter_mode = match material.and_then(|m| m.extras.wc3_filter_mode) {
+        Some(value) => GeosetFilter::from_wc3(value),
+        None => match material.and_then(|m| m.alpha_mode.as_deref()) {
+            Some("MASK") => GeosetFilter::Mask,
+            Some("BLEND") => GeosetFilter::Blend,
+            _ => GeosetFilter::Opaque,
+        },
+    };
+    // 地面投影贴片（UberSplat 等）即使用 Opaque 标记也不是实体几何，覆盖为
+    // GroundDecal 让烘焙层过滤，避免放大后变成大黑 / 白三角。
+    if let Some(uri) = texture_uri.as_deref() {
+        if filter_mode.is_entity() && GeosetFilter::is_ground_decal_uri(uri) {
+            filter_mode = GeosetFilter::GroundDecal;
+        }
+    }
+
     // 防御：索引越界或数组长度不齐会破坏后续顶点展开，显式报错。
     let vertex_count = positions.len();
     if normals.len() != vertex_count || uvs.len() != vertex_count {
@@ -466,6 +557,7 @@ fn parse_submesh(
         base_color,
         alpha_cutoff,
         double_sided,
+        filter_mode,
         texture: None,
         texture_uri,
     })
@@ -743,6 +835,62 @@ mod tests {
         let sub = &mesh.submeshes[0];
         assert!((sub.alpha_cutoff - 0.75).abs() < 1e-6);
         assert!(sub.double_sided);
+        assert_eq!(sub.filter_mode, GeosetFilter::Mask, "MASK 兜底推断");
+    }
+
+    #[test]
+    fn wc3_filter_mode_is_parsed_and_classified() {
+        let (base_json, bin) = minimal_gltf();
+        let material =
+            "\"materials\": [{\"pbrMetallicRoughness\": {\"baseColorFactor\": [1,1,1,1]}}]";
+        for (value, expected) in [
+            (0u32, GeosetFilter::Opaque),
+            (1, GeosetFilter::Mask),
+            (2, GeosetFilter::Blend),
+            (3, GeosetFilter::Additive),
+            (4, GeosetFilter::AddAlpha),
+            (5, GeosetFilter::Modulate),
+            (6, GeosetFilter::Modulate2x),
+        ] {
+            let replacement =
+                format!("\"materials\": [{{\"extras\": {{\"wc3FilterMode\": {value}}}}}]");
+            let json = base_json.replace(material, &replacement);
+            let mesh = parse_gltf(&json, &[bin.clone()]).unwrap();
+            assert_eq!(mesh.submeshes[0].filter_mode, expected, "value={value}");
+        }
+        // 实体 / 特效分类。
+        assert!(GeosetFilter::Opaque.is_entity());
+        assert!(GeosetFilter::Mask.is_entity());
+        assert!(!GeosetFilter::Blend.is_entity());
+        assert!(!GeosetFilter::Additive.is_entity());
+        assert!(!GeosetFilter::Modulate2x.is_entity());
+    }
+
+    #[test]
+    fn ground_decal_uri_is_detected_and_not_entity() {
+        assert!(GeosetFilter::is_ground_decal_uri(
+            "../../../ReplaceableTextures/Splats/HumanTownHallUberSplat.png"
+        ));
+        assert!(GeosetFilter::is_ground_decal_uri("x/Splats/Foo.png"));
+        // 收紧后：含 shadow 字样的实体贴图不再被误判为地面贴片。
+        assert!(!GeosetFilter::is_ground_decal_uri(
+            "Textures/CastleShadow.png"
+        ));
+        assert!(!GeosetFilter::is_ground_decal_uri(
+            "Textures/Shockwave1.png"
+        ));
+        assert!(!GeosetFilter::is_ground_decal_uri("./Footman.png"));
+        assert!(!GeosetFilter::GroundDecal.is_entity());
+        // 贴图 URI 命中 Splats 的 Opaque 材质应被覆盖为 GroundDecal。
+        let (base_json, bin) = minimal_gltf();
+        let material =
+            "\"materials\": [{\"pbrMetallicRoughness\": {\"baseColorFactor\": [1,1,1,1]}}]";
+        let replacement = "\"images\": [{\"uri\": \"x/Splats/UberSplat.png\"}], \
+            \"textures\": [{\"source\": 0}], \
+            \"materials\": [{\"pbrMetallicRoughness\": {\"baseColorTexture\": {\"index\": 0}}}]";
+        let json = base_json.replace(material, replacement);
+        let mesh = parse_gltf(&json, &[bin]).unwrap();
+        assert_eq!(mesh.submeshes[0].filter_mode, GeosetFilter::GroundDecal);
     }
 
     #[test]

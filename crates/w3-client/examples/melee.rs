@@ -118,6 +118,11 @@ fn main() {
     let kinds = setup.kinds.clone();
     let library = synthetic_library(&setup);
 
+    // 初始相机拉近到本地出生点（x≈-92）的局部战场视角：真实 WC3 模型按真实
+    // 比例时，默认 zoom=1 俯瞰全图会把农民 / 建筑压成几个像素。玩家仍可用
+    // 滚轮 / WASD 缩放平移查看全图。纯表现层初始状态，不改确定性。
+    let initial_zoom = 3.5;
+    let initial_pan = [-92.0, 0.0];
     ClientApp::new(driver, real_map.terrain, library, MAX_FRAMES)
         .with_static_markers(real_map.markers)
         .with_terrain_tiles(real_map.terrain_tiles)
@@ -125,6 +130,7 @@ fn main() {
         .with_static_model_vertices(real_map.static_model_vertices)
         .with_entity_models(real_map.entity_models)
         .with_entity_kinds(kinds)
+        .with_initial_camera(initial_zoom, initial_pan)
         .run()
         .expect("melee example: reason=window_run_failed");
 }

@@ -11,7 +11,9 @@ use w3_content::RgbaImage;
 use w3_core::{ANGLE_SCALE, Event, EventKind, SCALE, WorldView};
 
 use crate::model::{ModelLibrary, team_color};
-use crate::model_geometry::{BakedModel, ModelTransform, expand_model};
+use crate::model_geometry::{
+    BakedModel, ENTITY_DISPLAY_SCALE, MODEL_DISPLAY_SCALE, ModelTransform, expand_model,
+};
 use crate::terrain::{TerrainMesh, TerrainVertex};
 
 /// 定点世界坐标（Q47.16）→ 表现层 `f32` 世界单位。
@@ -682,7 +684,7 @@ impl Scene {
                             instance.y,
                         ],
                         yaw: instance.facing,
-                        scale: 1.0,
+                        scale: MODEL_DISPLAY_SCALE * ENTITY_DISPLAY_SCALE,
                     };
                     vertices.extend(expand_model(model, &transform));
                     continue;

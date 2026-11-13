@@ -34,7 +34,7 @@ pub use definitions::{
     AbilityDef, CONTENT_HASH_SCHEMA, DefinitionError, DefinitionKind, DefinitionTables,
     FrozenDefinitions, ItemDef, UnitDef, UpgradeDef, from_slk_tables,
 };
-pub use gltf::{GltfError, ModelMesh, SubMesh, load_gltf, parse_gltf};
+pub use gltf::{GeosetFilter, GltfError, ModelMesh, SubMesh, load_gltf, parse_gltf};
 pub use heightfield::{CenterOffset, HeightfieldError, TerrainHeightfield};
 pub use load::{ContentError, ParsedMap, load_map, load_table};
 pub use model_index::{ENTITY_MODEL_FILES, ModelCatalog, ModelClass, ModelIndexError};

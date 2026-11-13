@@ -288,6 +288,18 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         self
     }
 
+    /// 设置初始相机（拉近到局部战场视角 + 平移到出生点，纯表现层）。
+    ///
+    /// 真实 WC3 模型按真实比例时，默认 `zoom=1` 俯瞰全图会把农民 / 建筑压成
+    /// 几个像素。此 builder 让可玩入口一打开就呈现可辨的局部战场（RTS 常规
+    /// 视角），玩家仍可用滚轮 / WASD 自由缩放平移查看全图。不改 `CameraState`
+    /// 全局默认，既有入口与验收测试不受影响；`set_initial_view` 显式赋值并
+    /// clamp，不隐含依赖默认 zoom、重复调用幂等。
+    pub fn with_initial_camera(mut self, zoom: f32, pan: [f32; 2]) -> Self {
+        self.camera.set_initial_view(zoom, pan);
+        self
+    }
+
     /// 运行 winit 事件循环直到关闭或达到 `max_frames`。
     pub fn run(mut self) -> Result<(), RenderError> {
         let event_loop = EventLoop::builder()

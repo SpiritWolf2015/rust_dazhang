@@ -1,6 +1,6 @@
 # Tasks
 
-> 按 `design.md` D1–D8 决策分组，每组自带其工作所需的测试与验证；`w3-core` 全程零改动。工具 / 命令名保持原样，任务描述一律中文。第 1–7、9 组为用户拍板「能打完一局」的闭环与 HUD；第 10 / 11 组为实施期间用户追加的真实地图表现层阶段 1/2（D7）；第 12 组为用户再次判定「EI 地图上仍是基本几何体」后追加的真实 glTF 模型阶段 3（D8）。第 6.3 / 8 组为人工 GPU 冒烟，须用户在有显示设备桌面执行，CI 不覆盖、未勾前不归档。
+> 按 `design.md` D1–D9 决策分组，每组自带其工作所需的测试与验证；`w3-core` 全程零改动。工具 / 命令名保持原样，任务描述一律中文。第 1–7、9 组为用户拍板「能打完一局」的闭环与 HUD；第 10 / 11 组为实施期间用户追加的真实地图表现层阶段 1/2（D7）；第 12 组为用户再次判定「EI 地图上仍是基本几何体」后追加的真实 glTF 模型阶段 3（D8）；第 13 组为阶段 3 真窗口验收后「装配了却看不见」的可视性修复（D9）。第 6.3 / 8 组为人工 GPU 冒烟，须用户在有显示设备桌面执行，CI 不覆盖、未勾前不归档。
 
 ## 1. 规范基线与合成内容定义
 
@@ -56,9 +56,9 @@
 
 ## 8. 人工 GPU 冒烟（人工项，仅能在有 GPU 与显示设备的桌面执行）
 
-> 本组全部为**人工项**：只能由用户在本机逐项执行。**执行者与设备登记：由用户在本机（有 GPU / 显示设备桌面）执行；`melee` example 现依赖 `config.toml` 指向的本机真实 Echo Isles 导出 + 922 个真实 glTF 模型（阶段 1/2/3，D7/D8），真实资产留本机、不入库；玩法闭环 CPU 测试仍零资产。** **运行记录：本轮 AI 侧已完成 CPU + 离屏 GPU 自测——`melee_loop` 7 项端到端（含「采集→建造→训练→摧毁主城→胜负结算→重开」一局可打完，以及 `ai_commands_are_frame_frozen_not_clock_driven` 确定性回归）、`determinism` 26 项、`isolation` 3 项、`w3-render` 45 项、`gpu_headless` 3 项（真 adapter 离屏渲染非黑屏、逐字节确定）、`w3-content` 35 项（gltf 解析 / model_index 映射）、`real_map_e2e` 7 项（本机真实加载贴图 / 底图 / 2588 真实 glTF 模型、无 skip、真实模型离屏渲染非黑屏）、`interaction` 21 项、`cargo test --workspace` 全绿，`verify_all.py` → `Verification OK`（编码 / fmt / openspec validate / asset scan 全通过）；6.2 编译 example 通过。6.3 真窗口与 8.1–8.5 仍待用户本机逐项勾选（判据见 `smoke-checklist.md`）。** 当前 CLI 会话标注「待人工在有 GPU / 显示设备桌面执行」；CI / headless / 无显示设备环境 MUST 明确报告无法执行、不静默跳过、不改判为通过；**CI 只覆盖编译 + CPU 测试 + 本机 headless 离屏 3D 场景，未验证真窗口 GPU 链路与 HUD overlay**；清单未逐项勾选前不得归档。
+> 本组全部为**人工项**：只能由用户在本机逐项执行。**执行者与设备登记：由用户在本机（有 GPU / 显示设备桌面）执行；`melee` example 现依赖 `config.toml` 指向的本机真实 Echo Isles 导出 + 922 个真实 glTF 模型（阶段 1/2/3，D7/D8），真实资产留本机、不入库；玩法闭环 CPU 测试仍零资产。** **运行记录：本轮 AI 侧已完成 CPU + 离屏 GPU 自测——`melee_loop` 7 项端到端（含「采集→建造→训练→摧毁主城→胜负结算→重开」一局可打完，以及 `ai_commands_are_frame_frozen_not_clock_driven` 确定性回归）、`determinism` 26 项、`isolation` 3 项、`w3-render` 49 项（含 GeosetFilter / 特效过滤 / 树冠保守剔除）、`gpu_headless` 3 项（真 adapter 离屏渲染非黑屏、逐字节确定）、`w3-content` 39 项（gltf 解析 / filterMode 透传 / model_index 映射）、`real_map_e2e` 8 项（本机真实加载贴图 / 底图 / 2588 真实 glTF 模型、特效层过滤、无 skip、真实模型离屏渲染非黑屏）、`interaction` 22 项（含 with_initial_camera 表现层专属）、`cargo test --workspace` 全绿，`verify_all.py` → `Verification OK`（编码 / fmt / openspec validate / asset scan 全通过）；6.2 编译 example 通过。6.3 真窗口与 8.1–8.5 仍待用户本机逐项勾选（判据见 `smoke-checklist.md`）。** 当前 CLI 会话标注「待人工在有 GPU / 显示设备桌面执行」；CI / headless / 无显示设备环境 MUST 明确报告无法执行、不静默跳过、不改判为通过；**CI 只覆盖编译 + CPU 测试 + 本机 headless 离屏 3D 场景，未验证真窗口 GPU 链路与 HUD overlay**；清单未逐项勾选前不得归档。
 
-- [ ] 8.1 人工项：窗口能开可关；真实 Echo Isles 129×97 地形（非合成浅碗）、真实 BLP→PNG 地表贴图颜色（非调色板色块）、**2588 个静态摆放与动态单位呈现为真实 glTF WC3 模型（树 / 岩石 / 建筑 / 农民 / 士兵，非四面体 / 圆锥 / 长方体等基本几何体）**、真实 `war3mapMap.png` 小地图底图（非纯灰底），且 HUD 文字层 / 命令卡 / 选择面板 / 生产队列可见；验证：人工记录可观察证据（对应 `smoke-checklist.md` B1–B6）
+- [ ] 8.1 人工项：窗口能开可关；真实 Echo Isles 129×97 地形（非合成浅碗）、真实 BLP→PNG 地表贴图颜色（非调色板色块）、**2588 个静态摆放与开局 12 个动态实体呈现为真实 glTF WC3 模型（树 / 岩石 / 建筑 / 农民，非四面体 / 圆锥 / 长方体等基本几何体；运行时 Train/Build 新实体走模型缺键回退、属已知限制）**、真实 `war3mapMap.png` 小地图底图（非纯灰底），且 HUD 文字层 / 命令卡 / 选择面板 / 生产队列可见；验证：人工记录可观察证据（对应 `smoke-checklist.md` B1–B7）
 - [ ] 8.2 人工项：在真实地形 / 真实贴图上框选拾取不错位；右键移动 / 攻击、采集、建造、训练、取消、编队逐项生效且失败有英文日志；验证：人工记录观察
 - [ ] 8.3 人工项：从开局到分出胜负**打完一局**（含 AI 对手行为、胜负显示与重开）；验证：人工记录完整剧本与结果
 - [ ] 8.4 人工项：WASD / 滚轮 / Z-X 相机、拖拽 `Resized`、高刷下逻辑帧恒定 30；验证：人工记录画面与帧号
@@ -98,17 +98,30 @@
 
 - [x] 12.1 `w3-content::gltf` 手写 glTF 2.0 子集解析（`.gltf` JSON + `.bin` 交错顶点 `POSITION`/`NORMAL`/`TEXCOORD_0` + 索引 + 相对路径 PNG 贴图 → `ModelMesh`），零新依赖（仅用已有 `serde_json`/`image`）；验证：`gltf.rs` 单测（交错 stride、u16/u32 索引、材质 alpha/doubleSided、越界 / 短 buffer / 坏 JSON 显式报错、确定性）全绿；真实 Corn / 树 / Footman / 兵营 glTF 探针确认 136/53/372/1671 三角形、贴图与 `node_scale=0.01` 正确解析
 - [x] 12.2 `w3-content::model_index` 的 `ModelCatalog` 扫描 922 个 glTF + SLK `file` 字段建立 `typeId`/`doodadID`→模型映射（大小写不敏感、变体前缀、树 `LTlt` 等 `file` 空者按类别兜底、候选列表跳过上游空占位）；验证：`model_index.rs` 单测（合成目录 / 变体 / 树兜底 / 确定性）全绿；真实目录探针 922 索引、单位 25/26（`sloc` 无模型）、装饰物 21/21、6 个实体键全命中
-- [x] 12.3 `w3-render::model_geometry` 烘焙：逐顶点 UV 采样真实贴图像素写入顶点色、按三角形重心 alpha 剔除树叶镂空、`wc3ToGltfVec3` 坐标展开成 `SceneVertex`（布局 / shader / 单管线零改动）；验证：`model_geometry.rs` 单测（贴图采样、alpha 剔除、坐标翻转、退化 UV、展开确定性）全绿
+- [x] 12.3 `w3-render::model_geometry` 烘焙：逐顶点 UV 采样真实贴图像素写入顶点色、树叶 `MASK` 镂空剔除（**注：D9 起改为「三顶点 UV 全透明才删」保守剔除，早期「重心单点」剔除会误删树冠，见 13.3**）、`wc3ToGltfVec3` 坐标展开成 `SceneVertex`（布局 / shader / 单管线零改动）；验证：`model_geometry.rs` 单测（贴图采样、alpha 剔除、坐标翻转、退化 UV、展开确定性）全绿
 - [x] 12.4 `Scene` 增加 `set_static_model_vertices` / `set_entity_models`，静态摆放与动态单位优先真实网格、缺键回退程序化几何；验证：`scene.rs` 新增 3 项单测（静态替换、动态替换、缺键回退）全绿，`w3-render` 45 项全绿
 - [x] 12.5 `w3-client::model_assembly` 按摆放位姿（缩放 / 贴地 / `angle`）预展开静态模型、6 类动态实体烘焙、glTF 解码缓存、顶点预算保护；`config.toml` 加 `models_dir`/`slk_dir`，`real_map::assemble` / `ClientApp` builder / `melee` example 串联；验证：真实装配探针 **2588/2588 摆放命中、0 skip、37.4 万真实模型顶点、3970 种真实贴图颜色、6 实体模型（主城 3212 / 兵营 1667 / 步兵 369 三角形）**
 - [x] 12.6 `w3-render::render_headless_rgba` 离屏 GPU 渲染 + readback（真 adapter、无窗口、复用 `build_pipeline`/`record_scene`）；验证：`gpu_headless.rs` 3 项（合成顶点流验管线非黑屏 / 逐字节确定 / 空流纯背景，明确不声称证明真实模型上屏）全绿
-- [x] 12.7 真实资产 e2e：`real_gltf_models_replace_all_programmatic_geometry`（2588 全命中、顶点数远超程序化、真实贴图颜色丰富、6 实体模型）、`real_models_enter_scene_vertices_and_are_deterministic`（程序化被真实网格整体替换、逐帧可复现）、`real_gltf_models_render_on_screen_not_black`（**A/B 像素差对照**：仅地形 vs 地形+真实模型两帧，断言真实模型显著改变大量画面像素 + 变化像素含多种模型贴图颜色 + 全场景非黑屏，地形自身无法伪造）；验证：`real_map_e2e.rs` 7 项全绿、无 skip
+- [x] 12.7 真实资产 e2e：`real_gltf_models_replace_all_programmatic_geometry`（2588 全命中、顶点数远超程序化、真实贴图颜色丰富、6 实体模型）、`real_models_enter_scene_vertices_and_are_deterministic`（程序化被真实网格整体替换、逐帧可复现）、`real_gltf_models_render_on_screen_not_black`（**A/B 像素差对照**：仅地形 vs 地形+真实模型两帧，断言真实模型显著改变大量画面像素 + 变化像素含多种模型贴图颜色 + 全场景非黑屏，地形自身无法伪造）；验证：`real_map_e2e.rs` 8 项全绿、无 skip（含第 13 组新增特效过滤测试）
 - [x] 12.8 全量门禁与合规；验证：`python tools/verify_all.py` → `Verification OK`（编码 / rustfmt / 全 workspace 测试 / `openspec validate` / 资产扫描全绿），`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍为 3、**零新增 Cargo 依赖**、`NOTICE.md`/`Cargo.lock` 无新变化
 
 > **阶段 3 诚实边界（如实登记，不冒充完成）**：真实模型为 bind pose 静态网格（逐帧骨骼动画蒙皮留后续）；贴图为逐顶点 UV 采样进顶点色（逐像素 GPU 纹理过滤留后续，稀疏网格细节有限）；少数非 EI convert 子集装饰物用同类真实模型语义兜底；真 GPU 窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组，`smoke-checklist.md`）；headless 自测已用 A/B 像素差对照证明真实模型在离屏 3D 场景贡献画面，但不覆盖 HUD overlay 与真窗口最终观感。
+
+## 13. 真实模型可视性修复（阶段 3 真窗口验收后，用户追加 / D9）
+
+> 用户真窗口判定「还是基本几何体，没看见 War3 农民 / 建筑」。日志证明模型顶点已装配（`static_vertices=373773`、`entity_models=6`），正视特写确认模型完整——问题在渲染观感。全部用 `render_headless_rgba` 离屏渲染 + `ViewImage` 离线逐版自证，不反复开窗打扰用户。
+
+- [x] 13.1 `w3-content::gltf` 透传 `extras.wc3FilterMode` / `alphaMode` 到 `SubMesh.filter_mode`（`GeosetFilter` 枚举：Opaque/Mask/Blend/Additive/AddAlpha/Modulate/Modulate2x/GroundDecal），按贴图 URI 的「`Splats/` 目录或 `ubersplat` 文件名」路径级特征识别 `GroundDecal`（收紧后用 `CastleShadow.png`/`Shockwave1.png` 负向单测防误判）；验证：`gltf.rs` 单测（7 种 filterMode 分类、GroundDecal URI 正负向识别、实体/特效判定）全绿
+- [x] 13.2 `w3-render::model_geometry::bake_submesh` 只烘焙 `is_entity()` geoset（Opaque/Mask），过滤特效层与地面贴片（消白色纸片 / 大黑三角）；验证：单测 `effect_geosets_are_filtered_out`（5 种特效全剔除、只留 1 实体）、`mask_entity_geoset_is_kept` 全绿；真实主城特效层正视特写对比，黑块 / 白纸片消失
+- [x] 13.3 alpha 镂空改**保守剔除**（仅三顶点 UV 全透明才删整片），保留树冠 billboard 面片；验证：单测 `bake_keeps_tree_canopy_when_centroid_is_transparent_but_a_vertex_is_opaque`（UV 构造让旧重心剔除必删、新保守剔除必留，含元断言防退化）+ `bake_still_drops_triangle_with_all_vertices_transparent`（防退化成永不删）全绿，离屏渲染树从细杆变为有树干 / 树冠的林
+- [x] 13.4 表现层显示放大 `MODEL_DISPLAY_SCALE=2`（静态）/ `ENTITY_DISPLAY_SCALE=2`（动态额外，合计 4×），静态 / 动态两处装配统一应用；验证：离线离屏渲染对比 2/3/4/6 倍 + 多 zoom 组合，选定可辨城堡 / 人形农民且不过大糊屏
+- [x] 13.5 `ClientApp::with_initial_camera(zoom,pan)` builder（经 `CameraState::set_initial_view` 显式赋值 + clamp、幂等，纯表现层）+ `MAX_ZOOM` 4→8（全局 clamp 上限放宽，`default()` 未改、既有入口默认位姿不变）；`melee` example 用 `zoom=3.5`/`pan=[-92,0]` 对准本地出生点的 RTS 局部视角；验证：`interaction.rs::with_initial_camera_is_presentation_only`（MVP 改变、不改哈希 / 快照、不推进 tick）全绿
+- [x] 13.6 最终 example 参数离屏渲染自证（`FINAL2`）+ 真实资产 e2e；验证：城堡 / 农民可辨、白纸片黑块消失、树成林；新增 `real_map_e2e::real_townhall_filters_effects_and_keeps_entity_geometry`（真实主城特效层被过滤、实体几何保留），`real_map_e2e.rs` 8 项全绿无 skip
+
+> **D9 诚实边界（如实登记）**：树 billboard 平面在斜俯视角下仍偏细长（WC3 原版靠面向相机 billboard 补齐，静态 bind pose 未做）；个别装饰物残留细长深色伪影（面积量化后否决高风险「面积过滤」，避免误删建筑大墙面）；出生点临水为 EI 真实水域地形特征；真窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组）。
 
 ## Workflow follow-up
 
 - 人工 `git push` → CI 双平台 `python tools/verify_all.py` 绿灯。
 - 由编排者执行 `/opsx:archive`（`openspec archive melee-playable-loop -y`），确认主 `openspec/specs/` 新增 `melee-match` 与 `rts-command-hud`，既有 12 个 capability 未被改写。
-- 后续独立 change：真实 SLK 数值进权威 `FrozenDefinitions`、逐像素 GPU 纹理采样、真实 glTF 骨骼动画逐帧蒙皮、中文上屏（CJK 字体与许可证人工拍板）、AI 强度与多难度、联机接入本局（表现层真实地图 / 贴图 / 小地图底图已在阶段 1/2、真实 glTF 模型 bind pose 已在阶段 3 落地）。
+- 后续独立 change：真实 SLK 数值进权威 `FrozenDefinitions`、逐像素 GPU 纹理采样、真实 glTF 骨骼动画逐帧蒙皮、中文上屏（CJK 字体与许可证人工拍板）、AI 强度与多难度、联机接入本局（表现层真实地图 / 贴图 / 小地图底图已在阶段 1/2、真实 glTF 模型 bind pose 已在阶段 3 落地、可视性修复已在 D9 落地）。

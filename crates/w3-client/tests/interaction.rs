@@ -231,6 +231,36 @@ fn camera_operations_keep_state_hash_and_snapshot_v3() {
 }
 
 #[test]
+fn with_initial_camera_is_presentation_only() {
+    // 初始相机 builder（拉近到局部战场）只改表现层位姿，不推进逻辑帧、
+    // 不改状态哈希 / 快照，且 MVP 矩阵与默认相机确实不同（builder 生效）。
+    let terrain = synthetic_terrain();
+
+    let default_driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
+    let default_app = ClientApp::new(default_driver, terrain.clone(), ModelLibrary::default(), 0);
+    let default_view_proj = default_app.camera().matrix(&terrain);
+
+    let focused_driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
+    let focused = ClientApp::new(focused_driver, terrain.clone(), ModelLibrary::default(), 0)
+        .with_initial_camera(3.5, [-92.0, 0.0]);
+    let focused_view_proj = focused.camera().matrix(&terrain);
+
+    assert_ne!(
+        default_view_proj.to_cols_array(),
+        focused_view_proj.to_cols_array(),
+        "初始相机必须改变 MVP，证明 builder 生效"
+    );
+    // 未推进逻辑帧、权威状态与全新 app 一致（纯表现层）。
+    assert_eq!(focused.driver().sim().read_view().tick, 0);
+    assert_eq!(hash(&focused), hash(&default_app), "初始相机不得改状态哈希");
+    assert_eq!(
+        snapshot(&focused),
+        snapshot(&default_app),
+        "初始相机不得改快照"
+    );
+}
+
+#[test]
 fn resize_only_changes_aspect_and_never_steps() {
     use w3_client::CameraAction;
 

@@ -29,8 +29,8 @@ pub use model::{
     ResolvedMaterial, Sequence, TEAM_COLORS, Track, team_color,
 };
 pub use model_geometry::{
-    BakedModel, BakedTriangle, MODEL_WORLD_SCALE, ModelTransform, bake_model, expand_model,
-    gltf_to_world,
+    BakedModel, BakedTriangle, ENTITY_DISPLAY_SCALE, MODEL_DISPLAY_SCALE, MODEL_WORLD_SCALE,
+    ModelTransform, bake_model, expand_model, gltf_to_world,
 };
 pub use scene::{
     DisplayHints, FrameInput, Instance, LORDAERON_SUMMER_TILES, Scene, SceneVertex, StaticMarker,

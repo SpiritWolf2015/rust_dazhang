@@ -138,6 +138,20 @@
 
 > **阶段 4 诚实边界（如实登记，不冒充完成）**：单管线 `@interpolate(flat)` 使跨水陆三角形取 provoking 顶点层，水岸呈**格点级锯齿**（诊断确认非几何洞；参考项目用逐像素水 mask / 独立 shoreline shader 平滑，本仓库未做），可见水裕量已显著减少但不冒充完全消除；`cull_mode: None` 双面渲染属正确性优先的性能权衡；逐帧骨骼动画蒙皮（bind pose 静态）、运行时新实体模型缺键回退（D9）、中文上屏、真窗口 HUD overlay 最终观感仍留后续 / 人工验收。离屏 3D 链路画面已达标并自证，但**不覆盖真窗口最终观感**（第 6.3 / 8 组人工项未勾前不归档）。
 
+## 15. 开局可玩性修复（阶段 5，第四次真窗口验收后 / D11）
+
+> 用户第四次真窗口判定「模型加载出来了但相机不是正常 War3 开局、农民不在主基地、找不到主基地、没法正常玩一局、没法开始验收」。按强反馈先离线查根因（相机语义 + 两套坐标系 + 参考项目开局 + 探针自证漏洞）、批量离屏自证、写足 CPU 回归，全绿后再请人工验收。`w3-core` 零改动、零新增依赖。
+
+- [x] 15.1 根因查实：`Camera::matrix` 的 `zoom=3.5` 视野约 201×113 世界单位（俯瞰全图）、`pan=[-92,0]` 看向 `(-91,1)` 为岛南浅滩；`MeleeSetup` 合成坐标 `[-96,0]` 与真实 EI sloc `(-81,46)` 脱节；真实地图静态单位无主城/农民（主城农民靠 12 个动态实体生成，对齐参考项目 `spawn_at_sloc`）；`render_probe` 漏 `step()` 致 `dynamic_vertices=0`、此前离屏图从未含动态单位。只读核实参考项目 `MeleeBootstrap.spawn_at_sloc` / `focus_on_position` / `camera_initial_distance=16.5` / `pitch=-56°`
+- [x] 15.2 `MeleeSetup` 开局重定位：命名常量 `LOCAL_START=(-74,38)`（sloc 起始区天然无树空地，距 sloc 11、半径 14 内 0 棵树）/ `AI_START=(74,48)`；`opening_layout(start,facing,spread)` 农民簇朝地图中心排在主城前方、金矿/树在背离侧，`LOCAL_SPREAD=10` / `AI_SPREAD=4`；离线量化两侧 12 落点全部 `ground>water`、无树冠遮挡、不压地图边界；验证：`melee_loop` 7 项（含打完一局 / 重放确定性）全绿
+- [x] 15.3 相机改 RTS 开局近景：`MAX_ZOOM` 8→20；`melee` 默认 `zoom=7 / pan=[-72,34]`（主城完整居中、农民分开可框选、下方开阔、无全图虚空）；`render_probe` 默认参数同步 + `sim.step()` 修动态单位上屏 + `units` 诊断模式；验证：批量 zoom/pan + `ViewImage` 逐版自证主城/农民/金矿可辨、正常近景
+- [x] 15.4 针对性 CPU 回归：`setup.rs` 3 项（主城对齐真实起始空地 / 农民簇拉开在前方 / 两侧布局对称确定性）、`camera.rs` 1 项（开局 zoom 在新上限内不被 clamp、越界仍 clamp）全绿；`cargo test --workspace` 全绿
+- [x] 15.5 文档同步：`design.md` D11、`proposal.md` 阶段 5、`smoke-checklist.md` B 组口径 + 新增 B9 开局可玩性门槛项（本轮核心验收项）、本组任务记录
+- [ ] 15.6 人工 GPU 冒烟（人工项，**门槛**）：用户 `cargo run -p w3-client --example melee`，先按 `smoke-checklist.md` **B9** 逐项确认「打开就能找到主基地、框选农民、正常开局」，通过后再按 C/D/E 组玩完一局；离屏自证不覆盖真窗口 egui overlay，B9 未通过即反馈、不勉强往下勾；清单未勾前不归档
+- [ ] 15.7 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）
+
+> **阶段 5 诚实边界（如实登记）**：默认开局参数已用真窗口同参 `render_probe` 离屏逐版自证（主城完整居中、农民分开、金矿/树林/水面环绕、无全图虚空），但**不覆盖真窗口 egui overlay / HUD 与最终观感**；真窗口首帧 `step` 前极短空窗理论存在（稳定运行后立即可见，用户截图 HUD 已能选中 Peasant #2 佐证）。AI 侧陆块窄且多树、开局不可见（相距约 155），不影响本地可玩性（胜负靠命令脚本 / 实体 ID 结算）。`render_probe` 输出 PNG 留 gitignored `target/`、不入库。水岸格点级锯齿（D10）、树 billboard 斜俯视偏细、运行时新实体模型缺键回退（D9）、中文上屏仍留后续 / 人工验收。
+
 ## Workflow follow-up
 
 - 人工 `git push` → CI 双平台 `python tools/verify_all.py` 绿灯。

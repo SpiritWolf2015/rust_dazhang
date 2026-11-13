@@ -13,10 +13,15 @@ pub const PAN_STEP: f32 = 32.0;
 pub const ZOOM_STEP: f32 = 0.1;
 /// 旋转步长（弧度 / 按键事件）。
 pub const YAW_STEP: f32 = 0.05;
-/// 缩放上下限，防止矩阵退化。上限放宽到 8，让真实比例模型在局部战场视角下
-/// 可拉近到清晰可辨（RTS 常规游玩视角）；玩家滚轮可在此区间自由缩放。
+/// 缩放上下限，防止矩阵退化。
+///
+/// `Camera::matrix` 里 `distance = extent / zoom`（`extent≈258`）。默认开局
+/// 取 `zoom=7`（视野约 100×56 世界单位，主城 + 农民簇 + 周边陆地完整可见，
+/// 见 `examples/melee.rs`）。上限从 8 放宽到 20 **仅是给玩家滚轮进一步拉近
+/// 看单位细节、以及离线取景留出余量**，不改变默认开局取景；下限 0.25 保持
+/// 可拉远看全图。纯表现层 clamp 上限，不进权威状态 / 哈希 / 快照。
 pub const MIN_ZOOM: f32 = 0.25;
-pub const MAX_ZOOM: f32 = 8.0;
+pub const MAX_ZOOM: f32 = 20.0;
 
 /// 归一化的相机输入动作；宿主把 winit 事件映射为此枚举。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,5 +122,35 @@ impl CameraState {
             .with_pan(self.pan)
             .with_zoom(self.zoom)
             .with_yaw(self.yaw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opening_zoom_is_within_bounds_not_clamped() {
+        // 默认开局 `zoom=7` 生效（不改哈希/快照，纯表现层）。
+        let mut state = CameraState::default();
+        state.set_initial_view(7.0, [-72.0, 34.0]);
+        assert_eq!(state.zoom(), 7.0, "开局 zoom 应生效");
+        assert_eq!(state.pan(), [-72.0, 34.0]);
+
+        // 判别力：`zoom=12` 在旧的 MAX_ZOOM=8 下会被 clamp 到 8，放宽到 20
+        // 后必须原样生效。此断言守护「上限确已放宽、滚轮可进一步拉近」，
+        // 若有人把 MAX_ZOOM 退回 8 此处失败（而非与常量自比较恒真）。
+        state.set_initial_view(12.0, [0.0, 0.0]);
+        assert_eq!(
+            state.zoom(),
+            12.0,
+            "12.0 应落在放宽后的上限内；若被 clamp 说明 MAX_ZOOM 被回退"
+        );
+
+        // 越界仍被 clamp（上限提高不破坏既有保护）。
+        state.set_initial_view(1000.0, [0.0, 0.0]);
+        assert_eq!(state.zoom(), MAX_ZOOM);
+        state.set_initial_view(-5.0, [0.0, 0.0]);
+        assert_eq!(state.zoom(), MIN_ZOOM);
     }
 }

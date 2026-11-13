@@ -50,18 +50,19 @@ fn main() {
         .cloned()
         .unwrap_or_else(|| "target/render_probe.png".to_string());
     // 可选 zoom / pan_x / pan_y（argv[2..4]），用于离线批量挑相机参数；
-    // 缺省与可玩入口 `melee` 的初始视角一致。
+    // 缺省与可玩入口 `melee` 的初始视角一致（`zoom=7`、`pan=[-72,34]`），
+    // 保证离屏自证用的就是真窗口开局参数。
     let zoom = args
         .get(2)
         .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(3.5);
+        .unwrap_or(7.0);
     let pan = [
         args.get(3)
             .and_then(|s| s.parse::<f32>().ok())
-            .unwrap_or(-92.0),
+            .unwrap_or(-72.0),
         args.get(4)
             .and_then(|s| s.parse::<f32>().ok())
-            .unwrap_or(0.0),
+            .unwrap_or(34.0),
     ];
     // 与真窗口一致：16:9 宽高比，1280×720 离屏。
     let width: u32 = 1280;
@@ -88,14 +89,25 @@ fn main() {
         sim.submit_gameplay_command(*command)
             .expect("gameplay command rejected");
     }
+    // 与真窗口首帧一致：推进一帧让 frame 0 的 `Spawn` 命令生效，否则
+    // `read_view()` 返回空实体、动态单位（主城 / 农民）不会上屏。此前探针漏
+    // 了这一步，导致所有离屏图只含静态摆放，无法自证开局可玩性。
+    sim.step();
     let view = sim.read_view();
     let library = synthetic_library(&setup);
 
+    let mode = args.get(5).map(String::as_str).unwrap_or("");
+
+    // "units" 诊断：只渲动态单位（跳过静态摆放），确认主城 / 农民真实网格
+    // 是否加载、是否贴地、彼此间距。仅诊断工具，不入库逻辑。
+    let units_only = mode == "units";
     let mut scene = Scene::default();
-    scene.set_static_markers(map.markers.clone());
     scene.set_terrain_tiles(map.terrain_tiles.clone());
     scene.set_terrain_texture_layers(map.terrain_texture_layers);
-    scene.set_static_model_vertices(map.static_model_vertices.clone());
+    if !units_only {
+        scene.set_static_markers(map.markers.clone());
+        scene.set_static_model_vertices(map.static_model_vertices.clone());
+    }
     scene.set_entity_models(map.entity_models.clone());
     scene.consume(
         FrameInput {
@@ -105,10 +117,25 @@ fn main() {
         &library,
     );
     let mut vertices = scene.build_vertices(&map.terrain);
+    if units_only {
+        // 地形染成深色，突出动态单位模型。
+        for v in &mut vertices {
+            if v.surface >= 0.0 {
+                v.color = [0.15, 0.18, 0.15, 1.0];
+                v.tex_mode = 0.0;
+            }
+        }
+        let dynamic: Vec<_> = vertices.iter().filter(|v| v.surface < 0.0).collect();
+        println!(
+            "units diag: dynamic_vertices={} total={}",
+            dynamic.len(),
+            vertices.len()
+        );
+    }
 
     // 诊断模式（argv[5]="diag"）：把顶点按类别改纯色 + tex_mode=0，用于定位
     // "深灰锯齿三角"究竟是几何洞（背景）还是水/地表着色。仅诊断工具，不入库逻辑。
-    let diag = args.get(5).is_some_and(|s| s == "diag");
+    let diag = mode == "diag";
     if diag {
         for v in &mut vertices {
             if (0.0..6.0).contains(&v.surface) {

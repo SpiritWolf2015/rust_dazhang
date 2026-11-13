@@ -118,11 +118,14 @@ fn main() {
     let kinds = setup.kinds.clone();
     let library = synthetic_library(&setup);
 
-    // 初始相机拉近到本地出生点（x≈-92）的局部战场视角：真实 WC3 模型按真实
-    // 比例时，默认 zoom=1 俯瞰全图会把农民 / 建筑压成几个像素。玩家仍可用
-    // 滚轮 / WASD 缩放平移查看全图。纯表现层初始状态，不改确定性。
-    let initial_zoom = 3.5;
-    let initial_pan = [-92.0, 0.0];
+    // 初始相机对准玩家主城的 RTS 常规开局视角：主城落在真实 EI 出生区的
+    // 无树空地 `LOCAL_START=(-74,38)`，相机 target 略偏右下让主城完整居中、
+    // 留出下方开阔草地供框选 / 操作，农民簇在主城前方清晰可辨。`zoom=7` 时
+    // 视野约 100×56 世界单位，主城完整不裁切、能看到周边陆地 / 树林 / 水面、
+    // 看不到地图边界虚空（对齐参考项目 `godot_warcraft3` 的近距离俯视开局）。
+    // 玩家仍可用滚轮 / WASD 缩放平移查看全图。纯表现层初始状态，不改确定性。
+    let initial_zoom = 7.0;
+    let initial_pan = [-72.0, 34.0];
     ClientApp::new(driver, real_map.terrain, library, MAX_FRAMES)
         .with_static_markers(real_map.markers)
         .with_terrain_tiles(real_map.terrain_tiles)

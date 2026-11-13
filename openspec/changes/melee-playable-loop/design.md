@@ -174,6 +174,32 @@
   - 逐帧骨骼动画蒙皮（bind pose 静态）、运行时 `Train`/`Build` 新实体的模型缺键回退（D9）、中文上屏（CJK 字体）、真窗口 HUD overlay 最终观感，仍留后续 / 人工验收（第 6.3 / 8 组，未勾不归档）。
   - 离屏自证（`ViewImage` 目视 + CPU/e2e 像素断言）证明**离屏 3D 链路**画面达标，但不覆盖真窗口 egui overlay 与最终观感；截图不入库，最终人工 GPU 冒烟仍须用户在有显示设备桌面按 `smoke-checklist.md` 执行。
 
+### D11：开局可玩性修复（第四次真窗口验收后 / 阶段 5）
+
+- **背景**：D10 交付后用户第四次真窗口验收，判定「模型总算加载出来了，但相机位置根本不是正常 War3 开局、农民不在主基地、找不到主基地、这种 demo 没法正常玩、没法开始人工验收」，并给真实窗口截图（`target/Snipaste_2026-11-13_20-21-25.png`）。核对截图与离屏自证后确认：画面是**俯瞰整张 EI 地图的远景**（能看到地图四边与外侧虚空），玩家可操作单位挤在右上角一小撮；HUD 显示 Gold=1、选中 Peasant #2，说明单位在、只是布局与相机错位。
+- **根因（离线查实，非猜测）**：
+  1. **相机语义**：`Camera::matrix` 里 `distance = extent / zoom`（`extent = columns.max(rows) × cell_size = 258`）、`target = (1+pan[0], 0, 1+pan[1])`。旧 `melee` 用 `zoom=3.5` → 视野约 201×113 世界单位（整张 256×192 地图大半），是俯瞰远景；`pan=[-92,0]` 看向 `(-91,1)`。
+  2. **两套坐标系脱节**：`MeleeSetup` 把主城放合成坐标 `(-96,0)`、农民 `(-80,±8)`、金矿 `(-112,-24)`；而真实 EI 玩家出生点 sloc 在 `(-81,46)`、陆地基地区质心约 `(-77,43)`，玩法单位 z≈0 落在岛南浅滩/海。真实地图静态单位里**本就没有主城/农民**（只有野怪 / 金矿 / 中立建筑 / 2 个 sloc），主城农民全靠 12 个动态实体生成——与参考项目 `MeleeBootstrap.spawn_at_sloc` 一一对应，缺的只是把它们放到真实 sloc。
+  3. **探针自证漏洞**：`render_probe` 提交 frame-0 `Spawn` 后未 `step()` 就 `read_view()`，导致 `view.entities` 为空、`dynamic_vertices=0`，此前所有离屏图只含静态摆放、从未渲染过动态单位，无法自证开局。
+- **决策（对齐参考项目 `godot_warcraft3` 开局）**：
+  - 只读核实参考项目：`MeleeBootstrap.spawn_at_sloc` 在真实 sloc 生成主城 + 5 农民（朝最近金矿方向投影 320 WC3≈5 世界单位、间距 64 WC3=1）、`rts_camera.focus_on_position(hall_world)` 对准主城、`camera_initial_distance=16.5` / `pitch=-56°` 的近距离陡俯视、`camera_fov=50`。
+  - **玩法坐标重定位**：`MeleeSetup` 用命名常量把主城放到真实 EI sloc 起始区；离线量化发现字面 sloc `(-81,46)` 半径 14 内有 28 棵静态树、拉近后树冠糊满视野，故选同一起始区的**天然无树空地** `LOCAL_START=(-74,38)`（距 sloc 11、半径 14 内 0 棵树），AI 用东北陆块 `(74,48)`。`opening_layout(start, facing, spread)` 把农民簇朝地图中心方向排在主城前方、金矿/树在背离侧；动态模型放大 4× 故农民簇相应拉开（本地 `spread=10`、AI 陆块窄用 `4`），两侧 12 个落点经离线量化全部 `ground>water`（陆地）、无树冠遮挡、不压地图边界。
+  - **相机改 RTS 开局近景**：`MAX_ZOOM` 8→20（纯表现层 clamp 上限），`melee` 默认 `zoom=7 / pan=[-72,34]` → 视野约 100×56 世界单位，主城完整居中不裁切、农民在前方分开可框选、下方开阔草地可操作、能看到周边陆地/树林/水面、**看不到地图边界虚空**；滚轮 / WASD 仍可缩放平移看全图。
+  - **探针修复**：`render_probe` 提交命令后 `sim.step()` 一次让 frame-0 `Spawn` 生效（与真窗口首帧一致），并把默认相机参数同步为 `melee` 开局值、`units` 诊断模式隔离动态单位，使离屏自证能真正覆盖"打开就能玩"的开局。
+- **备选方案（Alternatives considered）**：
+  - *只改相机、不动玩法坐标* — **否决**。玩法单位仍在真实地图的浅滩/海上，主城泡水、与真实陆地基地区脱节，用户「找不到基地」未解决。
+  - *把主城放字面 sloc `(-81,46)`* — **否决**。离线量化该点半径 14 内 28 棵静态树，拉近相机后放大 4× 的树冠糊满视野（实测离屏图 `open_z12_p82_45` 全绿无建筑），看不见主基地。
+  - *给出生点过滤静态树（清场）* — **否决**。改真实地图数据、偏向造假且可能误删；改用天然无树空地更诚实。
+  - *改 `w3-core` 权威逻辑 / golden hash* — **否决**。坐标进 `Spawn` 命令但 `w3-core` 的 golden hash 用独立 fixture，闭环测试比对重放哈希 / 终态相等而非固定坐标；`Gather` 按 unit ID 采集、不校验距离，`Cast` 按 target 实体、不校验射程。改 `MeleeSetup` 常量即可，`w3-core` 零改动。
+- **关联 ADR 0002 与跨平台确定性影响**：`w3-core` 零改动 → 逐帧 `compute_state_hash()`、`capture_snapshot()` 字节、golden hash 与「Windows + Debian 12 x86_64 / rustc 1.99.1 已验证、macOS / ARM64 待验证」结论全部不变；`SNAPSHOT_VERSION` 仍为 3、`defs_hash` / `content_hash` 计算方式不变。开局坐标是 `w3-client` 表现层装配脚本里的编译期整数常量（进 `Spawn` 命令），改的是常量取值而非内核行为；`melee_loop` 的 `full_script_plays_one_match_to_victory_and_restart_is_clean`（采集→建造→训练→摧毁主城→胜负→重开）与 `ai_commands_are_frame_frozen_not_clock_driven` 全绿证明一局仍可打完且确定性不变。相机 `zoom` / `pan` / `MAX_ZOOM` 全为表现层 `f32`，不进哈希 / 快照，不改 30 Hz 累加器与 `step()` 时机。`determinism` 26 项 / `isolation` 3 项 / `cargo test --workspace` 全绿、`git diff -- crates/w3-core/` 为空作硬门禁。**MUST NOT 据此声称跨平台确定性达成新结论**。
+- **验证**：`render_probe` 用真窗口开局参数离屏渲整图 + `ViewImage` 逐版自证（批量 zoom/pan、仅动态单位诊断、最终默认参数），确认主城（石砌城镇大厅）完整居中、3 个农民在主城前方分开、金矿/树林/水面/树林环绕、正常 RTS 近景、无全图虚空。CPU 回归：`setup.rs` 新增 3 项（主城对齐真实起始空地、农民簇拉开在前方、两侧布局对称且确定性）、`camera.rs` 新增 1 项（开局 zoom=7 在新上限内不被 clamp、越界仍 clamp）；`melee_loop` 7 项（含打完一局）全绿。`w3-core` 零改动、零新增依赖、仓库零资产。
+- **诚实边界（已知限制）**：
+  - AI 侧陆块窄且多树、开局不可见（两主城相距约 155），AI 单位可能在树下，但胜负靠命令脚本 / 实体 ID 结算，不影响本地可玩性。
+  - 真实窗口 `about_to_wait` 首帧 `advance_ticks → step` 后 Spawn 才生效，理论上第一帧有极短空窗；稳定运行后单位立即可见（用户截图 HUD 已能选中 Peasant #2 佐证）。
+  - 离屏自证用 `sim.step()` 模拟稳定态，不覆盖真窗口 egui overlay / HUD 与最终观感；`render_probe` 输出 PNG 留 gitignored `target/`、不入库。真窗口「打开就能找到基地、框选农民、打完一局」最终仍须用户按 `smoke-checklist.md` 人工验收，未勾前不归档。
+  - 树 billboard 斜俯视偏细、水岸格点级锯齿（D10）、运行时新实体模型缺键回退（D9）、中文上屏、真窗口 HUD overlay 观感，仍留后续 / 人工验收。
+  - **农民 / 单位脚下的红白色贴地碎片**：放大诊断（`units` 模式）确认人形农民站姿正常、清晰可辨，但脚下有一圈扁平红白碎片，来自 WC3 通用地面贴片 `gutz.png`（血迹 / 影子 / 选中圈类 decal，作为 `MASK` geoset 被当成实体渲染）。离线核查 160 个模型引用 `gutz` / `Selection` 贴图、但其中大量 mesh 是**站立身体**（同一图集含贴片 + 身体），按 URI 简单过滤会误删正常几何（D9 已就 `shadow` 裸子串否决过同类做法），故本轮**不扩范围修**，如实登记为已知观感瑕疵；不影响找基地 / 框选农民 / 完局。低风险修法（按 geoset 局部 Y 范围或 `wc3TeamColorUnderlay` 语义过滤）留后续独立 change。
+
 ## Risks / Trade-offs
 
 - [AI 太弱导致「没有对手感」或打不完一局] → D3 命令源至少覆盖采集、训练与周期性进攻；人工验收清单逐项勾「一局可打完」；若强度仍不足，作为后续独立 change 增强，**不在本 change 扩内核**。

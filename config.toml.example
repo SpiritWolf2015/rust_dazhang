@@ -3,7 +3,7 @@
 # 本仓库不含任何游戏资产；下面每个路径都指向你本机合法获得 / 导出的文件。
 #
 # 解析方：crates/w3-client/src/real_map.rs::load_paths
-# 只识别下面 6 个 `key = "value"` 键（极简解析，无 toml 依赖；注释 / 分段
+# 只识别下面 7 个 `key = "value"` 键（极简解析，无 toml 依赖；注释 / 分段
 # 标题 / 未知键会被忽略）。键名与 `config.toml` 当前实际用法一致。
 
 # 已解析的 Echo Isles 地图目录（w3-content::load_map 读取
@@ -16,10 +16,15 @@ tileset_table = "C:/open_rts/godot_warcraft3/assets/slk-exported/TerrainArt/Terr
 # 可选：真实小地图底图 PNG（阶段 2 HUD 底图）。
 minimap_image = "C:/open_rts/godot_warcraft3/assets/map-parsed/echoisles/war3mapMap.png"
 
-# 可选：6 张 BLP→PNG 地表贴图目录（阶段 2 真实地表顶点色）。
+# 可选：6 张 BLP→PNG 地表贴图目录（阶段 2 真实地表顶点色 / 阶段 4 GPU 平铺）。
 # 目录内需含 Lords_Dirt.png / Lords_DirtRough.png / Lords_DirtGrass.png /
 # Lords_Rock.png / Lords_Grass.png / Lords_GrassDark.png。
 tileset_dir = "C:/open_rts/godot_warcraft3/assets/asset-converted/TerrainArt/LordaeronSummer"
+
+# 可选：真实水面贴图 PNG（阶段 4 真 GPU 纹理管线的水贴图层）。
+# 未配置时水顶点回退半透明纯色；已配置但文件读取 / 解码失败会显式报错
+# （melee example 启动失败），故路径 MUST 指向本机存在且有效的 PNG。
+water_texture = "C:/open_rts/godot_warcraft3/assets/asset-converted/ReplaceableTextures/Water/A_Water00.png"
 
 # 可选：真实 glTF 模型根目录（阶段 3，asset-convert 产物，含 .gltf/.bin/PNG）。
 models_dir = "C:/open_rts/godot_warcraft3/assets/asset-converted"

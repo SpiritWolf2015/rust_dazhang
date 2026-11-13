@@ -149,6 +149,31 @@
   - **真实 glTF 网格的覆盖范围为 2588 静态摆放 + 开局 12 个动态实体**，并非所有运行时实体：运行时经 `Train` / `Build` / `SpawnWave` 新生成的实体，其 `EntityId` 不在 `MeleeSetup::model_keys()` 的 12 个开局绑定内，`ModelLibrary::resolve` 回退 `"default"`；而 `Scene::entity_models` 仅含 `ENTITY_MODEL_FILES` 的 6 个类型键、无 `"default"`，故这些新实体走 `append_typed_marker` → `append_unit_marker`（四面体）程序化几何，且不受 `ENTITY_DISPLAY_SCALE` 放大。此即 D5 已登记的「模型缺键回退」，**并非仅「无本机资产」时才发生**；`smoke-checklist.md` C6「新增兵营」属此回退（四面体占位、非长方体、非真实 glTF 兵营），登记为已知限制、不计失败项、不冒充真实模型。故「全部替换 / 2588+6 类全部命中」指静态摆放全量 + 6 个类型键都烘焙成功 + 开局 12 实体命中，**不等于每个运行时新实例都是真实网格**。
   - D9 观感结论（白纸片 / 黑块消失、树成林、城堡可辨）已由离屏渲染逐版 `ViewImage` 目视确认，但**仓库内无对应像素级自动化断言**：`real_gltf_models_render_on_screen_not_black` 是 D8 遗留的「地形 vs 地形+模型」A/B，不能证明 D9 过滤后的画面；D9 的自动化覆盖是 CPU 层（`GeosetFilter` 分类、特效层三角形剔除、树冠保守剔除单测）与真实资产 e2e。截图按清单约定不入库，最终观感仍交人工 B7（未勾），不冒充 GPU 验收。
 
+### D10：真 GPU 纹理管线（第三次真窗口验收后，用户拍板 / 阶段 4）
+
+- **背景**：D9 交付后用户第三次真窗口判定「还是残次品」，并给出真实窗口截图（`target/Snipaste_2026-11-13_14-24-10.png`）。对照只读参考项目 `godot_warcraft3/examples/editor/acceptance-preview.png`（Godot 完整 PBR：清晰连续地表贴图、有树冠的立体树、清晰建筑 / 单位、俯视 RTS 视角），确认差距是**架构性**的：本仓库是 wgpu 手写单管线 + **CPU 逐顶点 UV 采样进顶点色**（每个三角形内是插值纯色，出不了贴图细节）+ 无逐像素纹理过滤，天生做不出清晰地表与有树冠的树。用户通过 `AskUserQuestion` 明确选择「换真 GPU 纹理管线（推荐）」，放弃另两项（只修刺眼处、暂停画面先验收玩法），并接受工程量大，但要求**先用离屏 readback 自证画面、再请人工验收，不要反复测半成品**。
+- **决策（真 GPU 纹理管线，`texture_2d_array` + UV + 逐像素采样 + alpha test）**：
+  - `w3-content::texture_array`：`TextureArrayBuilder` 按 URI 归一化去重、把尺寸各异的贴图（64²~512²）最近邻 resize 到统一 256² 层并堆叠成 `texture_2d_array` 数据；`TextureArray::push_image` 支持在已构建的模型贴图数组末尾**追加**地表 / 水面贴图层，层索引不与模型冲突（纯 CPU、确定性、可单测）。
+  - `w3-render::SceneVertex` 扩展到 15 个 `f32`（+`uv`/`tex_layer`/`tex_mode`/`surface`），`scene.wgsl` 用 `@group(0) @binding(1) texture_2d_array` + `textureSampleLevel`（显式 LOD，规避含 `discard` 的非均匀控制流导数约束），`tex_mode` 分支：`COLOR` 顶点色 / `TEXTURE` 采样 / `ALPHA_TEST` 采样并对 `a<0.5` `discard`（树叶镂空）。`build_pipeline` 上传真实贴图数组或 1 层纯白占位，sampler `Repeat` + linear。
+  - **模型**：`model_geometry::bake_model_with_layers` 为每个子网格写 UV / 层 / alpha 模式，颜色改为调制色（真实颜色来自 GPU 逐像素采样）；装配层 `ModelCache` 用 `TextureArrayBuilder` 收集 48 层模型贴图。
+  - **地形也纳入 GPU 平铺**：`Scene::set_terrain_texture_layers` 注入 6 张地表 tileset + 1 张真实水面贴图的层索引；`build_terrain_vertex` 输出 `textured` 顶点，`uv` 用世界 XZ / 平铺周期配合 `Repeat` sampler 逐像素平铺，水体走水波纹贴图 + 浅蓝调制色（**替代旧路径把 77% 地形刷成固定纯蓝平板的 `terrain_color`**）。无层索引（CI / 旧入口）优雅回退 CPU 顶点色，既有测试零改动。
+  - **可见水裕量**：`WATER_VISIBLE_MARGIN=1.6`（缩放后世界单位 ≈ 原始 102 高度单位）。`w3e` 导出的 `waterHeights`（=384 恒定水位）未含层高修正，直接 `water>ground` 会把 `ground≈300~384` 的浅滩 / 沟壑也判成水，在绿地里铺锯齿水面；离线量化确认海床 `water-ground`（原始）=109~159、浅滩=0~84，裕量落在两者间隙，滤浅滩、留海床，使水岸顶点级过渡、水占比降到约 63%（更贴近官方小地图约 42% 的观感趋势）。CPU 回退 `terrain_color` 与 GPU 路径共用同一 `is_water_vertex`，避免判定漂移。
+  - **双面渲染**：WC3 树叶 / 树冠是 `doubleSided` 竖直 billboard 面片，单管线无条件 `cull_mode: Back` 会剔掉背对相机的一半、只剩细杆；改 `cull_mode: None` 让双面 billboard 完整显示（树成林）。
+  - **季节贴图重定向**：上游 `asset-convert` 把 `LordaeronTree` 家族的 replaceableId=31 贴图写死为 `LordaeronSnowTree.png`（雪树，灰白），而 EI 是 `Lordaeron Summer`（`mainTilesetName` 已有）；`resolve_seasonal_texture` 纯函数按季节词把 URI 重写为 `LordaeronSummerTree.png`（深绿），`load_gltf_seasonal` 入口供装配层按地图季节加载，中立 `load_gltf` 签名不变、既有调用零改动。
+  - **离屏自证色彩空间修正**：真窗口 framebuffer 是 `Bgra8UnormSrgb`（写入自动 linear→sRGB 回转），而 `render_headless_rgba_with_textures` 此前硬编码 `Rgba8Unorm`（无回转）导致离屏图整体偏暗、不能反映真窗口；改为 `Rgba8UnormSrgb` 与真窗口一致，离屏自证才可信。
+  - **离屏整图探针**：新增 `crates/w3-client/examples/render_probe.rs`，用与 `melee` 完全相同的装配、冻结定义、开局实体、`CameraState` 初始视角，并上传真实贴图数组，离屏渲染一帧写 PNG 到本机 `target/`（不入库），支持 zoom / pan / 诊断染色参数，供 `ViewImage` 批量逐版自证，不反复开窗打扰用户。
+- **备选方案（Alternatives considered）**：
+  - *只修刺眼处（水体纯蓝 / 树细杆 / 白纸片）保留 CPU 顶点色* — **否决**（用户拍板放弃）。CPU 逐顶点采样是插值纯色，出不来清晰地表贴图与逐像素 alpha test 的树冠。
+  - *独立半透明水面网格覆盖地形* — **否决**（实测）。`@interpolate(flat)` 的水陆层错配 + 刚性水平水面与起伏地形 z-fighting，同视角下深灰锯齿与分流版完全相同（6.6% vs 6.6%），反而多 6 万顶点，故回退到地形顶点分流 + 可见水裕量。
+  - *把 `water>ground` 判水改成「消除 77% 误判、陆地为主」* — **否决**（离线量化纠正）。正确坐标换算后金矿 / 起始点 `ground=424~655 > water=384` 本就是陆地，77% 是 EI 岛屿地图真实浅海 + 浅滩，不该伪造地形「消除水」；改为带裕量滤浅滩 + 渲染成有贴图的水面。
+- **关联 ADR 0002 与跨平台确定性影响**：`w3-core` 零改动 → 逐帧 `compute_state_hash()`、`capture_snapshot()` 字节、golden hash 与「Windows + Debian 12 x86_64 / rustc 1.99.1 已验证、macOS / ARM64 / 其它 rustc 待验证」的跨平台确定性结论**全部不变**；`SNAPSHOT_VERSION` 仍为 3、`defs_hash` / `content_hash` 计算方式不变。新增的 `SceneVertex` 字段（`uv`/`tex_layer`/`tex_mode`/`surface`）、`TerrainTextureLayers` 层索引、`WATER_VISIBLE_MARGIN`、季节 URI 重写、`TextureArray` 像素数据全部是**表现层派生 `f32` / `RgbaImage` / 顶点数据**，MUST NOT 进入权威状态、FNV-1a 状态哈希或快照；`Scene::consume` 仍只读 `WorldView`、不反写内核。GPU 贴图上传 / shader 采样 / readback 是呈现链路，不参与 30 Hz 整数帧累加器与 `step()` 时机；`cull_mode`、framebuffer sRGB 格式变更不影响逻辑帧数。`determinism` 26 项 / `isolation` 3 项 / `cargo test --workspace` 全绿、`git diff -- crates/w3-core/` 为空作硬门禁；`critic` 复审逐项勾对。**MUST NOT 据本阶段的 GPU 自测声称「跨平台确定性已达成」**——它只验证表现层像素，不新增跨平台 golden hash 证据。
+- **验证**：全部用 `render_probe` 离屏渲染 + `ViewImage` 逐版自证（基线 → GPU 地形 → 夏树 → sRGB 亮度 → 水面网格 → 可见水裕量 → 相机参数批量对比 → 分类染色诊断图），像素级定位「深灰锯齿」为水层顶点着色而非几何洞（全地形染纯绿后中央区背景色像素 7.48%→0.01%）。CPU 回归：`texture_array`（push_image / resize / URI 去重 / 层上限）、`gltf`（季节重定向纯函数正负向）、`scene`（GPU 地形分流、水裕量、层缺失回退、确定性）全覆盖；`real_map_e2e` 升级为真 GPU 纹理管线路径（传 `Some(&map.textures)`），新增 `gpu_texture_sampling_changes_pixels_vs_placeholder` 用 A/B 像素差证明 GPU 逐像素采样生效，9 项全绿无 skip。`cargo test --workspace` 全绿、`cargo fmt --all -- --check`、`python tools/verify_all.py` → `Verification OK`、编码检查通过、`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍为 3、**零新增 Cargo 依赖**（水贴图 / tileset / 夏树贴图均为玩家本机既有导出资产，经 gitignored `config.toml` 读取，仓库零资产 / ADR 0001）。
+- **诚实边界（已知限制）**：
+  - 单管线 `@interpolate(flat)` 的 `tex_layer` 使跨水陆边界三角形取 provoking 顶点层，水岸呈**格点级锯齿**（诊断染色图确认非几何洞；参考项目用逐像素水 mask / 独立 shoreline shader 平滑，本仓库未做）；可见水裕量已显著减少浅滩锯齿，不冒充完全消除。
+  - `cull_mode: None` 让所有几何双面渲染，属正确性优先的性能权衡。
+  - 逐帧骨骼动画蒙皮（bind pose 静态）、运行时 `Train`/`Build` 新实体的模型缺键回退（D9）、中文上屏（CJK 字体）、真窗口 HUD overlay 最终观感，仍留后续 / 人工验收（第 6.3 / 8 组，未勾不归档）。
+  - 离屏自证（`ViewImage` 目视 + CPU/e2e 像素断言）证明**离屏 3D 链路**画面达标，但不覆盖真窗口 egui overlay 与最终观感；截图不入库，最终人工 GPU 冒烟仍须用户在有显示设备桌面按 `smoke-checklist.md` 执行。
+
 ## Risks / Trade-offs
 
 - [AI 太弱导致「没有对手感」或打不完一局] → D3 命令源至少覆盖采集、训练与周期性进攻；人工验收清单逐项勾「一局可打完」；若强度仍不足，作为后续独立 change 增强，**不在本 change 扩内核**。

@@ -120,6 +120,24 @@
 
 > **D9 诚实边界（如实登记）**：树 billboard 平面在斜俯视角下仍偏细长（WC3 原版靠面向相机 billboard 补齐，静态 bind pose 未做）；个别装饰物残留细长深色伪影（面积量化后否决高风险「面积过滤」，避免误删建筑大墙面）；出生点临水为 EI 真实水域地形特征；真窗口 HUD overlay 叠加观感仍须人工验收（第 6.3 / 8 组）。
 
+## 14. 真 GPU 纹理管线（阶段 4，第三次真窗口验收后用户拍板 / D10）
+
+> 用户第三次真窗口判定「还是残次品」，对照参考项目验收图确认差距是架构性的（CPU 逐顶点采样进顶点色，出不来清晰贴图 / 树冠），通过 `AskUserQuestion` 拍板「换真 GPU 纹理管线（推荐）」，要求先离屏 readback 自证、再请人工验收。全部用 `render_probe` 离屏渲染 + `ViewImage` + 像素量化逐版自证，不反复开窗打扰用户。`w3-core` 零改动、零新增 Cargo 依赖。
+
+- [x] 14.1 `w3-content::texture_array`：`TextureArrayBuilder`（URI 归一化去重、最近邻 resize 到统一 256² 层、层上限 512）、`TextureArray::push_image`（模型贴图数组末尾追加地表 / 水贴图层，层索引不冲突）；验证：单测 8 项（resize / 退化输入 / URI 去重 / 拼接顺序 / 确定性 / 层上限 / 追加层 / 空数组合法）全绿
+- [x] 14.2 `w3-render` 顶点与 shader 真 GPU 采样：`SceneVertex` 扩展 `uv`/`tex_layer`/`tex_mode`/`surface`；`scene.wgsl` 用 `texture_2d_array` + `textureSampleLevel` + `discard` alpha test；`build_pipeline` 上传真实贴图 / 纯白占位、`Repeat` sampler；`GpuContext::new_with_textures` / `render_headless_rgba_with_textures`；验证：w3-render 单测 49 + GPU headless 3 + isolation 3 全绿
+- [x] 14.3 装配层收集贴图并给烘焙三角形写 UV / 层：`ModelCache` 用 `TextureArrayBuilder` 按子网格 URI 分配层、`bake_model_with_layers` 写 GPU 纹理顶点，`RealMap.textures` 注入 `ClientApp::with_textures`；验证：`cargo test -p w3-client` 全绿、`real_map_e2e` 无 skip
+- [x] 14.4 地形纳入 GPU 平铺：`set_terrain_texture_layers` 注入 6 tileset + 1 水面贴图层，`build_terrain_vertex` 输出 `textured` 顶点按世界 XZ 逐像素平铺、水体走水波纹贴图；无层索引回退 CPU 顶点色（既有测试零改动）；验证：`scene.rs` 新增 5 项 CPU 回归（可见水裕量、水陆分流层 + UV 平铺、无 layers 回退、层缺失回退、确定性）全绿
+- [x] 14.5 可见水裕量 `WATER_VISIBLE_MARGIN`：离线量化海床 / 浅滩高度间隙（缩放后 1.70~2.48 vs 0~1.31）定阈值 1.6，CPU 回退与 GPU 路径共用 `is_water_vertex`；验证：裕量边界单测 + 离屏整图中央区水岸锯齿显著减少
+- [x] 14.6 可视性根因修复：双面渲染 `cull_mode: None`（树冠 billboard 不再被剔成细杆）；季节贴图重定向 `resolve_seasonal_texture` + `load_gltf_seasonal`（Summer 地图用绿树而非上游写死的雪树）；离屏 sRGB framebuffer 修正（`Rgba8UnormSrgb` 与真窗口一致）；验证：`gltf.rs` 季节重定向 3 项单测全绿，离屏图树冠立体 / 绿色 / 亮度正常
+- [x] 14.7 离屏整图探针与自证：新增 `crates/w3-client/examples/render_probe.rs`（复用 `melee` 装配 / 相机 / 真实贴图，写 PNG 到本机 `target/` 不入库，支持 zoom / pan / 诊断染色）；逐版 `ViewImage` + 像素量化定位「深灰锯齿」为水层顶点着色而非几何洞（全地形染纯绿后中央区背景色 7.48%→0.01%），否决独立半透明水面网格（同视角锯齿无改善、多 6 万顶点）后回退
+- [x] 14.8 真实资产 e2e 升级到真 GPU 管线：`real_gltf_models_render_on_screen_not_black` 改传 `Some(&map.textures)` + 注入 layers；新增 `gpu_texture_sampling_changes_pixels_vs_placeholder`（真实贴图 vs 占位白纹理 A/B 像素差，证明 GPU 逐像素采样生效）；验证：`real_map_e2e` 9 项全绿无 skip
+- [x] 14.9 全量门禁与合规；验证：`cargo test --workspace` 全绿、`cargo fmt --all -- --check` 通过、`python tools/verify_all.py` → `Verification OK`（编码 / rustfmt / 测试 / openspec validate / 资产扫描）、`python tools/check_encoding.py` 通过、`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍为 3、**零新增 Cargo 依赖**、`config.toml.example` 同步新增 `water_texture` 键、`w3-render::lib` 导出 `TerrainTextureLayers`
+- [ ] 14.10 人工 GPU 冒烟（人工项）：用户在有 GPU / 显示设备桌面 `cargo run -p w3-client --example melee`，按 `smoke-checklist.md` 逐项验收真窗口观感（清晰地表贴图 / 立体绿树 / 波纹水面 / 可辨建筑与单位 / 完整 HUD / 打完一局）；离屏自证不覆盖真窗口 egui overlay，清单未勾前不归档
+- [ ] 14.11 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台门禁 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）
+
+> **阶段 4 诚实边界（如实登记，不冒充完成）**：单管线 `@interpolate(flat)` 使跨水陆三角形取 provoking 顶点层，水岸呈**格点级锯齿**（诊断确认非几何洞；参考项目用逐像素水 mask / 独立 shoreline shader 平滑，本仓库未做），可见水裕量已显著减少但不冒充完全消除；`cull_mode: None` 双面渲染属正确性优先的性能权衡；逐帧骨骼动画蒙皮（bind pose 静态）、运行时新实体模型缺键回退（D9）、中文上屏、真窗口 HUD overlay 最终观感仍留后续 / 人工验收。离屏 3D 链路画面已达标并自证，但**不覆盖真窗口最终观感**（第 6.3 / 8 组人工项未勾前不归档）。
+
 ## Workflow follow-up
 
 - 人工 `git push` → CI 双平台 `python tools/verify_all.py` 绿灯。

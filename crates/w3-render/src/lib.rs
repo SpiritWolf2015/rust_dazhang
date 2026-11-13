@@ -22,7 +22,8 @@ pub mod terrain;
 
 pub use error::RenderError;
 pub use gpu::{
-    Camera, FrameProducer, GpuContext, RendererApp, ScreenProjection, render_headless_rgba,
+    CLEAR_COLOR_SRGB, Camera, FrameProducer, GpuContext, RendererApp, ScreenProjection,
+    render_headless_rgba, render_headless_rgba_with_textures,
 };
 pub use model::{
     Attachment, Bone, FilterMode, GeosetAnim, Material, Model, ModelDocument, ModelLibrary,
@@ -30,10 +31,12 @@ pub use model::{
 };
 pub use model_geometry::{
     BakedModel, BakedTriangle, ENTITY_DISPLAY_SCALE, MODEL_DISPLAY_SCALE, MODEL_WORLD_SCALE,
-    ModelTransform, bake_model, expand_model, gltf_to_world,
+    ModelTransform, bake_model, bake_model_textured, bake_model_with_layers, expand_model,
+    gltf_to_world,
 };
 pub use scene::{
     DisplayHints, FrameInput, Instance, LORDAERON_SUMMER_TILES, Scene, SceneVertex, StaticMarker,
-    StaticShape, UNIT_MARKER_SIZE, display_hints, facing_to_radians, world_to_f32,
+    StaticShape, TEX_MODE_ALPHA_TEST, TEX_MODE_COLOR, TEX_MODE_TEXTURE, TerrainTextureLayers,
+    UNIT_MARKER_SIZE, display_hints, facing_to_radians, world_to_f32,
 };
 pub use terrain::{TerrainMesh, TerrainVertex};

@@ -27,7 +27,7 @@ use w3_content::RgbaImage;
 use w3_core::{CommandError, Event, GameplayCommandError, Snapshot, WorldView};
 use w3_render::{
     BakedModel, Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene,
-    SceneVertex, StaticMarker, TerrainMesh,
+    SceneVertex, StaticMarker, TerrainMesh, TerrainTextureLayers,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -199,6 +199,8 @@ pub struct ClientApp<P: StepDriver> {
     entity_kinds: BTreeMap<u64, EntityKind>,
     /// 命令卡点击待翻译的输入动作（表现层，在 GPU 借用结束后提交）。
     pending_input_action: Option<InputAction>,
+    /// 真实模型贴图数组（上传 GPU `texture_2d_array`，纯表现层）。
+    textures: Option<w3_content::TextureArray>,
 
     window: Option<Arc<Window>>,
     gpu: Option<GpuContext>,
@@ -233,6 +235,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             minimap_backdrop: None,
             entity_kinds: BTreeMap::new(),
             pending_input_action: None,
+            textures: None,
             window: None,
             gpu: None,
             egui_ctx: egui::Context::default(),
@@ -269,6 +272,13 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         self
     }
 
+    /// 注入地形 GPU 平铺贴图层索引（真 GPU 纹理管线，纯表现层）。
+    /// `None` 时地形回退 CPU 顶点色；既有入口不受影响。
+    pub fn with_terrain_texture_layers(mut self, layers: Option<TerrainTextureLayers>) -> Self {
+        self.scene.set_terrain_texture_layers(layers);
+        self
+    }
+
     /// 注入真实小地图底图并降采样为颜色网格（纯 CPU，不上传 GPU 纹理）。
     pub fn with_minimap_image(mut self, image: Option<RgbaImage>) -> Self {
         self.minimap_backdrop = image.map(|image| minimap_backdrop(&image, MINIMAP_GRID));
@@ -285,6 +295,13 @@ impl<P: StepDriver + 'static> ClientApp<P> {
     /// 注入动态实体类型键 → 真实烘焙模型（纯表现层）。
     pub fn with_entity_models(mut self, models: BTreeMap<String, BakedModel>) -> Self {
         self.scene.set_entity_models(models);
+        self
+    }
+
+    /// 注入真实模型贴图数组（上传 GPU `texture_2d_array`，纯表现层）。
+    /// 无本机资产时传 `None`，shader 走占位纹理 / 顶点色路径。
+    pub fn with_textures(mut self, textures: Option<w3_content::TextureArray>) -> Self {
+        self.textures = textures;
         self
     }
 
@@ -694,7 +711,12 @@ impl<P: StepDriver + 'static> ApplicationHandler<()> for ClientApp<P> {
         };
         let size = window.inner_size();
         log::info!(target: "w3_client", "window created: width={} height={} scale_factor={}", size.width, size.height, window.scale_factor());
-        let gpu = match GpuContext::new(&window, size.width, size.height) {
+        let gpu = match GpuContext::new_with_textures(
+            &window,
+            size.width,
+            size.height,
+            self.textures.as_ref(),
+        ) {
             Ok(gpu) => gpu,
             Err(error) => {
                 log::error!(target: "w3_client", "gpu init failed: error={}", error);

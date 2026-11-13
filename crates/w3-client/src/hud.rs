@@ -437,36 +437,42 @@ pub fn draw_with_minimap(
     texts: &Texts,
     assets: HudAssets,
 ) -> HudInteraction {
-    // 几何层：所有存活单位都绘制队伍色标记、选中环与血条。
+    // 几何层：为所有存活单位绘制贴合其屏幕位置的**小队伍色点**；只有选中
+    // 单位额外画一个贴合的小选中框与血条。此前给每个单位都按
+    // `UNIT_MARKER_SIZE=24` 的包围盒画大矩形框，在真实模型放大后与模型严重
+    // 错位、满屏都是大框（真窗口截图已复现）。用单位中心 `screen` 画点，
+    // 既不依赖旧包围盒尺寸、也不遮挡模型。
     egui::Area::new(egui::Id::unique("w3_client_hud_overlay")).show(ctx, |ui| {
         let painter = ui.painter();
         for unit in model.units.iter().filter(|unit| unit.alive) {
             let hints = display_hints(unit.owner, unit.hp, unit.max_hp, unit.selected);
-            let frame = egui::Rect::from_min_max(
-                egui::pos2(unit.bounds_min[0], unit.bounds_min[1]),
-                egui::pos2(unit.bounds_max[0], unit.bounds_max[1]),
-            );
             let team_color = to_color(hints.team_color);
-            let stroke = match hints.selection_ring {
-                Some(ring) => egui::Stroke::new(3.0, to_color(ring)),
-                None => egui::Stroke::new(1.0, team_color),
-            };
-            painter.rect_stroke(
-                frame,
-                egui::CornerRadius::ZERO,
-                stroke,
-                egui::StrokeKind::Outside,
-            );
-            let bar = egui::Rect::from_min_size(
-                egui::pos2(frame.min.x, frame.min.y - 8.0),
-                egui::vec2(frame.width(), 4.0),
-            );
-            painter.rect_filled(bar, egui::CornerRadius::ZERO, egui::Color32::DARK_RED);
-            let filled = egui::Rect::from_min_size(
-                bar.min,
-                egui::vec2(bar.width() * hints.hp_fraction, 4.0),
-            );
-            painter.rect_filled(filled, egui::CornerRadius::ZERO, team_color);
+            let center = egui::pos2(unit.screen[0], unit.screen[1]);
+            // 所有单位：小队伍色点，标示位置与敌我。
+            painter.circle_filled(center, 2.5, team_color);
+            // 仅选中单位：贴合中心的小选中框 + 血条。尺寸用固定小尺寸，不用
+            // 与真实模型错位的旧 bounds。选中环颜色取 display_hints。
+            if let Some(ring) = hints.selection_ring {
+                let half = 14.0;
+                let frame =
+                    egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0));
+                painter.rect_stroke(
+                    frame,
+                    egui::CornerRadius::ZERO,
+                    egui::Stroke::new(1.5, to_color(ring)),
+                    egui::StrokeKind::Outside,
+                );
+                let bar = egui::Rect::from_min_size(
+                    egui::pos2(center.x - half, frame.min.y - 6.0),
+                    egui::vec2(half * 2.0, 3.0),
+                );
+                painter.rect_filled(bar, egui::CornerRadius::ZERO, egui::Color32::DARK_RED);
+                let filled = egui::Rect::from_min_size(
+                    bar.min,
+                    egui::vec2(bar.width() * hints.hp_fraction, 3.0),
+                );
+                painter.rect_filled(filled, egui::CornerRadius::ZERO, team_color);
+            }
         }
     });
 

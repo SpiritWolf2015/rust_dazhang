@@ -216,11 +216,21 @@ fn real_gltf_models_replace_all_programmatic_geometry() {
             .iter()
             .all(|v| v.surface < 0.0 && v.position.iter().all(|c| c.is_finite()))
     );
+    // 真 GPU 纹理管线：顶点 color 是调制色，真实贴图颜色来自统一数组纹理。
+    // 断言数组纹理非空且像素颜色丰富（贴图确实被收集、非纯色块）。
     let mut colors = std::collections::BTreeSet::new();
-    for v in &map.static_model_vertices {
-        colors.insert(v.color.map(|c| (c * 64.0) as i64));
+    for px in map.textures.pixels.chunks_exact(4) {
+        colors.insert([px[0], px[1], px[2]]);
     }
-    assert!(colors.len() > 100, "真实贴图应带来丰富颜色，非纯色块");
+    assert!(!map.textures.is_empty(), "应收集到统一贴图数组");
+    assert!(colors.len() > 100, "真实贴图数组应带来丰富颜色，非纯色块");
+    // 静态顶点应含 GPU 纹理模式（tex_mode>0 且携带有效层）。
+    let textured = map
+        .static_model_vertices
+        .iter()
+        .filter(|v| v.tex_mode > 0.0 && v.tex_layer >= 0.0)
+        .count();
+    assert!(textured > 0, "真实模型顶点应走 GPU 纹理采样路径");
 
     // 6 个动态实体类型键全部绑定真实网格。
     assert_eq!(map.entity_models.len(), 6);
@@ -311,23 +321,31 @@ fn real_models_enter_scene_vertices_and_are_deterministic() {
 
 #[test]
 fn real_gltf_models_render_on_screen_not_black() {
-    use w3_render::{Camera, RenderError, render_headless_rgba};
+    use w3_render::{Camera, RenderError, render_headless_rgba_with_textures};
 
     let Some(map) = local_model_map() else {
         return;
     };
+
+    // 真 GPU 纹理管线：地形与模型顶点都携带 tex_layer，必须上传真实
+    // `texture_2d_array`（`Some(&map.textures)`）由片元着色器逐像素采样；
+    // 传 `None` 会用 1 层纯白占位纹理，越界层被 clamp 成白色、模型失去贴图
+    // 颜色。故 A/B 都注入 `terrain_texture_layers` 并传真实贴图数组。
+    let layers = map.terrain_texture_layers;
 
     // A/B 对照：A = 仅地形（真实地表贴图、无模型）；B = 地形 + 真实 glTF
     // 模型。只有「B 相对 A 出现大量像素变化」才能证明**真实模型确实上屏**，
     // 而非地形自身满足非黑屏 / 颜色丰富（critic B2）。
     let mut terrain_only = w3_render::Scene::default();
     terrain_only.set_terrain_tiles(map.terrain_tiles.clone());
+    terrain_only.set_terrain_texture_layers(layers);
     let vertices_a = terrain_only.build_vertices(&map.terrain);
     // A 里 surface>=0 全为地形，surface<0 为空（无静态摆放、无动态单位）。
     assert!(vertices_a.iter().all(|v| v.surface >= 0.0));
 
     let mut with_models = w3_render::Scene::default();
     with_models.set_terrain_tiles(map.terrain_tiles.clone());
+    with_models.set_terrain_texture_layers(layers);
     with_models.set_static_model_vertices(map.static_model_vertices.clone());
     let vertices_b = with_models.build_vertices(&map.terrain);
     assert!(vertices_b.len() > vertices_a.len());
@@ -341,7 +359,13 @@ fn real_gltf_models_render_on_screen_not_black() {
     let width = 160u32;
     let height = 120u32;
     // 先渲 A：无 adapter 则整体如实跳过（不冒充通过）。
-    let rgba_a = match render_headless_rgba(&vertices_a, &view_proj, width, height) {
+    let rgba_a = match render_headless_rgba_with_textures(
+        &vertices_a,
+        &view_proj,
+        width,
+        height,
+        Some(&map.textures),
+    ) {
         Ok(rgba) => rgba,
         Err(RenderError::GpuUnavailable(reason)) => {
             eprintln!("skip=real_model_gpu reason=no_adapter detail={reason}");
@@ -351,7 +375,13 @@ fn real_gltf_models_render_on_screen_not_black() {
     };
     // A 已成功 ⇒ adapter 可用；B 若再报 GpuUnavailable 属异常，MUST NOT 静默
     // return 显示 passed（critic residual）。
-    let rgba_b = match render_headless_rgba(&vertices_b, &view_proj, width, height) {
+    let rgba_b = match render_headless_rgba_with_textures(
+        &vertices_b,
+        &view_proj,
+        width,
+        height,
+        Some(&map.textures),
+    ) {
         Ok(rgba) => rgba,
         Err(error) => panic!("model headless render failed after terrain-only succeeded: {error}"),
     };
@@ -391,5 +421,64 @@ fn real_gltf_models_render_on_screen_not_black() {
         model_colors.len() > 8,
         "真实模型应带来多种贴图颜色，实际 {}",
         model_colors.len()
+    );
+}
+
+/// 真 GPU 纹理管线 headless 自测：同一顶点流，上传真实贴图数组 vs 占位白
+/// 纹理，证明片元着色器确实按 `tex_layer` 逐像素采样 `texture_2d_array`
+/// （而非用顶点色 / 纯白占位糊弄）。这是 CLI 侧可断言的"贴图上屏"事实。
+#[test]
+fn gpu_texture_sampling_changes_pixels_vs_placeholder() {
+    use w3_render::{Camera, RenderError, render_headless_rgba_with_textures};
+
+    let Some(map) = local_model_map() else {
+        return;
+    };
+    let mut scene = w3_render::Scene::default();
+    scene.set_terrain_tiles(map.terrain_tiles.clone());
+    scene.set_terrain_texture_layers(map.terrain_texture_layers);
+    scene.set_static_model_vertices(map.static_model_vertices.clone());
+    let vertices = scene.build_vertices(&map.terrain);
+    assert!(
+        vertices
+            .iter()
+            .any(|v| v.tex_mode > 0.0 && v.tex_layer >= 0.0),
+        "顶点流应含 GPU 纹理采样顶点"
+    );
+
+    let view_proj = Camera::new(1.0).matrix(&map.terrain);
+    let width = 160u32;
+    let height = 120u32;
+    // 真实贴图数组。
+    let textured = match render_headless_rgba_with_textures(
+        &vertices,
+        &view_proj,
+        width,
+        height,
+        Some(&map.textures),
+    ) {
+        Ok(rgba) => rgba,
+        Err(RenderError::GpuUnavailable(reason)) => {
+            eprintln!("skip=gpu_texture_sampling reason=no_adapter detail={reason}");
+            return;
+        }
+        Err(error) => panic!("textured headless render failed: {error}"),
+    };
+    // 占位白纹理（tex_layer 越界被 clamp 到唯一的白层）。
+    let placeholder =
+        render_headless_rgba_with_textures(&vertices, &view_proj, width, height, None)
+            .expect("placeholder render after textured succeeded");
+
+    let changed = textured
+        .chunks_exact(4)
+        .zip(placeholder.chunks_exact(4))
+        .filter(|(a, b)| {
+            a[0].abs_diff(b[0]) as u32 + a[1].abs_diff(b[1]) as u32 + a[2].abs_diff(b[2]) as u32
+                > 24
+        })
+        .count();
+    assert!(
+        changed > 500,
+        "真实贴图数组应显著改变像素（相对占位白纹理），证明 GPU 采样生效，实际 {changed}"
     );
 }

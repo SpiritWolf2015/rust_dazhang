@@ -28,13 +28,17 @@ pub mod load;
 pub mod model_index;
 pub mod placements;
 pub mod table;
+pub mod texture_array;
 pub mod textures;
 
 pub use definitions::{
     AbilityDef, CONTENT_HASH_SCHEMA, DefinitionError, DefinitionKind, DefinitionTables,
     FrozenDefinitions, ItemDef, UnitDef, UpgradeDef, from_slk_tables,
 };
-pub use gltf::{GeosetFilter, GltfError, ModelMesh, SubMesh, load_gltf, parse_gltf};
+pub use gltf::{
+    GeosetFilter, GltfError, ModelMesh, SubMesh, load_gltf, load_gltf_seasonal, parse_gltf,
+    resolve_seasonal_texture,
+};
 pub use heightfield::{CenterOffset, HeightfieldError, TerrainHeightfield};
 pub use load::{ContentError, ParsedMap, load_map, load_table};
 pub use model_index::{ENTITY_MODEL_FILES, ModelCatalog, ModelClass, ModelIndexError};
@@ -42,4 +46,8 @@ pub use placements::{
     DoodadPlacement, DoodadsFile, PlacementError, Position3, UnitPlacement, UnitsFile,
 };
 pub use table::{SlkTable, TableError};
+pub use texture_array::{
+    MAX_TEXTURE_LAYERS, TEXTURE_LAYER_SIZE, TextureArray, TextureArrayBuilder, push_path,
+    resize_nearest,
+};
 pub use textures::{LORDAERON_SUMMER_FILES, RgbaImage, TextureError, load_rgba, load_tileset};

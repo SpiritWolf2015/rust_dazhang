@@ -10,9 +10,11 @@
 //! 单 draw call / `SceneVertex` 布局零改动（前几轮反复黑屏的经验），同时
 //! 让真实模型几何与真实贴图颜色上屏；逐像素过滤与骨骼蒙皮留后续阶段。
 
-use w3_content::{ModelMesh, RgbaImage, SubMesh};
+use std::collections::BTreeMap;
 
-use crate::scene::SceneVertex;
+use w3_content::{GeosetFilter, ModelMesh, RgbaImage, SubMesh};
+
+use crate::scene::{SceneVertex, TEX_MODE_ALPHA_TEST, TEX_MODE_COLOR, TEX_MODE_TEXTURE};
 
 /// glTF → 玩法世界坐标缩放：与 `real_map` 的 `WORLD_SCALE = 2/128` 一致。
 /// glTF `POSITION` 是 WC3 模型单位（1 tile = 128），玩法世界 1 tile = 2。
@@ -65,12 +67,34 @@ fn sample_uv(image: &RgbaImage, u: f32, v: f32) -> [f32; 4] {
     ]
 }
 
-/// 烘焙后的三角形：三个顶点各带局部位置、法线与已调制的顶点色。
+/// 烘焙后的三角形：三个顶点各带局部位置、法线与颜色（顶点色或白色调制色），
+/// 以及 GPU 纹理采样所需的 UV、数组纹理层与采样模式。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BakedTriangle {
     pub position: [[f32; 3]; 3],
     pub normal: [[f32; 3]; 3],
+    /// `tex_mode=COLOR` 时为最终顶点色；纹理模式时为调制色（通常白色）。
     pub color: [[f32; 4]; 3],
+    /// 每顶点贴图 UV。
+    pub uv: [[f32; 2]; 3],
+    /// `texture_2d_array` 层索引；负值 = 不使用纹理。
+    pub tex_layer: f32,
+    /// [`TEX_MODE_COLOR`] / [`TEX_MODE_TEXTURE`] / [`TEX_MODE_ALPHA_TEST`]。
+    pub tex_mode: f32,
+}
+
+impl BakedTriangle {
+    /// 纯顶点色三角形（CPU 烘焙路径 / 测试 / 无贴图资产）。
+    pub fn colored(position: [[f32; 3]; 3], normal: [[f32; 3]; 3], color: [[f32; 4]; 3]) -> Self {
+        Self {
+            position,
+            normal,
+            color,
+            uv: [[0.0, 0.0]; 3],
+            tex_layer: -1.0,
+            tex_mode: TEX_MODE_COLOR,
+        }
+    }
 }
 
 /// 真实模型的表现层三角形集合（局部 WC3 模型坐标，Y-up）。
@@ -89,81 +113,129 @@ impl BakedModel {
     }
 }
 
-/// 把一个子网格烘焙成三角形：贴图色 × baseColor，重心 alpha 剔除。
+/// 把一个子网格烘焙成三角形。
 ///
 /// **过滤特效层 geoset**：WC3 的 Blend / Additive / UberSplat / 辉光 / 烟雾等
 /// 材质是加色或 alpha 混合的特效，不是实体表面；若当不透明几何画出来会变成
 /// 白色纸片 / 黑块（离线特写已复现）。只烘焙 `Opaque` / `Mask` 实体几何。
-fn bake_submesh(sub: &SubMesh, out: &mut Vec<BakedTriangle>) {
+///
+/// `tex_layer`：该子网格贴图在 `texture_2d_array` 中的层索引（装配层算好），
+/// `< 0` 时走 **CPU 顶点色路径**（无贴图资产 / 层缺失时的确定性回退）。
+/// `>= 0` 时走 **GPU 纹理路径**：顶点携带 UV + 层 + 采样模式，颜色仅作调制，
+/// 由片元着色器逐像素采样贴图并对 `Mask` 做 alpha test —— 这是让树冠 /
+/// 建筑贴图清晰、且不再退化成细杆 / 色块的关键。
+fn bake_submesh(sub: &SubMesh, tex_layer: f32, out: &mut Vec<BakedTriangle>) {
     if !sub.filter_mode.is_entity() {
         return;
     }
-    for tri in sub.indices.chunks_exact(3) {
-        let [i0, i1, i2] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
-        let idx = [i0, i1, i2];
+    // GPU 纹理模式需贴图存在；否则回退 CPU 顶点色。
+    let textured = tex_layer >= 0.0 && sub.texture.is_some();
+    let tex_mode = if !textured {
+        TEX_MODE_COLOR
+    } else if sub.alpha_cutoff > 0.0 || sub.filter_mode == GeosetFilter::Mask {
+        TEX_MODE_ALPHA_TEST
+    } else {
+        TEX_MODE_TEXTURE
+    };
 
-        // 顶点色：有贴图按各自 UV 采样，无贴图用中性色；都乘材质 baseColor。
-        let mut color = [[0.0f32; 4]; 3];
+    for tri in sub.indices.chunks_exact(3) {
+        let idx = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+
+        let mut position = [[0.0f32; 3]; 3];
+        let mut normal = [[0.0f32; 3]; 3];
+        let mut uv = [[0.0f32; 2]; 3];
+        let mut color = [[1.0f32; 4]; 3];
         for (k, &vi) in idx.iter().enumerate() {
-            let sampled = match sub.texture.as_ref() {
-                Some(image) => {
-                    let uv = sub.uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
-                    sample_uv(image, uv[0], uv[1])
-                }
-                None => [1.0, 1.0, 1.0, 1.0],
-            };
-            let has_texture = sub.texture.is_some();
-            let base = if has_texture {
-                sampled
-            } else {
-                neutral_color(sub.base_color)
-            };
-            color[k] = [
-                base[0] * sub.base_color[0],
-                base[1] * sub.base_color[1],
-                base[2] * sub.base_color[2],
-                base[3] * sub.base_color[3],
-            ];
+            position[k] = sub.positions.get(vi).copied().unwrap_or([0.0; 3]);
+            normal[k] = sub.normals.get(vi).copied().unwrap_or([0.0, 1.0, 0.0]);
+            uv[k] = sub.uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
         }
 
-        // alpha 镂空（树叶 / 旗帜等 MASK 材质）：**仅当三个顶点 UV 采样全部
-        // 透明**才整片丢弃。早期版本按「重心单点」剔除，树冠贴图大面积半透明
-        // 时重心常落透明区，会误删整个树冠 billboard 面片、只剩树干细杆。
-        // 保守剔除保留含树冠的面片；顶点色 alpha 已取自贴图采样，配合 pipeline
-        // 的 ALPHA_BLENDING 呈现柔和镂空边缘，而非实心色块。
-        if sub.alpha_cutoff > 0.0 {
-            if let Some(image) = sub.texture.as_ref() {
-                let all_transparent = idx.iter().all(|&vi| {
-                    let uv = sub.uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
-                    sample_uv(image, uv[0], uv[1])[3] < sub.alpha_cutoff
-                });
-                if all_transparent {
-                    continue;
+        if textured {
+            // 调制色 = 材质 baseColor（通常白）；真实颜色来自 GPU 采样。
+            for c in color.iter_mut() {
+                *c = sub.base_color;
+            }
+        } else {
+            // CPU 顶点色路径：按各自 UV 采样贴图色 × baseColor；无贴图用中性色。
+            for k in 0..3 {
+                let sampled = match sub.texture.as_ref() {
+                    Some(image) => sample_uv(image, uv[k][0], uv[k][1]),
+                    None => [1.0, 1.0, 1.0, 1.0],
+                };
+                let base = if sub.texture.is_some() {
+                    sampled
+                } else {
+                    neutral_color(sub.base_color)
+                };
+                color[k] = [
+                    base[0] * sub.base_color[0],
+                    base[1] * sub.base_color[1],
+                    base[2] * sub.base_color[2],
+                    base[3] * sub.base_color[3],
+                ];
+            }
+            // alpha 镂空（仅 CPU 路径需要；GPU 路径交给片元 alpha test）。
+            // 仅当三个顶点全部透明才整片丢弃，避免误删树冠 billboard。
+            if sub.alpha_cutoff > 0.0 {
+                if let Some(image) = sub.texture.as_ref() {
+                    let all_transparent = idx.iter().all(|&vi| {
+                        let tuv = sub.uvs.get(vi).copied().unwrap_or([0.0, 0.0]);
+                        sample_uv(image, tuv[0], tuv[1])[3] < sub.alpha_cutoff
+                    });
+                    if all_transparent {
+                        continue;
+                    }
                 }
             }
         }
 
-        let mut position = [[0.0f32; 3]; 3];
-        let mut normal = [[0.0f32; 3]; 3];
-        for (k, &vi) in idx.iter().enumerate() {
-            position[k] = sub.positions.get(vi).copied().unwrap_or([0.0; 3]);
-            normal[k] = sub.normals.get(vi).copied().unwrap_or([0.0, 1.0, 0.0]);
-        }
         out.push(BakedTriangle {
             position,
             normal,
             color,
+            uv,
+            tex_layer: if textured { tex_layer } else { -1.0 },
+            tex_mode,
         });
     }
 }
 
-/// 把 [`ModelMesh`] 烘焙成表现层三角形（纯函数、确定性）。
+/// CPU 顶点色路径（纯函数、确定性）——供无贴图资产 / 单测 / 回退用，逐子网格
+/// 传 `-1.0` 层，语义与旧实现一致。
 pub fn bake_model(mesh: &ModelMesh) -> BakedModel {
+    bake_model_with_layers(mesh, &vec![-1.0; mesh.submeshes.len()])
+}
+
+/// GPU 纹理路径：`layers[i]` = 第 `i` 个子网格贴图的数组纹理层（`< 0` 回退
+/// 顶点色）。层索引由装配层用 [`w3_content::TextureArrayBuilder`] 计算并传入，
+/// 使 `w3-render` 不依赖 URI 归一化细节（DIP）。纯函数、确定性。
+pub fn bake_model_with_layers(mesh: &ModelMesh, layers: &[f32]) -> BakedModel {
     let mut triangles = Vec::new();
-    for sub in &mesh.submeshes {
-        bake_submesh(sub, &mut triangles);
+    for (i, sub) in mesh.submeshes.iter().enumerate() {
+        let layer = layers.get(i).copied().unwrap_or(-1.0);
+        bake_submesh(sub, layer, &mut triangles);
     }
     BakedModel { triangles }
+}
+
+/// 便捷构造：按 `(uri, layer)` 映射给每个子网格分配层，返回烘焙模型。
+/// `uri` 归一化由调用方保证与 `TextureArrayBuilder` 一致。
+pub fn bake_model_textured(mesh: &ModelMesh, uri_layer: &BTreeMap<String, f32>) -> BakedModel {
+    let layers: Vec<f32> = mesh
+        .submeshes
+        .iter()
+        .map(|sub| {
+            sub.texture_uri
+                .as_deref()
+                .and_then(|uri| {
+                    let key = uri.replace('\\', "/").to_ascii_lowercase();
+                    uri_layer.get(&key).copied()
+                })
+                .unwrap_or(-1.0)
+        })
+        .collect();
+    bake_model_with_layers(mesh, &layers)
 }
 
 /// 摆放位姿：世界原点（已含地形高度）、绕 Y 朝向、额外缩放。
@@ -208,19 +280,30 @@ pub fn gltf_to_world(local: [f32; 3], transform: &ModelTransform) -> [f32; 3] {
 }
 
 /// 把烘焙模型按位姿展开成 [`SceneVertex`]（`surface = -1` 单位标记）。
-/// 法线同步随 yaw 旋转，保证光照方向正确。
+/// 法线同步随 yaw 旋转，保证光照方向正确；纹理三角形按 UV / 层 / 模式输出
+/// `textured` 顶点，让片元着色器逐像素采样贴图（树冠 alpha test）。
 pub fn expand_model(model: &BakedModel, transform: &ModelTransform) -> Vec<SceneVertex> {
     let (sin, cos) = transform.yaw.sin_cos();
     let mut vertices = Vec::with_capacity(model.triangles.len() * 3);
     for tri in &model.triangles {
         for k in 0..3 {
             let n = tri.normal[k];
-            vertices.push(SceneVertex {
-                position: gltf_to_world(tri.position[k], transform),
-                normal: [n[0] * cos - n[2] * sin, n[1], n[0] * sin + n[2] * cos],
-                color: tri.color[k],
-                surface: -1.0,
-            });
+            let position = gltf_to_world(tri.position[k], transform);
+            let normal = [n[0] * cos - n[2] * sin, n[1], n[0] * sin + n[2] * cos];
+            let vertex = if tri.tex_mode == TEX_MODE_COLOR || tri.tex_layer < 0.0 {
+                SceneVertex::colored(position, normal, tri.color[k], -1.0)
+            } else {
+                SceneVertex::textured(
+                    position,
+                    normal,
+                    tri.color[k],
+                    tri.uv[k],
+                    tri.tex_layer,
+                    tri.tex_mode,
+                    -1.0,
+                )
+            };
+            vertices.push(vertex);
         }
     }
     vertices

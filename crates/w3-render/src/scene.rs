@@ -33,15 +33,84 @@ pub struct FrameInput<'a> {
     pub events: &'a [Event],
 }
 
+/// 纹理采样模式（写入顶点 `tex_mode`，由片元着色器分支）。
+/// - `0` 顶点色：`color` 即最终颜色（程序化几何 / 无贴图资产 / 纯色水体）。
+/// - `1` 纹理不透明：采样 `texture_2d_array` 第 `tex_layer` 层。
+/// - `2` 纹理 + alpha test：采样并对 alpha 低于阈值者 `discard`（树叶 / 旗帜）。
+pub const TEX_MODE_COLOR: f32 = 0.0;
+pub const TEX_MODE_TEXTURE: f32 = 1.0;
+pub const TEX_MODE_ALPHA_TEST: f32 = 2.0;
+
+/// 地形 GPU 平铺贴图在统一 `texture_2d_array` 中的层索引。
+///
+/// 由装配层把 6 张地表 tileset + 1 张水贴图追加到模型贴图数组后注入
+/// [`Scene`]；`build_vertices` 据此让地形改走 GPU 逐像素平铺采样，而不再用
+/// CPU 逐顶点颜色（后者三角形内是插值纯色，无法呈现贴图细节）。层索引均为
+/// 表现层 `f32`，负数表示该层缺失、对应顶点回退到纯色。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainTextureLayers {
+    /// 6 张地表 tileset 层索引，与 `groundTextures` 的 0..5 对应。
+    pub ground: [f32; 6],
+    /// 水面贴图层索引；负数表示无水贴图、水顶点回退半透明纯色。
+    pub water: f32,
+}
+
 /// GPU 顶点；`#[repr(C)]` + `bytemuck::Pod`，可直接上传。
+///
+/// 位置 / 法线 / 颜色之外新增贴图 UV、数组纹理层与采样模式，供真 GPU 纹理
+/// 管线使用；`surface` 保留旧语义（地表索引 / 单位 -1），供 HUD 与 CPU 验收。
+/// 全部字段为 `f32`，15 个分量 = 60 字节，无 padding，`Pod` 合法。
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SceneVertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub color: [f32; 4],
+    /// 贴图 UV（地形为世界平铺坐标，模型为 glTF UV）。
+    pub uv: [f32; 2],
+    /// `texture_2d_array` 层索引；负值表示不使用纹理。
+    pub tex_layer: f32,
+    /// [`TEX_MODE_COLOR`] / [`TEX_MODE_TEXTURE`] / [`TEX_MODE_ALPHA_TEST`]。
+    pub tex_mode: f32,
     /// 地表索引；单位标记为 -1。
     pub surface: f32,
+}
+
+impl SceneVertex {
+    /// 构造纯顶点色顶点（程序化几何 / 测试 / 纯色），采样模式为 `COLOR`。
+    /// 保留既有路径语义，纹理相关字段取中性值。
+    pub fn colored(position: [f32; 3], normal: [f32; 3], color: [f32; 4], surface: f32) -> Self {
+        Self {
+            position,
+            normal,
+            color,
+            uv: [0.0, 0.0],
+            tex_layer: -1.0,
+            tex_mode: TEX_MODE_COLOR,
+            surface,
+        }
+    }
+
+    /// 构造纹理采样顶点（地形 / 真实 glTF 模型）。
+    pub fn textured(
+        position: [f32; 3],
+        normal: [f32; 3],
+        color: [f32; 4],
+        uv: [f32; 2],
+        tex_layer: f32,
+        tex_mode: f32,
+        surface: f32,
+    ) -> Self {
+        Self {
+            position,
+            normal,
+            color,
+            uv,
+            tex_layer,
+            tex_mode,
+            surface,
+        }
+    }
 }
 
 /// 表现层实例：`EntityId → 视觉状态`。全部为派生数据，绝不回写内核。
@@ -88,6 +157,12 @@ pub struct Scene {
     /// 顶点色由它按 `surface` 层索引 + 世界 XZ 平铺采样得到；
     /// `None` 时回退到 6 色调色板（既有路径 / CI 无本机资产）。
     terrain_tiles: Option<Vec<RgbaImage>>,
+    /// 地形 GPU 平铺贴图（6 张地表 tileset + 水面）在统一 `texture_2d_array`
+    /// 中的层索引。`Some` 时地形改走 GPU 逐像素平铺采样（真 GPU 纹理管线），
+    /// `None` 时回退 CPU 顶点色。纯表现层数据，由
+    /// [`Scene::set_terrain_texture_layers`] 注入，`consume` 不触碰；
+    /// 不进权威状态 / 状态哈希 / 快照（ADR 0002）。
+    terrain_texture_layers: Option<TerrainTextureLayers>,
     /// 真实地图静态摆放的 glTF 模型（已按位姿预展开成 `SceneVertex`）。
     /// 由装配层注入，`build_vertices` 直接拼接；`consume` 不触碰。
     static_model_vertices: Vec<SceneVertex>,
@@ -146,6 +221,15 @@ const NO_CLIFF: f32 = 15.0;
 
 /// 真实 tileset 贴图在世界 XZ 上的平铺周期（缩放后玩法世界单位）。
 const TILE_REPEAT_WORLD: f32 = 16.0;
+/// 可见水判定裕量（缩放后玩法世界单位）。
+///
+/// 真实 EI 高度场里，海床 `water-ground`（原始单位）=109~159、浅滩 / 陆地
+/// 沟壑 =0~84，二者之间有 90~109 的天然间隙。直接 `water > ground` 会把
+/// 浅滩也判成水，在绿地里铺出锯齿水面；加裕量只保留「明显低于水位的海床」
+/// 为可见水，滤掉浅滩锯齿。1.6 世界单位 ≈ 原始 102 高度单位（离线量化
+/// 落在间隙内），既滤浅滩又不误杀海床。纯表现层常量，不改权威状态 / 快照，
+/// 仅影响地形 / 水面着色。
+const WATER_VISIBLE_MARGIN: f32 = 1.6;
 
 /// 从一张 RGBA8 tileset 贴图按世界 XZ 平铺采样一个像素，转为线性 RGBA。
 /// 固定算法、同机可复现，供 CPU 侧把真实贴图颜色烘进地形顶点色（无需 GPU
@@ -175,11 +259,79 @@ fn sample_tile(image: &RgbaImage, world_x: f32, world_z: f32) -> [f32; 4] {
     ]
 }
 
+/// 可见水判定：水位明显高于地面顶点才呈现水体（含 [`WATER_VISIBLE_MARGIN`]）。
+///
+/// `waterHeights` 是水面基准（真实导出为恒定水位，未含层高修正），`position[1]`
+/// 是含层高修正的最终地面高度；二者都是缩放后的表现层 `f32`。加裕量滤掉
+/// 水位线附近的浅滩 / 沟壑，避免绿地里出现锯齿水面。EI 为岛屿地图，浅海
+/// 占比高，水被渲染成有贴图的水面（见 [`build_terrain_vertex`]），而非旧路径
+/// 的纯蓝平板。
+fn is_water_vertex(vertex: &TerrainVertex) -> bool {
+    vertex.water > vertex.position[1] + WATER_VISIBLE_MARGIN
+}
+
+/// 地形顶点：真 GPU 纹理管线路径下按水/陆分流到 `textured` 顶点，交由片元
+/// 着色器按世界 XZ 逐像素平铺采样 `texture_2d_array`（清晰地表 / 水面贴图）；
+/// 无贴图数组时回退 CPU 逐顶点颜色 [`terrain_color`]（CI / 既有入口零改动）。
+///
+/// `uv` 用世界坐标除以平铺周期，配合 `Repeat` sampler 自动平铺。水顶点采样
+/// 水波纹贴图并叠浅蓝调制色；`is_water_vertex` 带裕量滤掉浅滩，使水岸以
+/// 顶点级过渡而非把浅水铺进绿地。`tex_layer` 在着色器里是
+/// `@interpolate(flat)`，跨水陆三角形取 provoking 顶点的层，水岸硬对齐格点、
+/// 不产生半透明插值伪影。纯表现层派生数据。
+fn build_terrain_vertex(
+    vertex: &TerrainVertex,
+    tiles: Option<&[RgbaImage]>,
+    layers: Option<&TerrainTextureLayers>,
+) -> SceneVertex {
+    let Some(layers) = layers else {
+        return SceneVertex::colored(
+            vertex.position,
+            vertex.normal,
+            terrain_color(vertex, tiles),
+            vertex.surface,
+        );
+    };
+    let water = is_water_vertex(vertex);
+    let layer = if water {
+        layers.water
+    } else {
+        let index = (vertex.surface as i64).clamp(0, 5) as usize;
+        layers.ground[index]
+    };
+    // 层缺失（负数）时该顶点回退纯色，避免采样到错误层出现花屏。
+    if layer < 0.0 {
+        let fallback = if water {
+            [0.18, 0.38, 0.62, 0.92]
+        } else {
+            terrain_color(vertex, tiles)
+        };
+        return SceneVertex::colored(vertex.position, vertex.normal, fallback, vertex.surface);
+    }
+    let tint = if water {
+        [0.78, 0.90, 1.0, 1.0]
+    } else {
+        [1.0, 1.0, 1.0, 1.0]
+    };
+    let uv = [
+        vertex.position[0] / TILE_REPEAT_WORLD,
+        vertex.position[2] / TILE_REPEAT_WORLD,
+    ];
+    SceneVertex::textured(
+        vertex.position,
+        vertex.normal,
+        tint,
+        uv,
+        layer,
+        TEX_MODE_TEXTURE,
+        vertex.surface,
+    )
+}
+
 /// 地形顶点色：优先真实 tileset 贴图采样，否则回退 6 色调色板。
 fn terrain_color(vertex: &TerrainVertex, tiles: Option<&[RgbaImage]>) -> [f32; 4] {
-    // 只有水面高度高于地面顶点时才呈现水体；`waterHeights` 恒定为正，
-    // 不能用 `water > 0` 判定（否则整张地图被刷成蓝色）。
-    if vertex.water > vertex.position[1] + 1.0e-3 {
+    // CPU 回退路径与 GPU 路径共用同一可见水判定（带裕量），避免判定漂移。
+    if is_water_vertex(vertex) {
         return [0.18, 0.38, 0.62, 0.92];
     }
     // 悬崖：15 是「无」哨兵值，0..14 才是真实悬崖层（含 0）。
@@ -255,12 +407,7 @@ fn push_triangle(
 ) {
     let normal = triangle_normal(p0, p1, p2);
     for position in [p0, p1, p2] {
-        vertices.push(SceneVertex {
-            position,
-            normal,
-            color,
-            surface: -1.0,
-        });
+        vertices.push(SceneVertex::colored(position, normal, color, -1.0));
     }
 }
 
@@ -607,6 +754,13 @@ impl Scene {
         self.terrain_tiles = tiles;
     }
 
+    /// 注入地形 GPU 平铺贴图的层索引（真 GPU 纹理管线）。
+    /// `Some` 时地形走 GPU 逐像素平铺采样，`None` 时回退 CPU 顶点色。
+    /// 纯表现层数据，`consume` 不触碰；不进权威状态 / 状态哈希 / 快照。
+    pub fn set_terrain_texture_layers(&mut self, layers: Option<TerrainTextureLayers>) {
+        self.terrain_texture_layers = layers;
+    }
+
     /// 注入真实地图静态摆放的 glTF 模型（已按位姿预展开的顶点）。
     /// 非空时 `build_vertices` 用它替代 `static_markers` 的程序化几何；
     /// 纯表现层数据，`consume` 不触碰。
@@ -651,14 +805,13 @@ impl Scene {
                 + dynamic_model_estimate
                 + (self.instances.len() + self.static_markers.len()) * 12,
         );
+        let layers = self.terrain_texture_layers.as_ref();
         for &index in &terrain.indices {
             let vertex = &terrain.vertices[index as usize];
-            vertices.push(SceneVertex {
-                position: vertex.position,
-                normal: vertex.normal,
-                color: terrain_color(vertex, tiles),
-                surface: vertex.surface,
-            });
+            // 真 GPU 纹理管线：有层索引时地形走 `textured` 顶点，由片元着色器
+            // 按世界 XZ 逐像素平铺采样地表 / 水面贴图；无层索引（CI / 旧入口）
+            // 回退 CPU 顶点色 `terrain_color`，既有测试零改动。
+            vertices.push(build_terrain_vertex(vertex, tiles, layers));
         }
         // 静态摆放先于动态单位，保证 readback 顺序稳定。
         if self.static_model_vertices.is_empty() {
@@ -1123,11 +1276,11 @@ mod tests {
         let mut list = Vec::with_capacity(triangles);
         for i in 0..triangles {
             let h = i as f32 * 0.1;
-            list.push(crate::model_geometry::BakedTriangle {
-                position: [[0.0, h, 0.0], [2.0, h, 0.0], [0.0, h + 1.0, 0.0]],
-                normal: [[0.0, 1.0, 0.0]; 3],
-                color: [[0.2, 0.6, 0.3, 1.0]; 3],
-            });
+            list.push(crate::model_geometry::BakedTriangle::colored(
+                [[0.0, h, 0.0], [2.0, h, 0.0], [0.0, h + 1.0, 0.0]],
+                [[0.0, 1.0, 0.0]; 3],
+                [[0.2, 0.6, 0.3, 1.0]; 3],
+            ));
         }
         BakedModel { triangles: list }
     }
@@ -1234,5 +1387,106 @@ mod tests {
             12,
             "缺键回退到程序化几何"
         );
+    }
+
+    fn test_layers() -> TerrainTextureLayers {
+        TerrainTextureLayers {
+            ground: [10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+            water: 20.0,
+        }
+    }
+
+    #[test]
+    fn water_visible_margin_keeps_seabed_filters_shallows() {
+        // 缩放后水位 6.0、裕量 1.6：海床 water-ground>1.6 判水，浅滩 <1.6 判陆。
+        let seabed = terrain_vertex(3.0, 0.0, 15.0, 6.0);
+        assert!(is_water_vertex(&seabed), "明显低于水位的海床应为可见水");
+        let shallow = terrain_vertex(5.0, 0.0, 15.0, 6.0);
+        assert!(
+            !is_water_vertex(&shallow),
+            "水位线附近的浅滩不应判为水（避免绿地锯齿水面）"
+        );
+        let dry = terrain_vertex(9.0, 0.0, 15.0, 6.0);
+        assert!(!is_water_vertex(&dry), "高于水位的陆地不是水");
+    }
+
+    #[test]
+    fn gpu_terrain_split_routes_land_and_water_to_different_layers() {
+        let layers = test_layers();
+        // 陆地顶点：地表层 3，白色调制，UV 按世界 XZ 平铺。
+        let land_vertex = TerrainVertex {
+            position: [32.0, 9.0, 16.0],
+            normal: [0.0, 1.0, 0.0],
+            surface: 3.0,
+            cliff: 15.0,
+            layer: 4.0,
+            water: 6.0,
+        };
+        let land = build_terrain_vertex(&land_vertex, None, Some(&layers));
+        assert_eq!(land.tex_mode, TEX_MODE_TEXTURE);
+        assert_eq!(land.tex_layer, 13.0, "surface=3 应取 ground[3]");
+        assert_eq!(land.uv, [2.0, 1.0], "uv = 世界坐标 / 16");
+        assert_eq!(land.color, [1.0, 1.0, 1.0, 1.0], "陆地调制色为白色");
+
+        // 水顶点：水层，浅蓝调制。
+        let water_vertex = TerrainVertex {
+            position: [0.0, 3.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            surface: 0.0,
+            cliff: 15.0,
+            layer: 4.0,
+            water: 6.0,
+        };
+        let water = build_terrain_vertex(&water_vertex, None, Some(&layers));
+        assert_eq!(water.tex_mode, TEX_MODE_TEXTURE);
+        assert_eq!(water.tex_layer, 20.0, "水顶点应取 water 层");
+        assert!(water.color[2] > water.color[0], "水调制色偏蓝");
+    }
+
+    #[test]
+    fn gpu_terrain_without_layers_falls_back_to_colored() {
+        let vertex = terrain_vertex(500.0, 2.0, 15.0, 0.0);
+        let result = build_terrain_vertex(&vertex, None, None);
+        assert_eq!(result.tex_mode, TEX_MODE_COLOR, "无 layers 回退 CPU 顶点色");
+        assert_eq!(result.tex_layer, -1.0);
+    }
+
+    #[test]
+    fn gpu_terrain_missing_layer_falls_back_to_solid_color() {
+        let mut layers = test_layers();
+        layers.ground[0] = -1.0;
+        layers.water = -1.0;
+        let vertex = terrain_vertex(9.0, 0.0, 15.0, 6.0);
+        let land = build_terrain_vertex(&vertex, None, Some(&layers));
+        assert_eq!(land.tex_mode, TEX_MODE_COLOR, "层缺失回退纯色，不花屏");
+        let seabed = terrain_vertex(3.0, 0.0, 15.0, 6.0);
+        let water = build_terrain_vertex(&seabed, None, Some(&layers));
+        assert_eq!(water.tex_mode, TEX_MODE_COLOR);
+    }
+
+    #[test]
+    fn terrain_texture_layers_build_vertices_is_deterministic() {
+        let mesh = terrain();
+        let mut scene = Scene::default();
+        scene.set_terrain_texture_layers(Some(test_layers()));
+        let a = scene.build_vertices(&mesh);
+        let b = scene.build_vertices(&mesh);
+        assert_eq!(a, b, "GPU 地形顶点逐帧可复现");
+        assert!(
+            a.iter()
+                .filter(|v| v.surface >= 0.0)
+                .all(|v| v.tex_mode == TEX_MODE_TEXTURE),
+            "有 layers 时地形全部走 GPU 纹理采样"
+        );
+        // consume 不触碰 layers。
+        let view = view(5, vec![]);
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &ModelLibrary::default(),
+        );
+        assert_eq!(a, scene.build_vertices(&mesh));
     }
 }

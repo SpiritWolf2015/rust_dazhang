@@ -32,6 +32,20 @@ const SHADER: &str = include_str!("../shaders/scene.wgsl");
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// 一个 `mat4x4<f32>` uniform 的字节数。
 const UNIFORM_SIZE: u64 = 64;
+/// 场景 Clear 背景色（线性空间，见 `record_scene`）。
+const CLEAR_COLOR: wgpu::Color = wgpu::Color {
+    r: 0.02,
+    g: 0.03,
+    b: 0.06,
+    a: 1.0,
+};
+/// 上述 Clear 线性值写入 sRGB framebuffer 后 readback 的 sRGB 字节。
+///
+/// sRGB 编码 `linear→srgb`（近似 `1.055·c^(1/2.4)−0.055`）：
+/// (0.02, 0.03, 0.06) → (0.151, 0.185, 0.263) → (39, 48, 69)。GPU 空流渲染
+/// 与 `render_headless_rgba` 的 CPU 早退路径 MUST 用同一个值，否则空流基线
+/// 在两条路径间不一致、无法作为可断言的背景基准。
+pub const CLEAR_COLOR_SRGB: [u8; 4] = [39, 48, 69, 255];
 
 /// 让 surface 与 app 共享窗口所有权：surface 持一个 Arc，app 持另一个 Arc
 /// 用于 `request_redraw`。实现 `rwh` 句柄 trait 委托给内层 `Window`。
@@ -320,29 +334,150 @@ fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Te
 }
 
 /// 一条场景管线的全部资源；地形与单位共用一个 pipeline（CPU 已展开三角形）。
+/// 纹理数组 / sampler / 布局也在此持有，保证 bind group 引用的资源存活。
 struct PipelineResources {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+    // 以下资源由 bind group 引用，需在此持有以保活（wgpu 资源为引用计数句柄）。
+    _texture: wgpu::Texture,
+    _texture_view: wgpu::TextureView,
+    _sampler: wgpu::Sampler,
 }
 
-fn build_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> PipelineResources {
+/// 创建 `texture_2d_array` 纹理 + view + sampler。
+///
+/// `textures` 为 `None` / 空时创建 1 层纯白占位纹理：无本机资产 / 纯顶点色
+/// 路径下 shader 的 `tex_mode=0` 不采样纹理，占位资源仅保证 bind group 合法，
+/// 使既有入口与 headless 单测零语义改动。真实资产路径上传全部层。
+///
+/// 每行 `TEXTURE_LAYER_SIZE(256) × 4 = 1024` 字节天然满足 wgpu 的 256 字节
+/// 行对齐；`depth_or_array_layers` 用 `D2Array` view，供 WGSL `texture_2d_array`。
+fn create_scene_textures(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    textures: Option<&w3_content::TextureArray>,
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    use w3_content::TEXTURE_LAYER_SIZE;
+    let placeholder_bytes = vec![255u8; (TEXTURE_LAYER_SIZE * TEXTURE_LAYER_SIZE * 4) as usize];
+    // 上传前校验数组完整性：数据被写坏时显式英文日志 + 回退纯白占位层，
+    // 绝不静默跳过某层上传（否则该层读到未初始化纹素会花屏）。`None` 是
+    // 无本机资产的既有合法路径（顶点色模式），不算异常。
+    let valid = textures.is_some_and(|array| array.is_valid());
+    if let Some(array) = textures {
+        if !valid {
+            log::warn!(
+                target: "w3_render",
+                "scene texture array invalid: size={} layers={} pixels={} fallback=placeholder_white",
+                array.size,
+                array.layer_count,
+                array.pixels.len(),
+            );
+        }
+    }
+    let (size, layers, pixels): (u32, u32, &[u8]) = match textures {
+        Some(array) if valid => (array.size, array.layer_count, array.pixels.as_slice()),
+        _ => (TEXTURE_LAYER_SIZE, 1, placeholder_bytes.as_slice()),
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("w3-render scene texture array"),
+        size: wgpu::Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: layers,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let layer_bytes = (size * size * 4) as usize;
+    // `is_valid` / 占位路径已保证 `pixels.len() == layers * layer_bytes`，故
+    // `chunks_exact` 恰好产出 `layers` 个完整层，不存在静默跳过某层的分支。
+    for (layer, chunk) in pixels.chunks_exact(layer_bytes).enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            chunk,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * 4),
+                rows_per_image: Some(size),
+            },
+            wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("w3-render scene texture array view"),
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("w3-render scene sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        ..Default::default()
+    });
+    (texture, texture_view, sampler)
+}
+
+fn build_pipeline(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    textures: Option<&w3_content::TextureArray>,
+) -> PipelineResources {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("w3-render scene shader"),
         source: wgpu::ShaderSource::Wgsl(SHADER.into()),
     });
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("w3-render globals"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+        label: Some("w3-render globals + textures"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("w3-render pipeline layout"),
@@ -355,13 +490,24 @@ fn build_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Pipelin
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    let (texture, texture_view, sampler) = create_scene_textures(device, queue, textures);
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("w3-render globals"),
+        label: Some("w3-render globals + textures"),
         layout: &bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform_buffer.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("w3-render scene pipeline"),
@@ -390,16 +536,34 @@ fn build_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Pipelin
                         shader_location: 2,
                     },
                     wgpu::VertexAttribute {
-                        format: wgpu::VertexFormat::Float32,
+                        format: wgpu::VertexFormat::Float32x2,
                         offset: 40,
                         shader_location: 3,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 48,
+                        shader_location: 4,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 52,
+                        shader_location: 5,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32,
+                        offset: 56,
+                        shader_location: 6,
                     },
                 ],
             })],
         },
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
-            cull_mode: Some(wgpu::Face::Back),
+            // WC3 树叶 / 树冠是 `doubleSided` 的竖直 billboard 面片，正面剔除
+            // 会把背对相机的一半面片剔掉、只剩细杆。单管线 / 单 draw call 无法
+            // 按几何区分剔除模式，故全局关闭背面剔除，让双面 billboard 完整显示。
+            cull_mode: None,
             front_face: wgpu::FrontFace::Ccw,
             ..Default::default()
         },
@@ -428,6 +592,9 @@ fn build_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Pipelin
         pipeline,
         bind_group,
         uniform_buffer,
+        _texture: texture,
+        _texture_view: texture_view,
+        _sampler: sampler,
     }
 }
 
@@ -445,12 +612,7 @@ fn record_scene(
         depth_slice: None,
         resolve_target: None,
         ops: wgpu::Operations {
-            load: wgpu::LoadOp::Clear(wgpu::Color {
-                r: 0.02,
-                g: 0.03,
-                b: 0.06,
-                a: 1.0,
-            }),
+            load: wgpu::LoadOp::Clear(CLEAR_COLOR),
             store: wgpu::StoreOp::Store,
         },
     })];
@@ -488,9 +650,19 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// 在本机窗口上初始化 GPU；无适配器 / 设备失败时返回
-    /// `RenderError::GpuUnavailable`，由调用方降级处理，绝不 panic。
+    /// 在本机窗口上初始化 GPU（无贴图，占位纹理）；保持既有入口零改动。
     pub fn new(window: &Arc<Window>, width: u32, height: u32) -> Result<Self, RenderError> {
+        Self::new_with_textures(window, width, height, None)
+    }
+
+    /// 在本机窗口上初始化 GPU 并上传真实 `texture_2d_array` 贴图数组。
+    /// `textures` 为 `None` 时用占位纹理（纯顶点色路径）。
+    pub fn new_with_textures(
+        window: &Arc<Window>,
+        width: u32,
+        height: u32,
+        textures: Option<&w3_content::TextureArray>,
+    ) -> Result<Self, RenderError> {
         let width = width.max(1);
         let height = height.max(1);
         let instance = wgpu::Instance::default();
@@ -513,7 +685,7 @@ impl GpuContext {
         config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
         surface.configure(&device, &config);
         let format = config.format;
-        let resources = build_pipeline(&device, format);
+        let resources = build_pipeline(&device, &queue, format, textures);
         let depth_view = create_depth_view(&device, width, height);
         Ok(Self {
             surface,
@@ -727,9 +899,10 @@ impl GpuContext {
 /// 离屏（headless）渲染一帧并把颜色读回 CPU，返回紧凑 RGBA。
 ///
 /// 不依赖任何窗口 / surface：自建 `Instance` → `adapter` → `device`、
-/// 复用同一 `build_pipeline` / `record_scene` / readback 逻辑，用 `Rgba8Unorm`
-/// 离屏纹理。专供**提交前 GPU 链路自测**——把「真实模型贴图是否真的上屏、
-/// 是否黑屏 / 纯色块」变成可在 CLI 断言的事实，而不必开窗口人工观察。
+/// 复用同一 `build_pipeline` / `record_scene` / readback 逻辑，用
+/// `Rgba8UnormSrgb` 离屏纹理（与真窗口 framebuffer 色彩空间一致）。专供
+/// **提交前 GPU 链路自测**——把「真实模型贴图是否真的上屏、是否黑屏 /
+/// 纯色块」变成可在 CLI 断言的事实，而不必开窗口人工观察。
 /// 无 GPU 适配器时返回 `GpuUnavailable`，由测试跳过（不冒充通过）。
 pub fn render_headless_rgba(
     vertices: &[SceneVertex],
@@ -737,15 +910,34 @@ pub fn render_headless_rgba(
     width: u32,
     height: u32,
 ) -> Result<Vec<u8>, RenderError> {
+    render_headless_rgba_with_textures(vertices, view_proj, width, height, None)
+}
+
+/// [`render_headless_rgba`] 的带真实贴图数组变体：上传 `texture_2d_array` 后
+/// 渲染，供 GPU 纹理采样 / alpha test 的提交前自测。
+pub fn render_headless_rgba_with_textures(
+    vertices: &[SceneVertex],
+    view_proj: &glam::Mat4,
+    width: u32,
+    height: u32,
+    textures: Option<&w3_content::TextureArray>,
+) -> Result<Vec<u8>, RenderError> {
     let width = width.max(1);
     let height = height.max(1);
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    // 空顶点流：无需建 GPU 资源，返回与 `record_scene` Clear 一致的深蓝背景
-    // （0.02, 0.03, 0.06, 1.0 → RGBA8），也让 wgpu 的空 buffer slice 无从触发。
+    // 与真窗口 framebuffer 色彩空间一致：`Bgra8UnormSrgb`（见 winit 日志
+    // "linear (sRGBA aware) framebuffer"）。纹理是 `Rgba8UnormSrgb`，采样时
+    // 硬件自动 sRGB→linear，shader 在线性空间计算；sRGB framebuffer 在写入时
+    // 自动 linear→sRGB 回转，readback 得到的即正确的 sRGB 字节。若用非 sRGB
+    // 的 `Rgba8Unorm`，linear 值被当 sRGB 存储，离屏图会整体偏暗、无法反映
+    // 真窗口，导致基于错误基线的过度调亮。故此处 MUST 用 sRGB 格式自证。
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    // 空顶点流：无需建 GPU 资源，返回与 `record_scene` 的 Clear 在 sRGB
+    // framebuffer 下 readback 一致的背景（CLEAR_COLOR_SRGB），也让 wgpu 的空
+    // buffer slice 无从触发。CPU 早退与 GPU 空流 MUST 用同一常量。
     if vertices.is_empty() {
         let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
         for _ in 0..(width as usize * height as usize) {
-            rgba.extend_from_slice(&[5, 8, 15, 255]);
+            rgba.extend_from_slice(&CLEAR_COLOR_SRGB);
         }
         return Ok(rgba);
     }
@@ -761,7 +953,7 @@ pub fn render_headless_rgba(
     }))
     .map_err(|e| RenderError::GpuUnavailable(format!("headless request_device: {e:?}")))?;
 
-    let resources = build_pipeline(&device, format);
+    let resources = build_pipeline(&device, &queue, format, textures);
     let depth_view = create_depth_view(&device, width, height);
     let color_texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("w3-render headless color"),

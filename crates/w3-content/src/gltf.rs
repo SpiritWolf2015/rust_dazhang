@@ -607,9 +607,63 @@ pub fn parse_gltf(json: &str, buffers: &[Vec<u8>]) -> Result<ModelMesh, GltfErro
     })
 }
 
+/// WC3 可替换树贴图（replaceableId=31）的季节词。
+/// `mainTilesetName` 含季节词时用它挑对应贴图；无季节词的 tileset 返回 `None`。
+fn season_word(tileset_name: &str) -> Option<&'static str> {
+    let lower = tileset_name.to_ascii_lowercase();
+    for (needle, label) in [
+        ("summer", "Summer"),
+        ("fall", "Fall"),
+        ("autumn", "Fall"),
+        ("winter", "Winter"),
+        ("spring", "Spring"),
+    ] {
+        if lower.contains(needle) {
+            return Some(label);
+        }
+    }
+    None
+}
+
+/// 按 tileset 季节重定向可替换树贴图 URI（纯函数，零 IO，可单测）。
+///
+/// 上游 `asset-convert` 把 `LordaeronTree` 家族的 replaceableId=31 贴图写死为
+/// `LordaeronSnowTree.png`（雪树），但夏天 EI 地图应呈现绿树。本函数把文件名
+/// `Lordaeron{源季节}Tree*.png` 改写为 `Lordaeron{目标季节}Tree*.png`，目录与
+/// 后缀（`Blight` 等）保留；反斜杠归一化为正斜杠。非可替换树贴图、无季节词的
+/// tileset 原样返回。零资产依赖，仅字符串处理，不进权威状态 / 哈希 / 快照。
+pub fn resolve_seasonal_texture(uri: &str, tileset_name: &str) -> String {
+    let Some(target) = season_word(tileset_name) else {
+        return uri.to_string();
+    };
+    let normalized = uri.replace('\\', "/");
+    let Some(slash) = normalized.rfind('/') else {
+        return uri.to_string();
+    };
+    let (dir, name) = normalized.split_at(slash + 1);
+    for source in ["Snow", "Fall", "Winter", "Summer", "Spring"] {
+        let token = format!("Lordaeron{source}Tree");
+        if let Some(suffix) = name.strip_prefix(&token) {
+            return format!("{dir}Lordaeron{target}Tree{suffix}");
+        }
+    }
+    uri.to_string()
+}
+
 /// 从本机 `.gltf` 文件加载模型：读 JSON、外链 `.bin`、解码 PNG 贴图。
 /// 相对路径相对 `.gltf` 所在目录解析；失败显式返回错误，不静默降级。
+/// 保持无季节重定向的既有语义（供测试 / 中立读取用）。
 pub fn load_gltf(path: &Path) -> Result<ModelMesh, GltfError> {
+    load_gltf_impl(path, None)
+}
+
+/// [`load_gltf`] 的季节感知变体：按 `mainTilesetName` 把可替换树贴图重定向到
+/// 对应季节版本后再解码。地图装配用此入口，让 Summer 地图呈现绿树而非雪树。
+pub fn load_gltf_seasonal(path: &Path, tileset_name: &str) -> Result<ModelMesh, GltfError> {
+    load_gltf_impl(path, Some(tileset_name))
+}
+
+fn load_gltf_impl(path: &Path, tileset_name: Option<&str>) -> Result<ModelMesh, GltfError> {
     let json = std::fs::read_to_string(path).map_err(|error| GltfError::Io {
         path: path.to_path_buf(),
         message: error.to_string(),
@@ -658,11 +712,19 @@ pub fn load_gltf(path: &Path) -> Result<ModelMesh, GltfError> {
     }
 
     // 解码贴图：同名 URI 复用一份 RGBA，避免重复读盘。
+    // 季节感知：装配传入 `mainTilesetName` 时，先把可替换树贴图 URI 重写为
+    // 对应季节版本（雪树→夏树），使 `image_path` / 去重键 / `texture_uri`
+    // 三者一致；`None` 时零重定向，保持既有中立读取语义。
     let mut cache: BTreeMap<String, RgbaImage> = BTreeMap::new();
     for submesh in &mut mesh.submeshes {
-        let Some(uri) = submesh.texture_uri.clone() else {
+        let Some(raw_uri) = submesh.texture_uri.clone() else {
             continue;
         };
+        let uri = match tileset_name {
+            Some(tileset) => resolve_seasonal_texture(&raw_uri, tileset),
+            None => raw_uri,
+        };
+        submesh.texture_uri = Some(uri.clone());
         if let Some(image) = cache.get(&uri) {
             submesh.texture = Some(image.clone());
             continue;
@@ -899,5 +961,44 @@ mod tests {
             load_gltf(Path::new("C:/definitely-not-a-real-model/missing.gltf")),
             Err(GltfError::Io { .. })
         ));
+    }
+
+    #[test]
+    fn seasonal_texture_redirects_snow_tree_to_tileset_season() {
+        let uri = "../../../ReplaceableTextures/LordaeronTree/LordaeronSnowTree.png";
+        assert_eq!(
+            resolve_seasonal_texture(uri, "Lordaeron Summer"),
+            "../../../ReplaceableTextures/LordaeronTree/LordaeronSummerTree.png"
+        );
+        assert_eq!(
+            resolve_seasonal_texture(uri, "Lordaeron Fall"),
+            "../../../ReplaceableTextures/LordaeronTree/LordaeronFallTree.png"
+        );
+        assert_eq!(
+            resolve_seasonal_texture(uri, "Lordaeron Winter"),
+            "../../../ReplaceableTextures/LordaeronTree/LordaeronWinterTree.png"
+        );
+    }
+
+    #[test]
+    fn seasonal_texture_preserves_suffix_and_normalizes_separators() {
+        // Blight 等后缀保留；反斜杠归一化为正斜杠。
+        let uri = r"..\..\ReplaceableTextures\LordaeronTree\LordaeronSnowTreeBlight.png";
+        assert_eq!(
+            resolve_seasonal_texture(uri, "Lordaeron Summer"),
+            "../../ReplaceableTextures/LordaeronTree/LordaeronSummerTreeBlight.png"
+        );
+    }
+
+    #[test]
+    fn seasonal_texture_leaves_non_tree_and_unknown_tileset_unchanged() {
+        let normal = "../../../Textures/Footman.png";
+        assert_eq!(resolve_seasonal_texture(normal, "Lordaeron Summer"), normal);
+        let tree = "../../../ReplaceableTextures/LordaeronTree/LordaeronSnowTree.png";
+        assert_eq!(resolve_seasonal_texture(tree, "Lordaeron"), tree);
+        assert_eq!(resolve_seasonal_texture(tree, "Barrens"), tree);
+        // 已是目标季节仍返回等价 URI（幂等）。
+        let summer = "../../../ReplaceableTextures/LordaeronTree/LordaeronSummerTree.png";
+        assert_eq!(resolve_seasonal_texture(summer, "Lordaeron Summer"), summer);
     }
 }

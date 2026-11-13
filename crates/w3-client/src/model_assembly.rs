@@ -1,10 +1,11 @@
 //! 真实模型装配：把导出地图的摆放与动态实体类型键解析成表现层顶点。
 //!
-//! 阶段 3（真实模型）：[`w3_content::ModelCatalog`] 把 `typeId` / `doodadID`
-//! 映射到本机 glTF，`w3_content::load_gltf` 读网格 + PNG 贴图，
-//! `w3_render::bake_model` 烘焙成三角形（贴图色 + alpha 镂空），再按摆放位姿
-//! 展开成 [`SceneVertex`]。全部是**纯表现层派生数据**，MUST NOT 进入权威状态、
-//! 状态哈希或快照（ADR 0002）。
+//! 阶段 4（真 GPU 纹理管线）：[`w3_content::ModelCatalog`] 把 `typeId` /
+//! `doodadID` 映射到本机 glTF，`w3_content::load_gltf` 读网格 + PNG 贴图，
+//! 贴图按 URI 去重收集进 [`w3_content::TextureArrayBuilder`] 得到统一数组纹理；
+//! `w3_render::bake_model_with_layers` 把网格烘焙成带 UV / 层 / alpha 模式的
+//! 三角形，再按摆放位姿展开成 [`SceneVertex`]。全部是**纯表现层派生数据**，
+//! MUST NOT 进入权威状态、状态哈希或快照（ADR 0002）。
 //!
 //! - 静态摆放（2588 个）：按 `WORLD_SCALE` 缩放到玩法世界、贴地、套用导出
 //!   `angle`，预展开成一份静态顶点流，装配一次后由 `Scene` 逐帧拼接。
@@ -16,10 +17,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use w3_content::{ENTITY_MODEL_FILES, ModelCatalog, ModelClass, ParsedMap, load_gltf};
+use w3_content::{
+    ENTITY_MODEL_FILES, ModelCatalog, ModelClass, ParsedMap, TextureArray, TextureArrayBuilder,
+    load_gltf, load_gltf_seasonal,
+};
 use w3_render::{
-    BakedModel, MODEL_DISPLAY_SCALE, ModelTransform, SceneVertex, TerrainMesh, bake_model,
-    expand_model,
+    BakedModel, MODEL_DISPLAY_SCALE, ModelTransform, SceneVertex, TerrainMesh,
+    bake_model_with_layers, expand_model,
 };
 
 use crate::real_map::WORLD_SCALE;
@@ -46,13 +50,17 @@ pub struct ModelStats {
     pub cache_hits: usize,
     /// 因顶点预算被截断的摆放数。
     pub budget_truncated: usize,
+    /// 收集到的统一数组纹理层数（供日志与验收）。
+    pub texture_layers: u32,
 }
 
-/// 装配产物：静态顶点流 + 动态实体模型库 + 统计。
+/// 装配产物：静态顶点流 + 动态实体模型库 + 统一贴图数组 + 统计。
 #[derive(Clone, Debug)]
 pub struct AssembledModels {
     pub static_vertices: Vec<SceneVertex>,
     pub entity_models: BTreeMap<String, BakedModel>,
+    /// 上传 GPU 的 `texture_2d_array` 数据。
+    pub textures: TextureArray,
     pub stats: ModelStats,
 }
 
@@ -110,16 +118,31 @@ fn placement_origin(position: &w3_content::Position3, terrain: &TerrainMesh) -> 
 struct ModelCache {
     catalog: ModelCatalog,
     baked: BTreeMap<PathBuf, BakedModel>,
+    /// 统一贴图数组构建器：加载模型时按 URI 去重登记贴图并分配层。
+    textures: TextureArrayBuilder,
+    /// 地图 `mainTilesetName`（如 "Lordaeron Summer"），用于可替换树贴图季节
+    /// 重定向。`None` 时走中立 `load_gltf`。纯表现层，不进权威状态 / 哈希。
+    tileset_name: Option<String>,
     hits: usize,
 }
 
 impl ModelCache {
-    fn new(catalog: ModelCatalog) -> Self {
+    fn new(catalog: ModelCatalog, tileset_name: Option<String>) -> Self {
         Self {
             catalog,
             baked: BTreeMap::new(),
+            textures: TextureArrayBuilder::default(),
+            tileset_name,
             hits: 0,
         }
+    }
+
+    fn texture_layers(&self) -> u32 {
+        self.textures.layer_count()
+    }
+
+    fn build_textures(&self) -> TextureArray {
+        self.textures.build()
     }
 
     /// 按 glTF 路径取烘焙模型（带缓存）；失败返回 `None` 并记录英文警告。
@@ -128,7 +151,11 @@ impl ModelCache {
             self.hits += 1;
             return self.baked.get(path);
         }
-        let mesh = match load_gltf(path) {
+        let loaded = match &self.tileset_name {
+            Some(tileset) => load_gltf_seasonal(path, tileset),
+            None => load_gltf(path),
+        };
+        let mesh = match loaded {
             Ok(mesh) => mesh,
             Err(error) => {
                 log::warn!(
@@ -140,7 +167,16 @@ impl ModelCache {
                 return None;
             }
         };
-        let baked = bake_model(&mesh);
+        // 为每个子网格登记贴图 URI → 层；无贴图 / 无 URI 的子网格回退顶点色。
+        let layers: Vec<f32> = mesh
+            .submeshes
+            .iter()
+            .map(|sub| match (&sub.texture_uri, &sub.texture) {
+                (Some(uri), Some(image)) => self.textures.push(uri, image) as f32,
+                _ => -1.0,
+            })
+            .collect();
+        let baked = bake_model_with_layers(&mesh, &layers);
         if baked.is_empty() {
             log::warn!(
                 target: "w3_client",
@@ -210,7 +246,10 @@ pub fn assemble_models(
     terrain: &TerrainMesh,
     catalog: ModelCatalog,
 ) -> AssembledModels {
-    let mut cache = ModelCache::new(catalog);
+    // 用地图 `mainTilesetName` 让可替换树贴图按季节重定向（Summer 地图呈
+    // 绿树而非上游写死的雪树）。无该字段时走中立加载，行为零改动。
+    let tileset_name = parsed.heightfield.main_tileset_name.clone();
+    let mut cache = ModelCache::new(catalog, tileset_name);
     let mut stats = ModelStats::default();
     let mut static_vertices: Vec<SceneVertex> = Vec::new();
 
@@ -270,6 +309,8 @@ pub fn assemble_models(
         }
     }
     stats.entity_models = entity_models.len();
+    stats.texture_layers = cache.texture_layers();
+    let textures = cache.build_textures();
 
     if stats.skipped > 0 || stats.budget_truncated > 0 {
         log::warn!(
@@ -280,13 +321,14 @@ pub fn assemble_models(
     }
     log::info!(
         target: "w3_client",
-        "models assembled: placements={} resolved={} static_vertices={} entity_models={} cache_hits={}",
-        stats.placements, stats.resolved, stats.static_vertices, stats.entity_models, stats.cache_hits
+        "models assembled: placements={} resolved={} static_vertices={} entity_models={} cache_hits={} texture_layers={}",
+        stats.placements, stats.resolved, stats.static_vertices, stats.entity_models, stats.cache_hits, stats.texture_layers
     );
 
     AssembledModels {
         static_vertices,
         entity_models,
+        textures,
         stats,
     }
 }

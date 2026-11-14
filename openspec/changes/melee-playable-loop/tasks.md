@@ -167,6 +167,15 @@
 
 > **阶段 6 诚实边界（如实登记）**：真实模型放大 4× 后建筑 box 较大（主城约 459×612px、金矿约 285×294px），选中框描边框住完整建筑（含塔尖 / 脚下 `gutz` 碎片）是「贴合真实所见」的固有结果、非错位；农民 box 彼此分开、不会连选。`entity_screen_boxes` 每帧重新投影数万模型顶点、未做缓存（当前规模流畅，实体数大增后可优化，属性能非本轮范围）。**W1**：`apply_input` / `hud_model` 相对 `driver.view()` 允许一帧滞后，首帧 `consume` 前 / 运行时新实体生成帧 / 相机背后实体缺 id 时收敛为 `PICK_RADIUS` 紧致 box、不回退旧近全屏巨框（短窗口点选精度略降，下一帧即有真实 box），`entity_screen_box_missing_id_never_falls_back_to_giant_box` 覆盖；用户第五次验收截图 `Tick 5` 表明已渲染多帧、开局静止农民有真实 box，本轮修复对该场景有效。离屏绿框 / 红点叠加图验证的是命中几何与 HUD 锚点，不覆盖真窗口 egui overlay 实际绘制与最终观感，最终仍须人工验收。首帧空窗（D11）、脚下红白 `gutz` 碎片（D11）、水岸锯齿 / 树 billboard（D10）、运行时新实体缺键回退（D9）、中文上屏仍留后续 / 人工验收。
 
+## 人工验收回填（2026-11-14，用户明确拍板归档）
+
+> 用户真窗口 `cargo run -p w3-client --example melee` 玩了一次：确认「可以选中单位了」，但发现「右键移动全部都移动了，包括主基地和金矿，而不是只农民」。用户明确指示「不纠结了这版本就这样了，归档这个 proposal」。
+>
+> - `6.3` / `8.1–8.5` / `14.10` / `15.6` / `16.7` **保持未勾**，结论见 `smoke-checklist.md` 验收记录表：A 组仅窗口可开、B 组部分（选中可用）、C 组不通过（群体 `Move` 未过滤建筑 / 资源点）、D/E/F/G 未执行。未执行项如实标注，不冒充通过。
+> - 新缺口登记为**已知限制**：右键群体 `Move` 未按可移动性过滤；本 change 不修，见 `design.md` Risks 末条。下版本（人族 / 兽族完整化）须在输入翻译与 `Move` 命令生成处按单位类型过滤并补回归测试。
+> - `14.11` / `15.7` / `16.8` 的 `critic` 复审部分已完成（blocker 0，见 `decision-memo.md`）。
+> - 用户**明确豁免**「清单未逐项勾选前不得归档」，据此由编排者执行 `/opsx:archive`；`/opsx:archive` 之后本目录移入 `openspec/changes/archive/`。该豁免为用户明确指示，按 `CODEBUDDY.md` §8 不拿沉默当授权。
+
 ## Workflow follow-up
 
 - 人工 `git push` → CI 双平台 `python tools/verify_all.py` 绿灯。

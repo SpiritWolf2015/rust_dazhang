@@ -81,6 +81,7 @@
 - **ADR 记"为什么决定"，OpenSpec 记"系统该做什么"**；spec 必须引用 ADR 编号，避免两份规范打架。
 - **决策纪要**：每个 change 在 `proposal` 阶段同步产出 `decision-memo.md`（模板 `openspec/decision-memo.template.md`）。只记三类：拍板决策（含被否备选与理由）、承重约束（逐条带 `file:line` / commit / 命令输出证据锚）、待确认项；**无证据项 MUST NOT 写成「用户已确认」，不拿沉默当授权**。能自查的事实不问人，不确定先给「推荐 + 依据 + 代价 + 备选」再请人拍板。
 - 决策纪要是纯文档，不进状态哈希 / 快照、不含资产；目标与方向已清楚的小改动可显式声明省略，但范围 / 方案澄清、事实核对、决定确认三件事不可省。
+- **成文顺序与四件套一致性**：决策纪要把承重约束与拍板决策逐条站稳后，才进入成文，按 `proposal → specs → design → tasks`（`/opsx:propose`）在同一轮提案流程内生成完整四件套；MUST NOT 先成文再靠局部补改收敛（会让 proposal 的 Scope、specs 的 `#### Scenario:`、design 的 alternatives、tasks 的步骤互相打架）。实施返工确需改动任一 artifact 时，MUST 同步回查其余三份并一起更新，不允许只改一份；由 `critic` 清单第 7 / 10 项复核。
 - 一个 change 一个 owner，配一个只读 critic；`mode` 不使用 `bypassPermissions`。
 
 ## 9. Subagent 工作流

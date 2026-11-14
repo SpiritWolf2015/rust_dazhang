@@ -264,6 +264,10 @@ def main() -> int:
         "source conventions (comments / logs / scripts)",
         [sys.executable, "tools/check_source_conventions.py"],
     )
+    ok &= run(
+        "commit messages (Chinese description / Conventional Commits)",
+        [sys.executable, "tools/check_commit_messages.py"],
+    )
     ok &= run("cargo fmt", ["cargo", "fmt", "--all", "--", "--check"])
     ok &= run("cargo test", ["cargo", "test", "--workspace"])
 

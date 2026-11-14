@@ -70,6 +70,8 @@
 | 格式（提交前校验） | `cargo fmt --all -- --check` |
 | 格式（写完自动排版） | `cargo fmt --all` |
 | 编码 | `python tools/check_encoding.py` |
+| 源码约定 | `python tools/check_source_conventions.py` |
+| 提交信息 | `python tools/check_commit_messages.py` |
 | 统一门禁 | `python tools/verify_all.py` |
 | 端到端加载 | `cargo run -p w3-content --example load_export -- <map-dir> <table.json>` |
 | OpenSpec | `openspec list` / `openspec validate <change>` / `openspec archive <change> -y` |

@@ -16,7 +16,10 @@ jobs:
     name: Source conventions (encoding / comments / logs / scripts)
     runs-on: ubuntu-latest
     steps:
+      # 提交信息检查需要 push / PR 的 base commit，故取完整历史。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -28,6 +31,9 @@ jobs:
 
       - name: Check source conventions
         run: python tools/check_source_conventions.py
+
+      - name: Check commit messages
+        run: python tools/check_commit_messages.py --base "${{ github.event.pull_request.base.sha || github.event.before }}"
 
   verify:
     strategy:

@@ -34,7 +34,7 @@ tools:
 - `tasks` 全部使用 `- [ ] X.Y ...` 复选框；涉及确定性代码的改动必须包含重跑 `tests/determinism.rs` 的任务。
 - 一个 change 一个 owner；不要同时改多个 owner 的文件。
 - **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
-- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
+- **参考项目对照（强制，全流程）**：凡 `UPSTREAM.md` 矩阵 T1–T6 命中任一类型的 change，写 `design.md` **之前** MUST 委派 `reference-researcher` 出「参考对照报告」；`design.md` MUST 有「## 参考项目对照」小节逐条引用（项目 / 路径 / 借鉴 / 不借鉴 / 许可证 / 锚），`decision-memo.md` 承重约束若来自参考项目，锚 MUST 指向矩阵条目或参考项目内路径。参考结论有「缺口」时回到用户拍板、不臆造。四个参考项目只读；`WarsmashModEngine`（AGPLv3）仅借鉴语义、禁止复制代码（`openspec/config.yaml` 的 `rules.design` 已设为硬要求）。
 - 工具脚本一律用跨平台的 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断（见 CODEBUDDY.md 第 2 节）。
 
 ## 禁止

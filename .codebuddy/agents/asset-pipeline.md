@@ -28,7 +28,7 @@ tools:
 - 命令输出用英文；若需写临时脚本，注释用中文且文件不入库。
 - 不得修改上游仓库的源码或配置。
 - **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
-- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine`（AGPLv3）是 Java 模拟器，**不参与 dev-setup 导出链路**，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
+- **参考项目对照（强制，`UPSTREAM.md` 矩阵 T3）**：dev-setup 导出链路以 `godot_warcraft3` 的 `tools/dev-setup.mjs`、`tools/mpq-extract/`、`tools/slk-export/`、`tools/map-parse/`、`tools/asset-convert/` 与 `docs/data/PIPELINE.md` 为准；schema 变化先对照该处再报告 `spec-steward` / `content-owner`。`WarsmashModEngine`（AGPLv3）是 Java 模拟器，**不参与 dev-setup 导出链路**，仅作 JASS / 玩法 / 格式语义参考、禁止复制代码；其余只读、导出数据不入库（ADR 0001）。
 - 工具脚本一律用跨平台的 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断（见 CODEBUDDY.md 第 2 节）。
 
 ## 禁止

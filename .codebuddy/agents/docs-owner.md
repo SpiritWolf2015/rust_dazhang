@@ -29,7 +29,7 @@ tools:
 - 不得在文档中写入本机真实路径作为仓库内固定值（路径只出现在 `config.toml.example` 的示例与 `UPSTREAM.md` 的本机记录中）。
 - 不得把"已实现"写成"已验证跨平台"；不得声称 JASS / 自定义地图在第一版范围内。
 - **git 提交信息描述一律中文**（Conventional Commits 英文 type 前缀保留）。
-- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
+- **参考项目矩阵维护（强制）**：`docs/references/UPSTREAM.md` 的「按任务类型的强制参考矩阵」由本 agent 维护；参考项目固定提交升级、新增任务类型或参考路径时 MUST 同步该矩阵、`CODEBUDDY.md` §9 与 `reference-researcher` 定义，并在 `NOTICE.md` 登记。不得只在某次会话里口头引用参考项目。四个参考项目只读、禁止复制代码；`WarsmashModEngine`（AGPLv3）仅借鉴语义。
 - 工具脚本一律用跨平台的 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断（见 CODEBUDDY.md 第 2 节）。
 
 ## 禁止

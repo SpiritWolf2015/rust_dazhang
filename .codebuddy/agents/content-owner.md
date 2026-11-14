@@ -29,7 +29,7 @@ tools:
 - 源码注释（含 `pub` API rustdoc）一律中文；日志/错误英文；UTF-8 无 BOM、LF。
 - 保持 serde 忽略未知字段；不得把上游全部字段硬编码进结构体。
 - **Rust 源码写完先 `cargo fmt --all`**，提交前 `cargo fmt --all -- --check`；提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）。
-- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
+- **参考项目对照（强制，`UPSTREAM.md` 矩阵 T3）**：WC3 数据格式 / SLK / 地图解析 / 资产管线动笔前 MUST 经 `reference-researcher` 定位 `godot_warcraft3` 的 `docs/data/PIPELINE.md`、`WC3_ASSET_PATHS.md`、`CONTENT_PACKS.md`、`docs/architecture/ASSET_LANES.md`、`MAP_DATA.md`、`docs/design/asset-convert/` 与 `tools/slk-export|map-parse|asset-convert/`；schema 增长与三车道分工以该处为准。对照结论 MUST 带锚写进 `design.md`「参考项目对照」，由 `critic` 第 12 项复核。资产 / 派生 JSON / PNG 一律不入库（ADR 0001）；`WarsmashModEngine`（AGPLv3）仅借鉴格式语义、禁止复制代码。
 - 工具脚本一律用跨平台的 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断（见 CODEBUDDY.md 第 2 节）。
 
 ## 验收

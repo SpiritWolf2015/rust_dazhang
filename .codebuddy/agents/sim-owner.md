@@ -33,7 +33,7 @@ tools:
 - 不得引入外部依赖（`w3-core` 保持零依赖）；不得依赖 `w3-content` / `render` / `ui` / `audio` / `net`。
 - 不得引入 `HashMap` 迭代顺序、墙钟、异步完成顺序影响规则。
 - **Rust 源码写完先 `cargo fmt --all`**，提交前 `cargo fmt --all -- --check`；提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）。
-- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；`WarsmashModEngine` 为 AGPLv3，仅作 JASS / 玩法 / 格式语义参考，禁止复制代码。
+- **参考项目对照（强制，`UPSTREAM.md` 矩阵 T1 / T2）**：确定性内核 / 状态哈希 / 命令排序（T1）与移动寻路 / 帧阶段（T2）动笔前 MUST 经 `reference-researcher` 定位 `vera20k` 的 `src/net/`、`services/relay-protocol/`、`docs/`，以及 `rts_kernel_cs` 的 `docs/FRAMEWORK.md`、`docs/MOVEMENT.md`、`docs/NAVIGATION.md`；`rts_kernel_cs` 的 `double` 路线与「不承诺跨平台确定性」**不采用**（ADR 0002）。对照结论 MUST 带 `file:line` 锚写进 `design.md`「参考项目对照」小节，由 `critic` 第 12 项复核。四个参考项目只读、禁止复制代码；`WarsmashModEngine`（AGPLv3）仅借鉴语义。
 - 工具脚本一律用跨平台的 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断（见 CODEBUDDY.md 第 2 节）。
 
 ## 验收（改动必跑）

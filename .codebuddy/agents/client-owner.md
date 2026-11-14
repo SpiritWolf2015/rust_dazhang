@@ -41,7 +41,7 @@ tools:
 - 显式失败不静默降级：字体 / 资源加载失败以英文日志明确报告并降级为不绘制对应元素；命令提交失败显式返回错误。
 - git 提交信息描述一律中文（Conventional Commits 英文 type 前缀保留），一个改动一个 commit。
 - 工具脚本一律用跨平台 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`。
-- 只读参考项目共四个（见 CODEBUDDY.md 第 1 / 9 节、UPSTREAM.md）；禁止复制参考项目代码。
+- **参考项目对照（强制，`UPSTREAM.md` 矩阵 T2 / T5）**：移动寻路（T2）与场景装配 / 相机 / HUD / Melee 初始化 / 3D 呈现（T5）动笔前 MUST 经 `reference-researcher` 定位 `godot_warcraft3` 的 `packages/{foundation,content,gameplay,map,rts_content}/`、`apps/game/`、`docs/design/game/{ROADMAP,GAMEPLAY_VERTICAL,HUD,COMBAT_SYSTEM,UNIT_AI}.md`、`docs/roadmap/NEXT.md`，以及 `rts_kernel_cs` 的 `docs/MOVEMENT.md` / `NAVIGATION.md`；呈现语义可对照 `WarsmashModEngine` 的 `fdfparser/` 与 `core/`（**AGPLv3，仅借鉴语义、禁止复制代码**）。`godot_warcraft3` 的原创三族单位名 / 数值不是经典复刻，只借结构与批次判据。结论 MUST 带锚写进 `design.md`「参考项目对照」，由 `critic` 第 12 项复核。
 
 ## 验收（改动必跑）
 

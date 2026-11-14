@@ -134,7 +134,7 @@
 - [x] 14.8 真实资产 e2e 升级到真 GPU 管线：`real_gltf_models_render_on_screen_not_black` 改传 `Some(&map.textures)` + 注入 layers；新增 `gpu_texture_sampling_changes_pixels_vs_placeholder`（真实贴图 vs 占位白纹理 A/B 像素差，证明 GPU 逐像素采样生效）；验证：`real_map_e2e` 9 项全绿无 skip
 - [x] 14.9 全量门禁与合规；验证：`cargo test --workspace` 全绿、`cargo fmt --all -- --check` 通过、`python tools/verify_all.py` → `Verification OK`（编码 / rustfmt / 测试 / openspec validate / 资产扫描）、`python tools/check_encoding.py` 通过、`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍为 3、**零新增 Cargo 依赖**、`config.toml.example` 同步新增 `water_texture` 键、`w3-render::lib` 导出 `TerrainTextureLayers`
 - [ ] 14.10 人工 GPU 冒烟（人工项）：用户在有 GPU / 显示设备桌面 `cargo run -p w3-client --example melee`，按 `smoke-checklist.md` 逐项验收真窗口观感（清晰地表贴图 / 立体绿树 / 波纹水面 / 可辨建筑与单位 / 完整 HUD / 打完一局）；离屏自证不覆盖真窗口 egui overlay，清单未勾前不归档
-- [ ] 14.11 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台门禁 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）
+- [x] 14.11 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台门禁 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）—— **2026-11-14 复审完成**：全清单 11 项 blocker 0（见 `decision-memo.md` 待确认项）；各阶段代码已本地中文 commit，收尾登记 `aedd796` 待人工 push；CI 双平台待人工确认、`/opsx:archive` 未执行（人工清单未勾前不得归档），不冒充全部完成。
 
 > **阶段 4 诚实边界（如实登记，不冒充完成）**：单管线 `@interpolate(flat)` 使跨水陆三角形取 provoking 顶点层，水岸呈**格点级锯齿**（诊断确认非几何洞；参考项目用逐像素水 mask / 独立 shoreline shader 平滑，本仓库未做），可见水裕量已显著减少但不冒充完全消除；`cull_mode: None` 双面渲染属正确性优先的性能权衡；逐帧骨骼动画蒙皮（bind pose 静态）、运行时新实体模型缺键回退（D9）、中文上屏、真窗口 HUD overlay 最终观感仍留后续 / 人工验收。离屏 3D 链路画面已达标并自证，但**不覆盖真窗口最终观感**（第 6.3 / 8 组人工项未勾前不归档）。
 
@@ -148,7 +148,7 @@
 - [x] 15.4 针对性 CPU 回归：`setup.rs` 3 项（主城对齐真实起始空地 / 农民簇拉开在前方 / 两侧布局对称确定性）、`camera.rs` 1 项（开局 zoom 在新上限内不被 clamp、越界仍 clamp）全绿；`cargo test --workspace` 全绿
 - [x] 15.5 文档同步：`design.md` D11、`proposal.md` 阶段 5、`smoke-checklist.md` B 组口径 + 新增 B9 开局可玩性门槛项（本轮核心验收项）、本组任务记录
 - [ ] 15.6 人工 GPU 冒烟（人工项，**门槛**）：用户 `cargo run -p w3-client --example melee`，先按 `smoke-checklist.md` **B9** 逐项确认「打开就能找到主基地、框选农民、正常开局」，通过后再按 C/D/E 组玩完一局；离屏自证不覆盖真窗口 egui overlay，B9 未通过即反馈、不勉强往下勾；清单未勾前不归档
-- [ ] 15.7 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）
+- [x] 15.7 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）—— **2026-11-14 复审完成**：全清单 11 项 blocker 0（见 `decision-memo.md` 待确认项）；各阶段代码已本地中文 commit，收尾登记 `aedd796` 待人工 push；CI 双平台待人工确认、`/opsx:archive` 未执行（人工清单未勾前不得归档），不冒充全部完成。
 
 > **阶段 5 诚实边界（如实登记）**：默认开局参数已用真窗口同参 `render_probe` 离屏逐版自证（主城完整居中、农民分开、金矿/树林/水面环绕、无全图虚空），但**不覆盖真窗口 egui overlay / HUD 与最终观感**；真窗口首帧 `step` 前极短空窗理论存在（稳定运行后立即可见，用户截图 HUD 已能选中 Peasant #2 佐证）。AI 侧陆块窄且多树、开局不可见（相距约 155），不影响本地可玩性（胜负靠命令脚本 / 实体 ID 结算）。`render_probe` 输出 PNG 留 gitignored `target/`、不入库。水岸格点级锯齿（D10）、树 billboard 斜俯视偏细、运行时新实体模型缺键回退（D9）、中文上屏仍留后续 / 人工验收。
 
@@ -163,7 +163,7 @@
 - [x] 16.5 针对性 CPU 回归：`w3-render` 2 项（`entity_screen_boxes` 逐顶点等于模型投影 AABB / 确定性 + 死亡实体跳过）、`w3-client` 3 项（注入后 box 中心精确命中 + box 外点不命中 + 旧锚点≠新中心；W1 缺 id 不回退巨框且远处拖框不误选；W3 `HudModel::collect` 端到端 bounds 等于注入 box 的 to_logical）全绿；`cargo test --workspace` / `verify_all.py` 全绿
 - [x] 16.6 文档同步：`design.md` D12、`proposal.md` 阶段 6、`smoke-checklist.md` 新增 B10 框选贴合判据、本组任务记录
 - [ ] 16.7 人工 GPU 冒烟（人工项，**门槛**）：用户 `cargo run -p w3-client --example melee`，按 `smoke-checklist.md` **B9 + B10** 确认「打开能找到基地、框住农民能选中、选中框贴合模型」，通过后再玩完一局；离屏自证不覆盖真窗口 egui overlay，未通过即反馈、不勉强往下勾；清单未勾前不归档
-- [ ] 16.8 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）
+- [x] 16.8 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）—— **2026-11-14 复审完成**：全清单 11 项 blocker 0（见 `decision-memo.md` 待确认项）；各阶段代码已本地中文 commit，收尾登记 `aedd796` 待人工 push；CI 双平台待人工确认、`/opsx:archive` 未执行（人工清单未勾前不得归档），不冒充全部完成。
 
 > **阶段 6 诚实边界（如实登记）**：真实模型放大 4× 后建筑 box 较大（主城约 459×612px、金矿约 285×294px），选中框描边框住完整建筑（含塔尖 / 脚下 `gutz` 碎片）是「贴合真实所见」的固有结果、非错位；农民 box 彼此分开、不会连选。`entity_screen_boxes` 每帧重新投影数万模型顶点、未做缓存（当前规模流畅，实体数大增后可优化，属性能非本轮范围）。**W1**：`apply_input` / `hud_model` 相对 `driver.view()` 允许一帧滞后，首帧 `consume` 前 / 运行时新实体生成帧 / 相机背后实体缺 id 时收敛为 `PICK_RADIUS` 紧致 box、不回退旧近全屏巨框（短窗口点选精度略降，下一帧即有真实 box），`entity_screen_box_missing_id_never_falls_back_to_giant_box` 覆盖；用户第五次验收截图 `Tick 5` 表明已渲染多帧、开局静止农民有真实 box，本轮修复对该场景有效。离屏绿框 / 红点叠加图验证的是命中几何与 HUD 锚点，不覆盖真窗口 egui overlay 实际绘制与最终观感，最终仍须人工验收。首帧空窗（D11）、脚下红白 `gutz` 碎片（D11）、水岸锯齿 / 树 billboard（D10）、运行时新实体缺键回退（D9）、中文上屏仍留后续 / 人工验收。
 

@@ -236,6 +236,27 @@ def spec_gate_check() -> bool:
     return True
 
 
+def fingerprint_cli(change_name: str) -> int:
+    """只读输出指定 active change 的四件套指纹；失败以英文结构化信息报错。"""
+    if change_name not in active_change_names():
+        print(f"problem=unknown change change={change_name}", file=sys.stderr)
+        return 1
+    change_dir = CHANGES_DIR / change_name
+    missing = [
+        name
+        for name in ("proposal.md", "design.md", "tasks.md")
+        if not (change_dir / name).is_file()
+    ]
+    if missing:
+        print(
+            f"problem=missing artifacts change={change_name} missing={','.join(missing)}",
+            file=sys.stderr,
+        )
+        return 1
+    print(spec_artifact_fingerprint(change_dir))
+    return 0
+
+
 def main() -> int:
     ok = True
     ok &= run("encoding (UTF-8 no BOM, LF)", [sys.executable, "tools/check_encoding.py"])
@@ -257,4 +278,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    args = sys.argv[1:]
+    if args and args[0] == "--fingerprint":
+        if len(args) != 2:
+            print("problem=bad arguments reason=missing change name", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(fingerprint_cli(args[1]))
+    if args:
+        print(f"problem=bad arguments arg={args[0]}", file=sys.stderr)
+        sys.exit(1)
     sys.exit(main())

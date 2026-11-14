@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""统一门禁：编码、格式、测试、OpenSpec 校验与资产扫描。
+"""统一门禁：编码、格式、测试、OpenSpec 校验、决策纪要与资产扫描。
 
 本地与 CI 共用同一入口：python tools/verify_all.py
 所有输出为英文（日志/错误规则）。任一步失败返回非零退出码。
@@ -23,6 +23,10 @@ BANNED_SUFFIXES = {
 }
 # 禁止提交的导出目录名（导出数据只允许留在本机）。
 BANNED_DIRS = {"slk-exported", "map-parsed", "asset-converted", "assets-export"}
+# 决策纪要必填小节（按标题前缀匹配，允许标题带括号说明）。
+REQUIRED_MEMO_SECTIONS = ("承重约束", "拍板决策", "待确认项")
+# 小改动可显式省略三类小节，但必须给出理由。
+MEMO_OMISSION_SECTION = "省略说明"
 
 
 def run(label: str, command: list[str]) -> bool:
@@ -82,6 +86,70 @@ def asset_scan() -> bool:
     return True
 
 
+def memo_sections(text: str) -> dict[str, str]:
+    """按 `## ` 标题切分决策纪要；跳过围栏代码块，返回标题到正文的映射。"""
+    sections: dict[str, str] = {}
+    current: str | None = None
+    lines: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.startswith("## "):
+            if current is not None:
+                sections[current] = "\n".join(lines).strip()
+            current = line[3:].strip()
+            lines = []
+        elif current is not None:
+            lines.append(line)
+    if current is not None:
+        sections[current] = "\n".join(lines).strip()
+    return sections
+
+
+def memo_section_body(sections: dict[str, str], prefix: str) -> str | None:
+    """按标题前缀取小节正文；标题不存在返回 None，正文为空返回空串。"""
+    for title, body in sections.items():
+        if title.startswith(prefix):
+            return body
+    return None
+
+
+def decision_memo_check() -> bool:
+    """检查每个已写 proposal 的 active change 是否带有效决策纪要。"""
+    problems: list[str] = []
+    for name in active_change_names():
+        change_dir = CHANGES_DIR / name
+        if not (change_dir / "proposal.md").is_file():
+            continue
+        memo = change_dir / "decision-memo.md"
+        if not memo.is_file():
+            problems.append(f"{name}: decision-memo.md missing")
+            continue
+        sections = memo_sections(memo.read_text(encoding="utf-8"))
+        omission = memo_section_body(sections, MEMO_OMISSION_SECTION)
+        if omission is not None:
+            if not omission:
+                problems.append(f"{name}: omission reason is empty")
+            continue
+        for prefix in REQUIRED_MEMO_SECTIONS:
+            body = memo_section_body(sections, prefix)
+            if body is None:
+                problems.append(f"{name}: missing section '{prefix}'")
+            elif not body:
+                problems.append(f"{name}: section '{prefix}' is empty")
+    if problems:
+        print("[fail] decision memo:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return False
+    print("[check] decision memo OK")
+    return True
+
+
 def main() -> int:
     ok = True
     ok &= run("encoding (UTF-8 no BOM, LF)", [sys.executable, "tools/check_encoding.py"])
@@ -92,6 +160,7 @@ def main() -> int:
         ok &= run(f"openspec validate {name}", openspec_command(name))
 
     ok &= asset_scan()
+    ok &= decision_memo_check()
 
     if not ok:
         print("Verification FAILED", file=sys.stderr)

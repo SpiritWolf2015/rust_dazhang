@@ -69,4 +69,4 @@
 - 已提取为 `openspec/decision-memo.template.md`，并写入 `CODEBUDDY.md` §8、`openspec/config.yaml` 的 `rules.proposal`、`spec-steward.md` 职责。
 - 本实例证明的增量：`design.md` 按决策分散记录时看不见「前提翻转」（R7），单列承重约束与证据锚后才暴露；这正是工作流要固化的部分。
 - **仍未验证**：「拷问结构性前置于成文」——本实例是回填式，须在下一个新 change 从提案阶段从零试点。
-- **仍为提示层约束**：`openspec validate` / `verify_all.py` 当前都不机械校验 `decision-memo.md` 是否存在与小节非空；如需机械门禁须另开一步。
+- **机械门禁已落地**：`tools/verify_all.py` 的 `decision_memo_check()` 校验纪要存在 + 三个必填小节非空（或带理由的 `## 省略说明`）；证据锚可核验性仍靠 `critic` 人工核对，不由脚本判定。

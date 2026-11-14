@@ -1580,7 +1580,7 @@ mod tests {
         let height = 720.0f32;
         let projection = ScreenProjection::new(&camera, &mesh, width, height);
         let boxes = scene.entity_screen_boxes(&mesh, &projection);
-        let (min, max) = boxes.get(&1).expect("实体 1 应有屏幕包围盒");
+        let (min, max) = boxes.get(&1).expect("entity 1 should have a screen box");
 
         // ① box 有限、落在视口内、尺寸合理（非旧 24 单位四面体的近全屏巨框）。
         assert!(min.iter().chain(max.iter()).all(|v| v.is_finite()));

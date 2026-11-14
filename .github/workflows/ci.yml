@@ -1,5 +1,7 @@
-# 统一门禁流水线：编码、格式、测试、OpenSpec 校验、资产扫描。
+# 统一门禁流水线：编码、源码约定、格式、测试、OpenSpec 校验、资产扫描。
 # Windows / Linux 双平台跑同一 python 入口，验证工具链跨平台。
+# conventions job 为硬规则独立门禁（中文注释 / 英文日志 / UTF-8 无 BOM / 末尾换行 /
+# 行尾空格 / 禁散落 println! / 工具脚本跨平台），不依赖 Rust 工具链、失败快且结果可见。
 # run 只写单行命令、不含 shell 语法；平台差异由 tools/verify_all.py 内部（os.name）处理。
 # 若托管平台不使用 GitHub Actions，把 python tools/verify_all.py 配到其 CI 即可。
 name: CI
@@ -9,6 +11,24 @@ on:
   pull_request:
 
 jobs:
+  # 硬规则独立门禁：不依赖 Rust / protoc / OpenSpec，快速失败且结果单独可见。
+  conventions:
+    name: Source conventions (encoding / comments / logs / scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check encoding baseline
+        run: python tools/check_encoding.py
+
+      - name: Check source conventions
+        run: python tools/check_source_conventions.py
+
   verify:
     strategy:
       fail-fast: false

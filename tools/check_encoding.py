@@ -74,6 +74,13 @@ def main() -> int:
         if b"\r\n" in raw:
             problems.append(f"{path}: CRLF line ending detected")
 
+        if raw and not raw.endswith(b"\n"):
+            problems.append(f"{path}: missing final newline")
+
+        for lineno, line in enumerate(raw.split(b"\n"), 1):
+            if line.rstrip(b" \t") != line:
+                problems.append(f"{path}:{lineno}: trailing whitespace")
+
         try:
             raw.decode("utf-8")
         except UnicodeDecodeError as error:

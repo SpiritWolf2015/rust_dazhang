@@ -260,6 +260,10 @@ def fingerprint_cli(change_name: str) -> int:
 def main() -> int:
     ok = True
     ok &= run("encoding (UTF-8 no BOM, LF)", [sys.executable, "tools/check_encoding.py"])
+    ok &= run(
+        "source conventions (comments / logs / scripts)",
+        [sys.executable, "tools/check_source_conventions.py"],
+    )
     ok &= run("cargo fmt", ["cargo", "fmt", "--all", "--", "--check"])
     ok &= run("cargo test", ["cargo", "test", "--workspace"])
 

@@ -1,6 +1,6 @@
 # 决策纪要模板
 
-> 用法：制作 change 时在 `openspec/changes/<name>/decision-memo.md` 复制下方骨架并填写，与 `proposal.md` 同步产出。规则见 `CODEBUDDY.md` §8 与 `openspec/config.yaml` 的 `rules.proposal`；首个实例见 `openspec/changes/melee-playable-loop/decision-memo.md`。
+> 用法：制作 change 时在 `openspec/changes/<name>/decision-memo.md` 复制下方骨架并填写，与 `proposal.md` 同步产出。规则见 `CODEBUDDY.md` §8 / §9 与 `openspec/config.yaml` 的 `rules.proposal`；首个实例见 `openspec/changes/melee-playable-loop/decision-memo.md`。
 > 合规边界：纯文档，不进入 FNV-1a 状态哈希、不进入 `SNAPSHOT_VERSION` 快照、不含任何资产或本机绝对路径（ADR 0001 / ADR 0002 / CODEBUDDY.md §6）。
 
 ## 格式约定
@@ -10,7 +10,8 @@
 3. **不拿沉默当授权**：用户未明确表态 = 未拍板；「采纳推荐」须有明确记录。
 4. **只记三类**：拍板决策（含被否备选与理由）、承重约束（支撑多个决策的前提，逐条带锚）、待确认项。**不写实现细节、不复述 `design.md`、不做流水账**。
 5. **停止条件**：承重约束逐条站稳（有锚）且待确认项清空或显式豁免；不以「问完预设问题 / 问了 N 轮」当收敛。
-6. **可裁剪**：目标与方向已清楚的小改动可省略，但 MUST 在文件内写「## 省略说明」并给出理由；范围 / 方案澄清、事实核对、决定确认三件事不可省。
+6. **可裁剪**：目标与方向已清楚的小改动可省略，但 MUST 在文件内写「## 省略说明」并给出理由；范围 / 方案澄清、事实核对、决定确认三件事不可省。写「## 省略说明」的 change 同时豁免规格门。
+7. **规格门记录**：`## 规格门` 小节 MUST 写 `status:` 与相应字段。`approved` 须带 `fingerprint:`（`tools/verify_all.py` 计算的四件套 sha256）、`approved_by:`、`date:`；`waived`（小改动）或 `legacy-exempt`（规则生效前已开工）须带非空 `reason:`。指纹失配即视为规格已解锁，MUST 重走规格门。批准由人拍板，字段由 `spec-steward` 在人确认后回填；脚本只校验状态与指纹，不验证批准真伪。
 
 ## 骨架
 
@@ -43,6 +44,14 @@
 1. 承重约束逐条仍有证据锚、无一条被本轮改动证伪。
 2. 待确认项已清空或显式豁免。
 3. 不以「预设问题问完」「问了 N 轮」当收敛。
+
+## 规格门
+
+- status: approved
+- fingerprint: <tools/verify_all.py 输出的 64 位 sha256>
+- approved_by: <拍板人>
+- date: <YYYY-MM-DD>
+- reason: <waived / legacy-exempt 时必填；approved 时写批准依据或留空>
 ```
 
-> 诚实边界：本模板提供的是**结构性改善，不是机械保证**。`tools/verify_all.py` 的 `decision_memo_check()` 机械校验「纪要存在 + 三个必填小节非空（或有非空理由的 `## 省略说明`）」；它不能证明发生过对抗拷问，也不校验证据锚是否可核验——后者靠 `critic` 人工核对。
+> 诚实边界：本模板提供的是**结构性改善，不是机械保证**。`tools/verify_all.py` 的 `decision_memo_check()` 校验「纪要存在 + 三个必填小节非空（或有非空理由的 `## 省略说明`）」，`spec_gate_check()` 校验「规格门状态 + 四件套指纹未失配」；两者都不能证明发生过对抗拷问，也不校验证据锚是否可核验或批准是否真由人拍板——后者靠 `critic` 报告与人工核对。`spec_gate_check()` 会把 `tasks.md` 的复选框翻转归一化，正常实施打勾不触发解锁。

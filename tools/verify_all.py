@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +29,9 @@ BANNED_DIRS = {"slk-exported", "map-parsed", "asset-converted", "assets-export"}
 REQUIRED_MEMO_SECTIONS = ("承重约束", "拍板决策", "待确认项")
 # 小改动可显式省略三类小节，但必须给出理由。
 MEMO_OMISSION_SECTION = "省略说明"
+# 规格门小节；规则（cf18151）生效前已开工的 change 不追溯，不得新增。
+SPEC_GATE_SECTION = "规格门"
+LEGACY_SPEC_GATE_CHANGES = {"melee-playable-loop"}
 
 
 def run(label: str, command: list[str]) -> bool:
@@ -150,6 +155,87 @@ def decision_memo_check() -> bool:
     return True
 
 
+def spec_artifact_fingerprint(change_dir: Path) -> str:
+    """计算四件套内容指纹，用于判定「规格锁定」是否被解除。
+
+    tasks.md 的复选框翻转属实施进度（apply 每完成一项就勾），归一化后
+    不触发解锁；其余内容改动与其余三份文件改动均会改变指纹。
+    """
+    digest = hashlib.sha256()
+    paths = [change_dir / "proposal.md", change_dir / "design.md"]
+    specs_dir = change_dir / "specs"
+    if specs_dir.is_dir():
+        paths += sorted(p for p in specs_dir.rglob("*.md") if p.is_file())
+    paths.append(change_dir / "tasks.md")
+    for path in paths:
+        digest.update(path.relative_to(change_dir).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        data = path.read_bytes() if path.is_file() else b""
+        if path.name == "tasks.md":
+            data = re.sub(rb"(?m)^(\s*- )\[[ xX]\]", rb"\1[ ]", data)
+        digest.update(data)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def gate_field(body: str, key: str) -> str | None:
+    """从规格门小节正文读取 `key: value` 字段，取不到返回 None。"""
+    pattern = rf"(?m)^\s*[-*]?\s*{re.escape(key)}\s*[:：]\s*(.+?)\s*$"
+    match = re.search(pattern, body)
+    if match is None:
+        return None
+    return match.group(1).strip().strip("`").strip()
+
+
+def spec_gate_check() -> bool:
+    """检查每个已写 proposal 的 active change 是否已过规格门且规格仍锁定。"""
+    problems: list[str] = []
+    for name in active_change_names():
+        change_dir = CHANGES_DIR / name
+        if not (change_dir / "proposal.md").is_file():
+            continue
+        memo = change_dir / "decision-memo.md"
+        if not memo.is_file():
+            continue  # 缺失已由 decision_memo_check 报告，不重复
+        sections = memo_sections(memo.read_text(encoding="utf-8"))
+        if memo_section_body(sections, MEMO_OMISSION_SECTION) is not None:
+            continue  # 省略说明同时豁免规格门，理由非空由 decision_memo_check 校验
+        gate = memo_section_body(sections, SPEC_GATE_SECTION)
+        if gate is None:
+            if name not in LEGACY_SPEC_GATE_CHANGES:
+                problems.append(f"{name}: missing section '{SPEC_GATE_SECTION}'")
+            continue
+        status = gate_field(gate, "status")
+        reason = gate_field(gate, "reason")
+        if status == "legacy-exempt":
+            if name not in LEGACY_SPEC_GATE_CHANGES:
+                problems.append(f"{name}: legacy-exempt is not allowed")
+            elif not reason:
+                problems.append(f"{name}: legacy-exempt reason is empty")
+            continue
+        if status == "waived":
+            if not reason:
+                problems.append(f"{name}: waived reason is empty")
+            continue
+        if status != "approved":
+            problems.append(f"{name}: invalid spec gate status {status!r}")
+            continue
+        recorded = gate_field(gate, "fingerprint")
+        current = spec_artifact_fingerprint(change_dir)
+        if recorded != current:
+            problems.append(
+                f"{name}: spec gate fingerprint mismatch "
+                f"(recorded={recorded}, current={current}; re-run spec gate)"
+            )
+    if problems:
+        print("[fail] spec gate:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return False
+    print("[check] spec gate OK")
+    return True
+
+
 def main() -> int:
     ok = True
     ok &= run("encoding (UTF-8 no BOM, LF)", [sys.executable, "tools/check_encoding.py"])
@@ -161,6 +247,7 @@ def main() -> int:
 
     ok &= asset_scan()
     ok &= decision_memo_check()
+    ok &= spec_gate_check()
 
     if not ok:
         print("Verification FAILED", file=sys.stderr)

@@ -48,6 +48,7 @@
 
 - `SimFixed` Q47.16 整数数学；整数帧、30 Hz 冻结；命令按 `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；稳定 `EntityId` 顺序；FNV-1a 状态哈希；快照（`SNAPSHOT_VERSION`，当前 3）是帧提交后的完整状态，头部含 `defs_hash` / `content_hash`。
 - 任何改动 `crates/w3-core/` 的实现，必须通过 `cargo test -p w3-core --test determinism`；新增权威状态字段必须**同时**进入状态哈希与快照。
+- **回归测试反向验证（改坏验红）**：涉及 `w3-core` 权威状态、帧序、命令排序、状态哈希或快照的新增 / 修改回归测试，MUST 证明该测试在**缺陷态**会失败、修复后通过——仅「全绿」不构成验证。证据形态二选一：① 测试内构造反例并加元断言防退化（让旧实现必失败、新实现必通过）；② 缺陷态 / 修复态 A-B 对照、先写失败测试再写实现、或刻意改坏被测代码验红，保留命令输出。无法构造缺陷态的 MUST 在 `design.md` 登记理由与替代证据；由 `critic` 清单第 11 项③ 复核。
 - `w3-core` 不得依赖 `w3-content` / `render` / `ui` / `audio` / `net`；表现层不得反写模拟状态；`w3-content` 的原始 `f64` 坐标是冻结输入，不进快照与哈希。
 - 跨平台确定性已在 Windows 与 Debian 12 x86_64 / rustc 1.99.1 通过离线 golden hash 逐字节比对验证（见 ADR 0002 复核记录与 `openspec/specs/cross-platform-determinism/spec.md`）；macOS、其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项，不得声称全平台达成。
 

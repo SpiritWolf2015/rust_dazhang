@@ -42,19 +42,25 @@ context: |
   判定；正确性 / 确定性优先。硬红线：确定性契约（ADR 0002）、唯一状态所有者、
   w3-core 不反向依赖上层与冻结输入边界、显式失败不静默降级、只读参考不复制代码、
   rustfmt / 跨平台脚本 / 中文提交信息。
+  WC3 Melee 业务规则基线与 1.0 范围以 docs/references/WC3-MELEE-RULES.md 为单一权威；
+  玩法实现 / review / 单测 MUST 引用其规则编号 R-x.y；数值以本机导出 SLK 为准、不入库。
 
 rules:
   proposal:
     - 引用相关 ADR 编号并标明路线图阶段（P0-P5）。
     - 声明对资产/法律边界与确定性的影响。
+    - 玩法 change MUST 在 Why 引用 `docs/references/WC3-MELEE-RULES.md` 的规则编号 `R-x.y` 与 1.0 范围 S1–S6；不做范围 N1–N6 不得纳入。
     - 同步产出 `decision-memo.md`（模板 `openspec/decision-memo.template.md`）：只记拍板决策（含被否备选与理由）、承重约束（逐条带 `file:line` / commit / 命令输出证据锚）、待确认项；无证据项 MUST NOT 写成「用户已确认」。小改动须在文件内显式声明省略理由。
   specs:
     - 使用 SHALL/MUST；每条 requirement 至少一个 #### Scenario（WHEN/THEN）。
     - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 3）。
+    - 玩法 requirement / Scenario MUST 引用 `WC3-MELEE-RULES.md` 的规则编号 `R-x.y` 并给出可执行验证；无规则依据的玩法需求回到人拍板，不臆造。
+    - 特别校验 R1 可移动性：金矿 / 树木 / 建筑 / 资源点等不可移动实体 MUST NOT 出现在 `Move` 命令的 Scenario 中；框选含建筑时 MUST 只为可移动单位生成 `Move`。
   design:
     - 每个决策都要关联 ADR 0002，并说明对跨平台确定性的影响。
     - 每个决策列出考虑过的备选方案。
     - 对照本文件 context 的架构设计原则，说明对确定性契约与分层依赖的影响。
+    - 玩法决策 MUST 声明所依据的业务规则编号 `R-x.y` 与核实状态（[已核] / [待核] / [取舍]）；`[待核]` 数值不得冻结进权威定义。
     - 凡涉及 `docs/references/UPSTREAM.md`「按任务类型的强制参考矩阵」T1–T6 的 change，MUST 有「## 参考项目对照」小节：逐条列本次参考的项目 / 路径 / 借鉴了什么 / 明确不借鉴什么（含许可证理由）/ 可核验锚；参考项目只读、不复制代码（ADR 0001），`WarsmashModEngine` 为 AGPLv3 仅借鉴语义。参考缺口如实登记并回到人拍板，不臆造。
   tasks:
     - 每条任务必须是复选框 `- [ ] X.Y ...`。

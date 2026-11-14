@@ -3,6 +3,8 @@
 > 制定日期：2026-11-14。用户想法「把人族和兽族做完」。
 > 本文是**制作进度水平安排**（跨多个 OpenSpec change 的路线图），不是单个 change 的规格；正式立项时把各阶段转成独立 change 的 proposal / specs / design / tasks + `decision-memo.md`，按 `CODEBUDDY.md` §9 走规格门。
 > 依据：`godot_warcraft3`（MIT）与 `WarsmashModEngine`（AGPLv3）均为**只读参考**，路径与许可证见 `docs/references/UPSTREAM.md`；不复制任何代码，资产零入库（ADR 0001）。
+>
+> **范围上位说明（2026-11-14 用户后续拍板 1.0）**：1.0 最终范围与业务规则以 `docs/references/WC3-MELEE-RULES.md` §0 为准——只做**局域网联机对战 + 回放**，覆盖**4 个种族 / 道具 / 野怪 / 中立建筑**，**不做单机对战 / 地图编辑器 / RPG 自定义地图 / 剧情战役**。本文 P8 的「两族」「玩家选族 vs AI 对手」「单机打完一局」是**过程性制作安排**，与 1.0 范围的两处张力（4 族范围、单机 AI）已如实登记在 `WC3-MELEE-RULES.md` §0.3 T1 / T2，**待用户拍板**再对齐；本文不擅自改写 1.0 范围，各阶段玩法 change MUST 同时引用业务规则 `R-x.y`。
 
 ---
 

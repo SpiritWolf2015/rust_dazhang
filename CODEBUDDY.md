@@ -5,7 +5,8 @@
 ## 1. 项目速览
 
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
-- 阶段：P0–P6 全部已实施并归档（最新归档 `openspec/changes/archive/2026-11-10-cross-platform-golden-hash/`）；当前 2 个 active OpenSpec change：`gameplay-command-wire-format`（9/54，未实施）、`playable-window-smoke`（0/35，P6 窗口冒烟入口提案，提案中）。主 specs 共 10 个：`3d-rendering`、`content-import`、`cross-platform-determinism`、`deterministic-simulation`、`gameplay-systems`、`linux-platform-backend`、`lockstep-networking`、`pathfinding`、`playable-client`、`unit-orders`。
+- **1.0 版本范围（用户 2026-11-14 拍板）**：只做**局域网联机对战**与**回放录像保存 / 加载**，把**4 个种族、各种道具、地图野怪、中立建筑**功能做完；**不做**单机对战、地图编辑器、RPG 自定义地图、剧情战役。完整范围、规则编号 `R-x.y` 与「为什么决定」的待拍板张力见 `docs/references/WC3-MELEE-RULES.md` §0（业务规则单一权威，玩法实现 / review / 单测 MUST 引用其规则编号）。
+- 阶段：P0–P6 全部已实施并归档；当前 active OpenSpec change 与主 specs 以 `openspec list` / `openspec list --specs` 为准（不在本文件枚举，易过时）。`melee-playable-loop` 已归档（`2026-11-14-melee-playable-loop`），其单机对 AI 能力与 1.0「不做单机对战」的张力见 `WC3-MELEE-RULES.md` §0.3 T1。
 - 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 - 架构设计原则（SRP / OCP / LSP / DIP / ISP / LoD / CARP 与本项目硬红线）已内联到 `openspec/config.yaml` 的 context 与 `critic.md` 审查清单；本文件与 ADR 为单一权威，不另立独立原则文档。
 
@@ -107,6 +108,8 @@
 - **Rust 源码格式化门禁（所有写 Rust 的 subagent）**：写代码时即按 `rustfmt` 默认风格组织；写完后先 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`；`critic` 在提交前 review MUST 复跑该校验，不通过不得提交。提交信息描述按第 3 节用中文。
 - **只读参考项目共四个**（见第 1 节 / `docs/references/UPSTREAM.md`）：按「按任务类型的强制参考矩阵」**融入工作流**——凡 T1–T6 命中的 change MUST 经 `reference-researcher` 出对照报告、MUST 在 `design.md` 落「## 参考项目对照」、由 `critic` 第 12 项复核；`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考，四个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 0001 复核不得引入其代码。
 - **工具脚本跨平台（所有 subagent）**：需要脚本时用 Python（`tools/*.py`）或 Node（`tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断，不维护两套。规则与理由见第 2 节。
+
+- **WC3 业务规则基线（全局，所有 subagent 适用）**：`docs/references/WC3-MELEE-RULES.md` 是玩法实现的**需求源**，含 1.0 范围 S1–S6 与规则编号 `R-x.y`。凡涉及玩法 / 单位 / 建筑 / 资源 / 英雄 / 道具 / 野怪 / 中立建筑 / 联机 / 回放的 change，MUST 在 proposal / design / specs / tasks 引用规则编号；`critic` 按清单第 13 项复核符合性。规则与本机导出数据不符时先标 `[待核]` 并回到人拍板，不静默改规则（见该文 §14）。**特别注意 R1 实体分类与命令可移动性**——金矿 / 树木 / 主基地等建筑与资源点 MUST NOT 响应 `Move`。
 
 ## 10. AI 与人工的责任边界
 

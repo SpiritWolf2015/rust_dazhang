@@ -8,7 +8,7 @@
 - [ ] 1.2 在 `crates/w3-client/src/input.rs` 的群体 `Move` 生成处按 1.1 映射过滤选中集合；建筑 / 金矿 / 树木不生成 `Move` 命令、位置不变；验证：混合集合单测断言只有农民收到 `Move`
 - [ ] 1.3 落点分配保持按稳定 `EntityId` 顺序、只作用于筛后集合，不因过滤改变可移动单位的落点；验证：混合集合与「只含这些农民」的落点逐条相同
 - [ ] 1.4 全为不可移动实体时显式反馈、不生成空命令、不改权威状态与状态哈希；验证：单测断言命令数为 0 且哈希不变
-- [ ] 1.5 **反向验证（改坏验红，`CODEBUDDY.md:51`）**：定义退化过滤器（不过滤、把所有实体都当可移动），证明 1.2 的断言在退化实现下失败、正式实现下通过；验证：退化版必被抓出、正式版必通过，两条证据都在
+- [ ] 1.5 **反向验证（改坏验红，`CODEBUDDY.md:52`）**：定义退化过滤器（不过滤、把所有实体都当可移动），证明 1.2 的断言在退化实现下失败、正式实现下通过；验证：退化版必被抓出、正式版必通过，两条证据都在
 
 ## 2. 定义层种族分段与开局装配（D2）
 
@@ -23,5 +23,5 @@
 - [ ] 3.2 `cargo test -p w3-core --test determinism`（26 项）、`isolation`（3 项）、`cargo test --workspace`；验证：全绿，`git diff -- crates/w3-core/` 为空
 - [ ] 3.3 `openspec validate p8-faction-foundation --strict` 与 `python tools/verify_all.py`（含 `decision memo OK` / `spec gate OK`）；验证：`Verification OK`
 - [ ] 3.4 由只读 `critic` 按全清单（含第 10 项 Spec 与决策纪要质量、第 11 项整体调用路径）复审**本 change 全部 diff**；验证：报告区分 blocker / residual、无空泛结论
-- [ ] 3.5 确认规格门批准记录已在 `/opsx:apply` **之前**回填（`fingerprint:` / `status: approved` / `approved_by:` / `date:`），且 `tasks.md` 打勾不触发解锁（复选框归一化）；验证：`spec_gate_check()` 不报失配。若执行 3.3 时纪要仍 `pending`，按 `CODEBUDDY.md:102` 属流程顺序（应先批准回填再 apply），**不改门禁逻辑、不绕过规格门**
+- [ ] 3.5 确认规格门批准记录已在 `/opsx:apply` **之前**回填（`fingerprint:` / `status: approved` / `approved_by:` / `date:`），且 `tasks.md` 打勾不触发解锁（复选框归一化）；验证：`spec_gate_check()` 不报失配。若执行 3.3 时纪要仍 `pending`，按 `CODEBUDDY.md:106` §9 串联属流程顺序（应先批准回填再 apply），**不改门禁逻辑、不绕过规格门**
 - [ ] 3.6 以中文描述 + Conventional Commits 英文 type 前缀本地 commit；验证：`git log -1` 中文描述首行 ≤ 72 字符；`git push` 由人工执行

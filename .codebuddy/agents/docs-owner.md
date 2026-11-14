@@ -21,6 +21,7 @@ tools:
 - 维护免责声明与 GPLv3 / 商标 / 资产合规表述；新增第三方代码时更新 `NOTICE.md`。
 - 把临时的 Windows 开发坑（PowerShell BOM、`core.autocrlf`、终端编码、路径大小写）汇总成 `docs/development/windows.md`。
 - 文档与 `CODEBUDDY.md` 冲突时，以 `CODEBUDDY.md` 为准并修正文档。
+- 维护 `docs/references/WC3-MELEE-RULES.md` 的结构、来源表与 §15 变更记录（规则内容由玩法 owner 补充，`docs-owner` 把关「活文档」格式、编号不重排与合规边界：不复制原文、不含资产、数值待本机 SLK 核对）。该文是玩法实现的需求源，与 `UPSTREAM.md`（上游参考项目）职责分离。
 
 ## 硬性规则
 

@@ -98,7 +98,8 @@
 | `docs-owner` | README / NOTICE / CONTRIBUTING / UPSTREAM 同步 | 文档文件 |
 
 - 定义文件在 `.codebuddy/agents/`；每个 subagent 声明 own files 与 tools，继承 `permissions.deny`；critic 只读；Agent Team 的 leader 只编排不写。
-- 串联：`/opsx:propose` → `spec-steward` → `/opsx:apply`（对应 owner）→ `critic` → 本地 commit → **人工 push** → CI 在 Windows / Linux 双平台跑 `python tools/verify_all.py` 门禁 → `/opsx:archive`。
+- 串联（**一次规格门 + 一次代码门**）：`/opsx:propose` → `spec-steward` 产出四件套与 `decision-memo.md` → **规格门**：`critic` 按清单第 7 / 10 项与 §8 四件套一致性审规格，按输出格式出报告，**由人拍板**（不拿沉默当授权）；批准记录写进 `decision-memo.md` 的「拍板决策」，此后**规格锁定** → `/opsx:apply`（对应 owner）→ `critic` 代码门（全清单）→ 本地 commit → **人工 push** → CI 在 Windows / Linux 双平台跑 `python tools/verify_all.py` 门禁 → `/opsx:archive`。
+- **规格锁定与重审**：实现期确需改动四件套任一 artifact 即视为解锁，MUST 按 §8 同步回查其余三份，由 `spec-steward` 修订后**重走规格门**（重新出报告、重新由人拍板），不得由实现方自行放行。目标与方向已清楚的小改动、纯文档 / 规则改动可显式声明省略规格门，但人工清单如实标注与 `verify_all.py` 门禁不可省。
 - **Rust 源码格式化门禁（所有写 Rust 的 subagent）**：写代码时即按 `rustfmt` 默认风格组织；写完后先 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`；`critic` 在提交前 review MUST 复跑该校验，不通过不得提交。提交信息描述按第 3 节用中文。
 - **只读参考项目共四个**（见第 1 节 / `docs/references/UPSTREAM.md`）：`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考；四个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。
 - **工具脚本跨平台（所有 subagent）**：需要脚本时用 Python（`tools/*.py`）或 Node（`tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断，不维护两套。规则与理由见第 2 节。

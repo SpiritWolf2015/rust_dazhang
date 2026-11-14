@@ -79,6 +79,8 @@
 - 新建提案：`openspec new change <name>` → `openspec status --change <name> --json` → `openspec instructions <artifact> --change <name> --json` → 写文件 → `openspec validate <name>`；完成后 `/opsx:archive`。
 - 已归档的 P0–P6 在 `openspec/changes/archive/`；主 specs 是 source of truth。
 - **ADR 记"为什么决定"，OpenSpec 记"系统该做什么"**；spec 必须引用 ADR 编号，避免两份规范打架。
+- **决策纪要**：每个 change 在 `proposal` 阶段同步产出 `decision-memo.md`（模板 `openspec/decision-memo.template.md`）。只记三类：拍板决策（含被否备选与理由）、承重约束（逐条带 `file:line` / commit / 命令输出证据锚）、待确认项；**无证据项 MUST NOT 写成「用户已确认」，不拿沉默当授权**。能自查的事实不问人，不确定先给「推荐 + 依据 + 代价 + 备选」再请人拍板。
+- 决策纪要是纯文档，不进状态哈希 / 快照、不含资产；目标与方向已清楚的小改动可显式声明省略，但范围 / 方案澄清、事实核对、决定确认三件事不可省。
 - 一个 change 一个 owner，配一个只读 critic；`mode` 不使用 `bypassPermissions`。
 
 ## 9. Subagent 工作流

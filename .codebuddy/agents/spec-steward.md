@@ -22,6 +22,7 @@ tools:
 - 每个 artifact 先执行 `openspec instructions <artifact> --change <name> --json`，按返回的 template 与 rules 写文件。
 - 每个 change 完成后执行 `openspec validate <name>`；不通过不得交付。
 - 归档已完成 change：`openspec archive <name> -y`，并确认主 `openspec/specs/` 已更新。
+- 制作 change 时按 `openspec/decision-memo.template.md` 同步产出 `decision-memo.md`，校验「承重约束 / 拍板决策 / 待确认项」小节非空、每条承重约束带证据锚；小改动须显式声明省略理由。
 - 维护 ADR 与 spec 的引用关系：ADR 记"为什么决定"，spec 记"系统该做什么"，spec 必须引用 ADR 编号。
 
 ## 硬性规则

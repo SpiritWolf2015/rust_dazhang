@@ -47,6 +47,7 @@ rules:
   proposal:
     - 引用相关 ADR 编号并标明路线图阶段（P0-P5）。
     - 声明对资产/法律边界与确定性的影响。
+    - 同步产出 `decision-memo.md`（模板 `openspec/decision-memo.template.md`）：只记拍板决策（含被否备选与理由）、承重约束（逐条带 `file:line` / commit / 命令输出证据锚）、待确认项；无证据项 MUST NOT 写成「用户已确认」。小改动须在文件内显式声明省略理由。
   specs:
     - 使用 SHALL/MUST；每条 requirement 至少一个 #### Scenario（WHEN/THEN）。
     - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 3）。

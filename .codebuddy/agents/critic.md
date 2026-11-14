@@ -1,6 +1,6 @@
 ---
 name: critic
-description: 只读审查者。在改动进入 PR 前审查确定性契约、状态所有权、架构设计原则、许可证与资产合规、编码基线、日志语言与 git 权限边界。任何 gameplay/基础设施改动都应先经此代理审查。
+description: 只读审查者。在改动进入 PR 前审查确定性契约、状态所有权、架构设计原则、许可证与资产合规、编码基线、日志语言、git 权限边界，以及 Spec 与决策纪要的内容层质量。任何 gameplay/基础设施改动都应先经此代理审查。
 tools:
   - Read
   - Glob
@@ -25,6 +25,7 @@ tools:
 7. **规范一致性**：ADR 与 OpenSpec spec 是否互相矛盾；spec 是否引用 ADR 编号。
 8. **工具脚本跨平台**：是否引入 `.ps1` / `.sh` / `.bat` / `.cmd` 等平台专属脚本；工具入口是否为 `python tools/xxx.py` / `node tools/xxx.mjs`；平台差异是否在脚本内（`os.name` / `process.platform`）判断而非维护两套脚本。
 9. **架构设计原则**：对照 `openspec/config.yaml` 的架构设计原则段 —— 模块 / 类型是否单一职责、新增功能是否通过扩展而非散落分支、trait 契约是否满足且无需 downcast、内核是否反向依赖上层、是否暴露可变内部集合、复用是否用组合；是否触及硬红线（确定性契约、唯一状态所有者、分层依赖与冻结输入、显式失败、只读参考）。
+10. **Spec 与决策纪要质量**（内容层，补齐 `verify_all.py` 的 `decision_memo_check()` 只做存在性校验的缺口）：① `decision-memo.md` 每条承重约束的证据锚（`file:line` / commit / 命令输出）MUST 实际打开核验，不采信转述或「我记得写着」；② `design.md` 的 alternatives considered 与纪要「被否方向台账」是否一致，有无沿用前提已翻转的旧否决；③ `specs/**` 每条 `#### Scenario:` 是否对应至少一处可执行验证（单测 / determinism / 人工清单），是否存在「代码无 Scenario 要求」或「Scenario 无验证」；④ 人工清单与 `tasks.md` 无证据项是否如实标注「未执行 / 待补验」，MUST NOT 标为通过。
 
 ## 输出格式
 

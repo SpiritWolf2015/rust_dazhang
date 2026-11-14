@@ -200,6 +200,15 @@ impl ScreenProjection {
         ]
     }
 
+    /// 把任意世界点 `(x,y,z)` 投影到屏幕像素坐标（含显式高度 `y`）。
+    ///
+    /// 供 HUD / 拾取在已知模型贴地高度或模型顶点高度时精确投影，避免
+    /// [`Self::world_to_screen`] 固定用占位标记中心平面的低空假设，在真实
+    /// 模型放大 / 地形起伏下把选中框拉到与模型不同的屏幕位置。纯表现层。
+    pub fn project_world_point(&self, x: f64, y: f64, z: f64) -> [f64; 2] {
+        self.project_point(x, y, z)
+    }
+
     /// 单位世界坐标 `(x, z)` → 屏幕像素坐标，投影到单位占位标记中心平面。
     pub fn world_to_screen(&self, world: [f64; 2]) -> [f64; 2] {
         self.project_point(

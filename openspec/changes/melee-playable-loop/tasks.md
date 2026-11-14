@@ -152,6 +152,21 @@
 
 > **阶段 5 诚实边界（如实登记）**：默认开局参数已用真窗口同参 `render_probe` 离屏逐版自证（主城完整居中、农民分开、金矿/树林/水面环绕、无全图虚空），但**不覆盖真窗口 egui overlay / HUD 与最终观感**；真窗口首帧 `step` 前极短空窗理论存在（稳定运行后立即可见，用户截图 HUD 已能选中 Peasant #2 佐证）。AI 侧陆块窄且多树、开局不可见（相距约 155），不影响本地可玩性（胜负靠命令脚本 / 实体 ID 结算）。`render_probe` 输出 PNG 留 gitignored `target/`、不入库。水岸格点级锯齿（D10）、树 billboard 斜俯视偏细、运行时新实体模型缺键回退（D9）、中文上屏仍留后续 / 人工验收。
 
+## 16. 框选 / HUD 选中框贴合真实模型（阶段 6，第五次真窗口验收后 / D12）
+
+> 用户第五次真窗口验收：打开立刻截图画面正常（主城/农民/金矿/HUD 都在、RTS 近景），但框选农民时绿色选框散布全屏、与模型错开、选不上。按强反馈先离屏量化根因、批量自证、写足 CPU 回归，全绿后再请人工验收。`w3-core` 零改动、零新增依赖。
+
+- [x] 16.1 根因量化：`render_probe` 新增 `picks` 模式，用真窗口同参相机打印每个实体的 HUD 投影点 / 模型贴地点 / 框选包围盒，实测 HUD 点比模型贴地点高约 140px（`world_to_screen` 固定 `y=19.2` 低空平面 vs 真实模型站 `y≈8.7` 且放大 4×）、`unit_screen_bounds` 用 24 世界单位四面体尺寸投出近 2000px 巨框，定位为阶段 1 四面体遗留口径在阶段 3 换真实模型时未同步、D11 拉近 zoom 后放大暴露
+- [x] 16.2 单一真值源：`Scene` 抽 `instance_vertices` 并新增 `entity_screen_boxes`（真实模型顶点逐点投影取屏幕 AABB）；`ScreenProjection` 新增公开 `project_world_point(x,y,z)`；`ScreenMapper` 改 `Clone` + 可选 `Arc<BTreeMap>`（`with_entity_boxes`）与 `entity_screen_box` / `entity_screen_center`，未注入回退旧口径（既有 22 项 interaction 单测零改动）
+- [x] 16.3 三处消费统一：`HudModel::collect` 的 `screen` / `bounds_*`、`commit_selection` 框选命中、`pick_enemy` 敌方拾取全部改用注入真实 box；HUD 选中框按 `bounds_min/max` 描边（夹最小 12px）贴合模型；`ClientApp::mapper()` 从 Scene 快照构造 boxes 注入三条路径（`render_one` 在 `consume` 后最新的、另两条同源快照允许一帧滞后）；缺 id 收敛紧致 box 不回退巨框（W1）
+- [x] 16.4 离屏自证：`boxes` 模式把真实 box 画绿框 / 旧锚点画红点，`ViewImage` 确认绿框贴合主城 / 农民、红点在上方错位；实测农民 box 97~128×115~157px 彼此分开不重叠、主城 459×612px（含塔尖）、远小于旧巨框
+- [x] 16.5 针对性 CPU 回归：`w3-render` 2 项（`entity_screen_boxes` 逐顶点等于模型投影 AABB / 确定性 + 死亡实体跳过）、`w3-client` 3 项（注入后 box 中心精确命中 + box 外点不命中 + 旧锚点≠新中心；W1 缺 id 不回退巨框且远处拖框不误选；W3 `HudModel::collect` 端到端 bounds 等于注入 box 的 to_logical）全绿；`cargo test --workspace` / `verify_all.py` 全绿
+- [x] 16.6 文档同步：`design.md` D12、`proposal.md` 阶段 6、`smoke-checklist.md` 新增 B10 框选贴合判据、本组任务记录
+- [ ] 16.7 人工 GPU 冒烟（人工项，**门槛**）：用户 `cargo run -p w3-client --example melee`，按 `smoke-checklist.md` **B9 + B10** 确认「打开能找到基地、框住农民能选中、选中框贴合模型」，通过后再玩完一局；离屏自证不覆盖真窗口 egui overlay，未通过即反馈、不勉强往下勾；清单未勾前不归档
+- [ ] 16.8 `critic` 复审 → 本地中文 commit；`git push` / CI 双平台 / `/opsx:archive` 由人工或编排者执行（AI 不执行任何远端命令）
+
+> **阶段 6 诚实边界（如实登记）**：真实模型放大 4× 后建筑 box 较大（主城约 459×612px、金矿约 285×294px），选中框描边框住完整建筑（含塔尖 / 脚下 `gutz` 碎片）是「贴合真实所见」的固有结果、非错位；农民 box 彼此分开、不会连选。`entity_screen_boxes` 每帧重新投影数万模型顶点、未做缓存（当前规模流畅，实体数大增后可优化，属性能非本轮范围）。**W1**：`apply_input` / `hud_model` 相对 `driver.view()` 允许一帧滞后，首帧 `consume` 前 / 运行时新实体生成帧 / 相机背后实体缺 id 时收敛为 `PICK_RADIUS` 紧致 box、不回退旧近全屏巨框（短窗口点选精度略降，下一帧即有真实 box），`entity_screen_box_missing_id_never_falls_back_to_giant_box` 覆盖；用户第五次验收截图 `Tick 5` 表明已渲染多帧、开局静止农民有真实 box，本轮修复对该场景有效。离屏绿框 / 红点叠加图验证的是命中几何与 HUD 锚点，不覆盖真窗口 egui overlay 实际绘制与最终观感，最终仍须人工验收。首帧空窗（D11）、脚下红白 `gutz` 碎片（D11）、水岸锯齿 / 树 billboard（D10）、运行时新实体缺键回退（D9）、中文上屏仍留后续 / 人工验收。
+
 ## Workflow follow-up
 
 - 人工 `git push` → CI 双平台 `python tools/verify_all.py` 绿灯。

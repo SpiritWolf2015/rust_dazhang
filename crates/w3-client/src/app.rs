@@ -432,6 +432,11 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             .window
             .as_ref()
             .map_or(1.0, |window| window.scale_factor() as f64);
+        // 单一真值源：从 Scene 真实模型顶点逐点投影出每个实体的屏幕包围盒，
+        // 注入 mapper，让 HUD 标记 / 选中框 / 框选命中 / 敌方拾取全部基于用户
+        // 实际看到的模型几何，消除旧「低空四面体」口径的错位。boxes 为物理
+        // 像素（与鼠标坐标一致），HUD 消费时经 `to_logical` 换算。
+        let boxes = self.scene.entity_screen_boxes(&self.terrain, &projection);
         ScreenMapper::new(
             width,
             height,
@@ -441,6 +446,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         )
         .with_projection(projection)
         .with_pixels_per_point(pixels_per_point)
+        .with_entity_boxes(boxes)
     }
 
     /// 当前拾取映射（供验收 / 诊断读取，不推进模拟）。

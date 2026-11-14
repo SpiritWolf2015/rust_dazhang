@@ -825,27 +825,85 @@ impl Scene {
             if !instance.alive {
                 continue;
             }
-            let Some(key) = instance.model_key.as_deref() else {
-                continue;
-            };
-            if let Some(model) = self.entity_models.get(key) {
-                if !model.is_empty() {
-                    let transform = ModelTransform {
-                        origin: [
-                            instance.x,
-                            terrain.height_at_world(instance.x, instance.y),
-                            instance.y,
-                        ],
-                        yaw: instance.facing,
-                        scale: MODEL_DISPLAY_SCALE * ENTITY_DISPLAY_SCALE,
-                    };
-                    vertices.extend(expand_model(model, &transform));
-                    continue;
-                }
-            }
-            append_typed_marker(&mut vertices, instance, terrain, key);
+            vertices.extend(self.instance_vertices(instance, terrain));
         }
         vertices
+    }
+
+    /// 单个存活实例的真实顶点流：优先绑定的真实 glTF 网格，缺键回退程序化
+    /// 占位标记。`build_vertices` 与 `entity_screen_boxes` 共用本方法，确保
+    /// 「用户看到的模型几何」与「HUD / 框选用的屏幕包围盒」逐顶点一致，
+    /// 消除两套几何口径造成的选中框错位。纯表现层派生数据。
+    fn instance_vertices(&self, instance: &Instance, terrain: &TerrainMesh) -> Vec<SceneVertex> {
+        let Some(key) = instance.model_key.as_deref() else {
+            return Vec::new();
+        };
+        if let Some(model) = self.entity_models.get(key) {
+            if !model.is_empty() {
+                let transform = ModelTransform {
+                    origin: [
+                        instance.x,
+                        terrain.height_at_world(instance.x, instance.y),
+                        instance.y,
+                    ],
+                    yaw: instance.facing,
+                    scale: MODEL_DISPLAY_SCALE * ENTITY_DISPLAY_SCALE,
+                };
+                return expand_model(model, &transform);
+            }
+        }
+        let mut vertices = Vec::new();
+        append_typed_marker(&mut vertices, instance, terrain, key);
+        vertices
+    }
+
+    /// 每个存活实体**真实模型顶点**投影到屏幕的包围盒（物理像素坐标），
+    /// 作为 HUD 单位标记 / 选中框 / 框选命中的单一真值源。
+    ///
+    /// 背景：旧 `ScreenProjection::world_to_screen` / `unit_screen_bounds`
+    /// 按程序化四面体 `UNIT_MARKER_SIZE=24` 的固定低空平面（y=19.2）估算，
+    /// 与阶段 3 起放大 4× 且贴地（y≈地形高）的真实 glTF 模型严重错位；
+    /// zoom 拉近后偏差放大到上百像素、包围盒近全屏，导致「选框不贴合、
+    /// 选不上」。本方法直接投影 `instance_vertices` 的真实顶点，天然贴合
+    /// 用户所见，且对任意模型尺度 / 地形高度 / 相机 zoom 都成立。
+    ///
+    /// 返回 `BTreeMap<实体ID, (屏幕最小点, 屏幕最大点)>`；模型在相机背后
+    /// （投影失败）时不纳入。`projection` 与渲染 `Camera::matrix` 同源。
+    pub fn entity_screen_boxes(
+        &self,
+        terrain: &TerrainMesh,
+        projection: &crate::gpu::ScreenProjection,
+    ) -> BTreeMap<u64, ([f64; 2], [f64; 2])> {
+        let mut out = BTreeMap::new();
+        for instance in self.instances.values() {
+            if !instance.alive {
+                continue;
+            }
+            let vertices = self.instance_vertices(instance, terrain);
+            if vertices.is_empty() {
+                continue;
+            }
+            let mut min = [f64::INFINITY, f64::INFINITY];
+            let mut max = [f64::NEG_INFINITY, f64::NEG_INFINITY];
+            for v in &vertices {
+                let p = projection.project_world_point(
+                    f64::from(v.position[0]),
+                    f64::from(v.position[1]),
+                    f64::from(v.position[2]),
+                );
+                for axis in 0..2 {
+                    min[axis] = min[axis].min(p[axis]);
+                    max[axis] = max[axis].max(p[axis]);
+                }
+            }
+            // 投影失败（相机背后）返回 -1e6；以有限性判定，避免污染包围盒。
+            if min.iter().all(|v| v.is_finite() && *v > -1.0e5)
+                && max.iter().all(|v| v.is_finite() && *v < 1.0e5)
+            {
+                out.insert(instance.id, (min, max));
+            }
+        }
+        out
     }
 }
 
@@ -1488,5 +1546,109 @@ mod tests {
             &ModelLibrary::default(),
         );
         assert_eq!(a, scene.build_vertices(&mesh));
+    }
+
+    /// 构造一个带真实烘焙模型的 Scene：单个实体绑定 `peasant`，模型为
+    /// `baked_model(n)` 的已知三角形集合。供 `entity_screen_boxes` 单测用。
+    fn scene_with_real_model(triangles: usize) -> Scene {
+        let mut library = ModelLibrary::default();
+        library.insert("peasant", crate::model::Model::default());
+        library.bind_entity(1, "peasant");
+        let mut scene = Scene::default();
+        let view = view(1, vec![entity(1, 1, 0)]);
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        let mut models = BTreeMap::new();
+        models.insert("peasant".to_string(), baked_model(triangles));
+        scene.set_entity_models(models);
+        scene
+    }
+
+    #[test]
+    fn entity_screen_boxes_match_real_model_vertices() {
+        use crate::Camera;
+        use crate::gpu::ScreenProjection;
+        let scene = scene_with_real_model(40);
+        let mesh = terrain();
+        let camera = Camera::new(16.0 / 9.0);
+        let width = 1280.0f32;
+        let height = 720.0f32;
+        let projection = ScreenProjection::new(&camera, &mesh, width, height);
+        let boxes = scene.entity_screen_boxes(&mesh, &projection);
+        let (min, max) = boxes.get(&1).expect("实体 1 应有屏幕包围盒");
+
+        // ① box 有限、落在视口内、尺寸合理（非旧 24 单位四面体的近全屏巨框）。
+        assert!(min.iter().chain(max.iter()).all(|v| v.is_finite()));
+        let w = max[0] - min[0];
+        let h = max[1] - min[1];
+        assert!(w > 0.0 && h > 0.0, "包围盒应有正尺寸，实际 {w}x{h}");
+        assert!(
+            w < f64::from(width) && h < f64::from(height),
+            "包围盒不应超过视口，实际 {w}x{h}"
+        );
+
+        // ② box 精确等于该实体真实模型顶点投影的 AABB（单一真值源自洽）。
+        let mut vmin = [f64::INFINITY, f64::INFINITY];
+        let mut vmax = [f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for v in &scene.instance_vertices(scene.instances.get(&1).unwrap(), &mesh) {
+            let p = projection.project_world_point(
+                f64::from(v.position[0]),
+                f64::from(v.position[1]),
+                f64::from(v.position[2]),
+            );
+            for a in 0..2 {
+                vmin[a] = vmin[a].min(p[a]);
+                vmax[a] = vmax[a].max(p[a]);
+            }
+        }
+        for a in 0..2 {
+            assert!((min[a] - vmin[a]).abs() < 1.0e-6);
+            assert!((max[a] - vmax[a]).abs() < 1.0e-6);
+        }
+
+        // ③ box 中心与旧 `world_to_screen`（低空四面体平面）明显不同，
+        // 证明 HUD / 框选确实换了真值源、不再用错位的旧口径。
+        let center = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
+        let old = projection.world_to_screen([0.0, 0.0]);
+        assert!(
+            (center[1] - old[1]).abs() > 1.0,
+            "真实模型中心不应等于旧低空平面投影点，center={center:?} old={old:?}"
+        );
+    }
+
+    #[test]
+    fn entity_screen_boxes_are_deterministic_and_skip_dead() {
+        use crate::Camera;
+        use crate::gpu::ScreenProjection;
+        let mut scene = scene_with_real_model(20);
+        let mesh = terrain();
+        let camera = Camera::new(1.0);
+        let projection = ScreenProjection::new(&camera, &mesh, 640.0, 480.0);
+        let a = scene.entity_screen_boxes(&mesh, &projection);
+        let b = scene.entity_screen_boxes(&mesh, &projection);
+        assert_eq!(a, b, "逐帧投影可复现");
+        assert!(a.contains_key(&1));
+        // 死亡实体不产出 box：消费一个该实体 alive=false 的视图。
+        let mut dead = entity(1, 1, 0);
+        dead.alive = false;
+        let view = view(2, vec![dead]);
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &ModelLibrary::default(),
+        );
+        assert!(
+            !scene
+                .entity_screen_boxes(&mesh, &projection)
+                .contains_key(&1),
+            "死亡实体不应有屏幕包围盒"
+        );
     }
 }

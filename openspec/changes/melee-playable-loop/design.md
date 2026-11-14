@@ -200,6 +200,32 @@
   - 树 billboard 斜俯视偏细、水岸格点级锯齿（D10）、运行时新实体模型缺键回退（D9）、中文上屏、真窗口 HUD overlay 观感，仍留后续 / 人工验收。
   - **农民 / 单位脚下的红白色贴地碎片**：放大诊断（`units` 模式）确认人形农民站姿正常、清晰可辨，但脚下有一圈扁平红白碎片，来自 WC3 通用地面贴片 `gutz.png`（血迹 / 影子 / 选中圈类 decal，作为 `MASK` geoset 被当成实体渲染）。离线核查 160 个模型引用 `gutz` / `Selection` 贴图、但其中大量 mesh 是**站立身体**（同一图集含贴片 + 身体），按 URI 简单过滤会误删正常几何（D9 已就 `shadow` 裸子串否决过同类做法），故本轮**不扩范围修**，如实登记为已知观感瑕疵；不影响找基地 / 框选农民 / 完局。低风险修法（按 geoset 局部 Y 范围或 `wc3TeamColorUnderlay` 语义过滤）留后续独立 change。
 
+### D12：框选 / HUD 选中框贴合真实模型（第五次真窗口验收后 / 阶段 6）
+
+- **背景**：D11 交付后用户第五次真窗口验收，给两张截图：一张「打开立刻截图」（画面正常，主城 / 农民 / 金矿 / HUD `Tick 5 / Gold 50 / Supply 3/7` 都在、RTS 近景，证明动态单位上屏、无首帧空窗问题）；另一张「框选农民」显示**绿色选框（带蓝点 + 血条）散布全屏、与聚在右下的人形农民模型完全错开、根本选不上」。
+- **根因（离屏 `picks` 诊断量化，非猜测）**：新增 `render_probe` 的 `picks` 模式，用真窗口同参相机把每个实体的「HUD 投影点」「模型贴地点」「框选包围盒」逐项打印，发现：
+  1. **HUD 投影点比模型贴地点高约 140px**：`ScreenProjection::world_to_screen` 固定把单位逻辑坐标投影到 `y = UNIT_MARKER_SIZE*0.8 = 19.2` 的低空平面（旧程序化四面体中心），而阶段 3 起真实模型经 `expand_model` 站在 `terrain.height_at_world ≈ 8.7` 且放大 4×；斜视透视下这个高度差把 HUD 队伍色点 / 选中框拉到模型上方（如主城 `hud=(570,136)` vs `ground=(580,275)`、农民 `hud=(587,280)` vs `ground=(595,416)`）。
+  2. **框选包围盒近乎全屏**：`unit_screen_bounds` 用 `UNIT_MARKER_SIZE=24` 世界单位当四面体尺寸，在 `zoom=7` 下投出约 874×1172px（乃至更大）的巨框（如主城 `[(126,-288)-(1000,884)]`），一拖框全中或全不中。
+  - 这套口径是**阶段 1 程序化四面体时代**的遗留，阶段 3 换真实 glTF 模型时未同步；D11 把 `zoom` 从 3.5 拉到 7 后偏差被放大暴露。此即 playable 阶段曾修过、本轮因相机 / 模型尺度变化复发的「框选与 3D 实体错位」问题。
+- **决策（单一真值源）**：
+  - `w3-render::Scene` 抽出 `instance_vertices`（`build_vertices` 与新方法共用，保证逐顶点一致），新增 `entity_screen_boxes(terrain, projection)`：对每个存活实体把**真实模型顶点**（放大 4×、贴地后的 `SceneVertex.position`）逐点投影，取屏幕 AABB，返回 `BTreeMap<实体ID, (min,max)>`（物理像素，与 winit 鼠标坐标一致）。
+  - `ScreenProjection` 新增公开 `project_world_point(x,y,z)`，供任意高度精确投影；`world_to_screen` / `unit_screen_bounds` 旧方法保留（线性回退 / 单测用）。
+  - `w3-client::ScreenMapper` 从 `Copy` 改 `Clone`、可选持有 `Arc<BTreeMap<...>>`（`with_entity_boxes`）；新增 `entity_screen_box(id, world)` / `entity_screen_center(id, world)`：注入时用真实 box，未注入回退旧口径（既有 22 项 interaction 单测零改动）。
+  - `HudModel::collect` 的 `screen` / `bounds_*`、`InputState::commit_selection` 命中判定、`pick_enemy` 敌方拾取全部改用注入的真实 box；HUD 选中框按 `bounds_min/max` 描边（夹最小 12px），不再是固定 `half=14` 小框，贴合模型。
+  - `ClientApp::mapper()` 从当前 `Scene` 快照构造 boxes 注入 `render_one` / `hud_model` / `apply_input` 三条路径共用；其中 `render_one` 在 `scene.consume` 之后（实例最新），另两条是**同源 Scene 快照但相对 `driver.view()` 允许一帧滞后**（winit 鼠标回调不保证先于 `RedrawRequested`）。boxes 为物理像素，HUD 消费经 `to_logical` 换算（高 DPI 口径不变）。缺 id 时（首帧前 scene 空 / 运行时新实体尚未 consume / 相机背后实体）由 `entity_screen_box` 收敛为紧致 box、不回退旧巨框（见诚实边界 W1）。
+- **备选方案（Alternatives considered）**：
+  - *只调 `world_to_screen` 的固定高度常量* — **否决**。真实模型尺度 / 地形高度随单位与位置变化，单一常量无法兼顾主城（4× 放大后约 459×612px）与农民（约 100×130px），且 `unit_screen_bounds` 的 24 单位尺寸仍错。
+  - *缩小 `PICK_RADIUS` / 固定像素命中半径* — **否决**。治标不治本，模型放大后视觉尺寸与固定半径无关，仍不贴合。
+  - *把 boxes 塞进 `ScreenProjection`* — **否决**。它是 `Copy`（glam 矩阵 + f32），不能持有 `BTreeMap`；且投影层不该知道实体几何。
+- **关联 ADR 0002 与跨平台确定性影响**：`w3-core` 零改动 → 状态哈希 / 快照 / `SNAPSHOT_VERSION=3` / golden hash 全部不变。新增的 `entity_screen_boxes` / `ScreenMapper` 字段 / HUD 绘制全是表现层 `f32` / `f64` / `BTreeMap`，只消费只读 `WorldView` 与 `Scene` 派生顶点，不反写模拟、不进哈希 / 快照；框选仍只经既有 `submit_command` / `submit_gameplay_command` 提交、执行帧由冻结帧号推导。`ScreenMapper` 的 `Copy→Clone` 是纯表现层类型语义调整，不改确定性。`determinism` 26 项 / `isolation` 3 项 / `melee_loop` 7 项（含打完一局）/ `cargo test --workspace` 全绿、`git diff -- crates/w3-core/` 为空作硬门禁。**MUST NOT 据此声称跨平台确定性达成新结论**。
+- **验证**：`picks` 模式量化错位、`boxes` 模式把真实 box 画绿框 / 旧锚点画红点离屏 `ViewImage` 目视确认绿框贴合主城 / 农民、红点错位在上方；`entity_screen_boxes` 输出实测农民 box 97~128×115~157px、彼此分开不重叠，主城 459×612px（含顶部塔尖，部分超出视野属正常），远小于旧近 2000px 巨框。CPU 回归：`w3-render` 2 项（`entity_screen_boxes` 逐顶点等于模型投影 AABB / 确定性与死亡实体跳过）、`w3-client` 1 项（注入 boxes 后 box 中心单击精确命中、box 外点不命中、旧锚点与新中心不同）全绿；既有 22 项 interaction 单测零改动全绿。`w3-core` 零改动、零新增依赖、仓库零资产。
+- **诚实边界（已知限制）**：
+  - 真实模型放大 4× 后**建筑 box 较大**（主城约 459×612px、金矿约 285×294px），选中框描边会框住完整建筑（含顶部塔尖、脚下 `gutz` 碎片），这是「贴合真实所见」的固有结果、非错位；主城塔尖在默认视角顶部略超出屏幕，box 仍有限有效。农民 box 彼此分开、拖框不会连带连选。
+  - `entity_screen_boxes` 每帧从真实模型顶点重新投影（约数万顶点 / 帧，30Hz 下为纯 CPU 表现层运算），未做缓存 / 分帧复用；当前规模实测流畅，若后续实体数大增可优化（属性能优化，非本轮验收范围）。
+  - **boxes 缺 id 的降级（W1，如实登记）**：`mapper()` 用 Scene 快照构造 boxes，`apply_input` / `hud_model` 相对 `driver.view()` 允许一帧滞后；首帧 `consume` 前 scene 空、运行时 `Train`/`Build` 新实体在生成帧到下一 `consume` 之间、相机背后实体被投影过滤时，`entity_screen_box` 查不到 id。此时**收敛为 `PICK_RADIUS` 紧致 box、绝不回退旧 24 单位四面体近全屏巨框**（否则一框全中）；该实体下一帧即有真实 box，短窗口内点选精度略降属可接受。`entity_screen_box_missing_id_never_falls_back_to_giant_box` 单测覆盖。完全消除滞后可在 `render_one` 的 `consume` 后把 boxes 缓存进 `ClientApp` 字段供另两条路径复用，属后续优化、非本轮验收范围。
+  - 离屏自证（绿框 / 红点叠加图）验证的是**框选命中几何与 HUD 锚点**，不覆盖真窗口 egui overlay 的实际绘制与最终观感；「框住农民能选中、选中框贴合模型」最终仍须用户按 `smoke-checklist.md` 人工验收，未勾前不归档。用户第五次验收截图 HUD `Tick 5` 表明已渲染多帧、开局静止农民有真实 box，本轮修复对该场景有效。
+  - 首帧 `step` 前的极短空窗（D11）、农民脚下红白 `gutz` 碎片（D11）、树 billboard 斜俯视偏细 / 水岸格点级锯齿（D10）、运行时新实体模型缺键回退（D9）、中文上屏，仍留后续 / 人工验收。
+
 ## Risks / Trade-offs
 
 - [AI 太弱导致「没有对手感」或打不完一局] → D3 命令源至少覆盖采集、训练与周期性进攻；人工验收清单逐项勾「一局可打完」；若强度仍不足，作为后续独立 change 增强，**不在本 change 扩内核**。

@@ -155,9 +155,73 @@ fn main() {
     state.apply(CameraAction::Resize(width, height));
     state.set_initial_view(zoom, pan);
     let view_proj: Camera = state.camera();
+
+    // "picks" 诊断：量化 HUD 投影点 / 框选包围盒 与 真实模型顶点屏幕范围
+    // 的错位，定位「框选选不上」根因。仅诊断工具，不入库逻辑。
+    if mode == "picks" {
+        use w3_render::ScreenProjection;
+        let proj = ScreenProjection::new(&view_proj, &map.terrain, width as f32, height as f32);
+        let dynamic_world: Vec<[f64; 2]> = vertices
+            .iter()
+            .filter(|v| v.surface < 0.0)
+            .map(|v| [f64::from(v.position[0]), f64::from(v.position[2])])
+            .collect();
+        for entity in &view.entities {
+            let world = [
+                f64::from(w3_render::world_to_f32(entity.x)),
+                f64::from(w3_render::world_to_f32(entity.y)),
+            ];
+            let hud = proj.world_to_screen(world);
+            let (bmin, bmax) = proj.unit_screen_bounds(world);
+            let terrain_y = f64::from(
+                map.terrain
+                    .height_at_world(world[0] as f32, world[1] as f32),
+            );
+            let ground = proj.project_world_point(world[0], terrain_y, world[1]);
+            // 该单位附近动态模型顶点的屏幕包围盒（最贴近用户看到的位置）。
+            let mut dmin = [f64::MAX, f64::MAX];
+            let mut dmax = [f64::MIN, f64::MIN];
+            let mut count = 0usize;
+            for &[wx, wz] in &dynamic_world {
+                if (wx - world[0]).abs() < 16.0 && (wz - world[1]).abs() < 16.0 {
+                    let p = proj.project_world_point(
+                        wx,
+                        f64::from(map.terrain.height_at_world(wx as f32, wz as f32)),
+                        wz,
+                    );
+                    for a in 0..2 {
+                        dmin[a] = dmin[a].min(p[a]);
+                        dmax[a] = dmax[a].max(p[a]);
+                    }
+                    count += 1;
+                }
+            }
+            println!(
+                "pick id={} owner={} world=({:.0},{:.0}) hud=({:.0},{:.0}) ground=({:.0},{:.0}) bounds=[({:.0},{:.0})-({:.0},{:.0})] model_verts={} model_screen=[({:.0},{:.0})-({:.0},{:.0})]",
+                entity.id,
+                entity.owner,
+                world[0],
+                world[1],
+                hud[0],
+                hud[1],
+                ground[0],
+                ground[1],
+                bmin[0],
+                bmin[1],
+                bmax[0],
+                bmax[1],
+                count,
+                dmin[0],
+                dmin[1],
+                dmax[0],
+                dmax[1],
+            );
+        }
+    }
+
     let view_proj = view_proj.matrix(&map.terrain);
 
-    let rgba = render_headless_rgba_with_textures(
+    let mut rgba = render_headless_rgba_with_textures(
         &vertices,
         &view_proj,
         width,
@@ -165,6 +229,66 @@ fn main() {
         Some(&map.textures),
     )
     .expect("render_probe: reason=headless_render_failed");
+
+    // "boxes" 诊断：把真实模型屏幕包围盒画成绿色描边（模拟 HUD 选中框），
+    // 把旧 `world_to_screen` 低空平面锚点画成红点（对比错位）。用于离屏
+    // 目视确认「选框贴合模型」这一用户问题是否修复。仅诊断工具。
+    if mode == "boxes" {
+        use w3_render::ScreenProjection;
+        let proj =
+            ScreenProjection::new(&state.camera(), &map.terrain, width as f32, height as f32);
+        let boxes = scene.entity_screen_boxes(&map.terrain, &proj);
+        for (id, (bmin, bmax)) in &boxes {
+            println!(
+                "box id={} size=({:.0}x{:.0}) at=({:.0},{:.0})",
+                id,
+                bmax[0] - bmin[0],
+                bmax[1] - bmin[1],
+                bmin[0],
+                bmin[1],
+            );
+        }
+        let set = |rgba: &mut Vec<u8>, x: i64, y: i64, color: [u8; 3]| {
+            if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
+                return;
+            }
+            let i = ((y as u32 * width + x as u32) * 4) as usize;
+            rgba[i] = color[0];
+            rgba[i + 1] = color[1];
+            rgba[i + 2] = color[2];
+            rgba[i + 3] = 255;
+        };
+        // 绿框：真实模型 box（粗 2px 描边）。
+        for (_, (min, max)) in &boxes {
+            let (x0, y0) = (min[0] as i64, min[1] as i64);
+            let (x1, y1) = (max[0] as i64, max[1] as i64);
+            for t in 0..2i64 {
+                for x in x0..=x1 {
+                    set(&mut rgba, x, y0 + t, [0, 255, 0]);
+                    set(&mut rgba, x, y1 - t, [0, 255, 0]);
+                }
+                for y in y0..=y1 {
+                    set(&mut rgba, x0 + t, y, [0, 255, 0]);
+                    set(&mut rgba, x1 - t, y, [0, 255, 0]);
+                }
+            }
+        }
+        // 红点：旧低空平面锚点（每个实体 5×5 方块，醒目对比）。
+        for entity in &view.entities {
+            let world = [
+                f64::from(w3_render::world_to_f32(entity.x)),
+                f64::from(w3_render::world_to_f32(entity.y)),
+            ];
+            let p = proj.world_to_screen(world);
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    set(&mut rgba, p[0] as i64 + dx, p[1] as i64 + dy, [255, 0, 0]);
+                }
+            }
+        }
+        println!("boxes diag: entity_boxes={}", boxes.len());
+    }
+
     w3_render::gpu::readback::write_png(Path::new(&out), &rgba, width, height)
         .expect("render_probe: reason=write_png_failed");
     println!(

@@ -336,9 +336,13 @@ impl HudModel {
                     entity.x as f64 / SCALE as f64,
                     entity.y as f64 / SCALE as f64,
                 ];
-                let screen = mapper.to_logical(mapper.world_to_screen(world_f64));
+                // 单一真值源：HUD 标记中心与选中框都用 `Scene` 真实模型顶点
+                // 投影出的实体屏幕包围盒（注入 boxes 时）；未注入回退旧口径。
+                // 旧 `world_to_screen`（低空平面 y=19.2）/ `unit_screen_bounds`
+                // （24 世界单位四面体）会与放大 4×、贴地的真实模型错位上百像素。
+                let screen = mapper.to_logical(mapper.entity_screen_center(entity.id, world_f64));
                 let (bounds_min, bounds_max) =
-                    mapper.to_logical_bounds(mapper.unit_screen_bounds(world_f64));
+                    mapper.to_logical_bounds(mapper.entity_screen_box(entity.id, world_f64));
                 HudUnit {
                     id: entity.id,
                     hp: entity.hp,
@@ -437,11 +441,10 @@ pub fn draw_with_minimap(
     texts: &Texts,
     assets: HudAssets,
 ) -> HudInteraction {
-    // 几何层：为所有存活单位绘制贴合其屏幕位置的**小队伍色点**；只有选中
-    // 单位额外画一个贴合的小选中框与血条。此前给每个单位都按
-    // `UNIT_MARKER_SIZE=24` 的包围盒画大矩形框，在真实模型放大后与模型严重
-    // 错位、满屏都是大框（真窗口截图已复现）。用单位中心 `screen` 画点，
-    // 既不依赖旧包围盒尺寸、也不遮挡模型。
+    // 几何层：`unit.screen` / `bounds_*` 由 `Scene::entity_screen_boxes` 从真实
+    // 模型逐顶点投影得到（单一真值源），故队伍色点、选中框、血条都贴合用户
+    // 看到的模型，不再用旧的低空平面 / 24 单位四面体口径（会错位上百像素）。
+    // 选中框按真实包围盒绘制（贴合模型），并夹一个最小尺寸保证小单位可见。
     egui::Area::new(egui::Id::unique("w3_client_hud_overlay")).show(ctx, |ui| {
         let painter = ui.painter();
         for unit in model.units.iter().filter(|unit| unit.alive) {
@@ -450,12 +453,16 @@ pub fn draw_with_minimap(
             let center = egui::pos2(unit.screen[0], unit.screen[1]);
             // 所有单位：小队伍色点，标示位置与敌我。
             painter.circle_filled(center, 2.5, team_color);
-            // 仅选中单位：贴合中心的小选中框 + 血条。尺寸用固定小尺寸，不用
-            // 与真实模型错位的旧 bounds。选中环颜色取 display_hints。
+            // 仅选中单位：贴合真实模型包围盒的选中框 + 血条。
             if let Some(ring) = hints.selection_ring {
-                let half = 14.0;
-                let frame =
-                    egui::Rect::from_center_size(center, egui::vec2(half * 2.0, half * 2.0));
+                let mut frame = egui::Rect::from_min_max(
+                    egui::pos2(unit.bounds_min[0], unit.bounds_min[1]),
+                    egui::pos2(unit.bounds_max[0], unit.bounds_max[1]),
+                );
+                // 最小尺寸 12×12：极小 / 远处模型也能看到选中框。
+                if frame.width() < 12.0 || frame.height() < 12.0 {
+                    frame = egui::Rect::from_center_size(center, egui::vec2(12.0, 12.0));
+                }
                 painter.rect_stroke(
                     frame,
                     egui::CornerRadius::ZERO,
@@ -463,8 +470,8 @@ pub fn draw_with_minimap(
                     egui::StrokeKind::Outside,
                 );
                 let bar = egui::Rect::from_min_size(
-                    egui::pos2(center.x - half, frame.min.y - 6.0),
-                    egui::vec2(half * 2.0, 3.0),
+                    egui::pos2(frame.min.x, frame.min.y - 6.0),
+                    egui::vec2(frame.width().max(12.0), 3.0),
                 );
                 painter.rect_filled(bar, egui::CornerRadius::ZERO, egui::Color32::DARK_RED);
                 let filled = egui::Rect::from_min_size(

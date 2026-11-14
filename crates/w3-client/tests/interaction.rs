@@ -813,3 +813,189 @@ fn client_app_train_command_reaches_the_kernel() {
         "T 生产命令必须经 ClientApp 提交并在内核生效"
     );
 }
+
+/// 单一真值源回归：注入真实模型屏幕包围盒后，框选命中与 HUD 标记锚点都
+/// 以它为准，替代旧 `unit_screen_bounds`（24 世界单位四面体近全屏巨框）。
+/// 复现用户「选框不贴合模型、选不上」的问题域：box 中心点应精确命中，
+/// box 外的点（即便落在旧巨框内）不应命中。
+#[test]
+fn entity_screen_boxes_drive_selection_and_hud_center() {
+    use w3_core::EntityView;
+
+    // 单个己方实体，逻辑坐标 (0,0)。
+    let view = WorldView {
+        tick: 0,
+        rng: 0,
+        entities: vec![EntityView {
+            id: 1,
+            x: 0,
+            y: 0,
+            facing: 0,
+            hp: 100,
+            owner: 1,
+            alive: true,
+            has_target: false,
+        }],
+    };
+    let events: Vec<Event> = Vec::new();
+
+    // 真实模型投影出的紧凑 box（模拟 Scene::entity_screen_boxes 产物）。
+    let model_box: ([f64; 2], [f64; 2]) = ([600.0, 380.0], [640.0, 440.0]);
+    let mut boxes = std::collections::BTreeMap::new();
+    boxes.insert(1u64, model_box);
+    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0)
+        .with_projection(ScreenProjection::new(
+            &Camera::new(1280.0 / 720.0),
+            &synthetic_terrain(),
+            1280.0,
+            720.0,
+        ))
+        .with_entity_boxes(boxes);
+
+    // ① HUD 标记中心 / 命中包围盒 = 注入的真实 box（非旧口径）。
+    let center = mapper.entity_screen_center(1, [0.0, 0.0]);
+    assert!((center[0] - 620.0).abs() < 1.0e-6);
+    assert!((center[1] - 410.0).abs() < 1.0e-6);
+    let (min, max) = mapper.entity_screen_box(1, [0.0, 0.0]);
+    assert_eq!(min, model_box.0);
+    assert_eq!(max, model_box.1);
+    // 旧 HUD 锚点 `world_to_screen`（低空四面体平面）与真实模型 box 中心
+    // 明显不同——证明注入后确实换了真值源、不再用错位旧口径。
+    let old_anchor = mapper.world_to_screen([0.0, 0.0]);
+    assert!(
+        (old_anchor[0] - center[0]).hypot(old_anchor[1] - center[1]) > 1.0,
+        "真实模型中心不应等于旧低空平面锚点 old={old_anchor:?} new={center:?}"
+    );
+
+    // ② 在真实 box 中心单击 → 选中该实体。
+    let mut input = InputState::new(1);
+    input
+        .apply(InputAction::SelectStart(center), &view, &mapper, &events)
+        .unwrap();
+    input
+        .apply(InputAction::SelectEnd(center), &view, &mapper, &events)
+        .unwrap();
+    assert!(input.selection().contains(&1), "box 中心单击应选中实体");
+
+    // ③ 在真实 box 外的远点单击 → 不应选中（旧四面体巨框会误中，现已消除）。
+    let outside = [min[0] - 60.0, min[1] - 60.0];
+    assert!(
+        outside[0] < min[0] || outside[0] > max[0] || outside[1] < min[1] || outside[1] > max[1],
+        "该点必须落在真实 box 之外"
+    );
+    let mut input2 = InputState::new(1);
+    input2
+        .apply(InputAction::SelectStart(outside), &view, &mapper, &events)
+        .unwrap();
+    input2
+        .apply(InputAction::SelectEnd(outside), &view, &mapper, &events)
+        .unwrap();
+    assert!(
+        !input2.selection().contains(&1),
+        "真实 box 外的点不应选中（旧四面体巨框会误中，现已消除）"
+    );
+}
+
+/// W1 回归：已注入 boxes 但某实体缺 id（首帧前 scene 空、运行时新实体尚未
+/// consume、相机背后被投影过滤）时，`entity_screen_box` 不得回退旧的 24 单位
+/// 四面体巨框（否则一框选中全屏、B10③ 复现），应收敛为紧致 box。
+#[test]
+fn entity_screen_box_missing_id_never_falls_back_to_giant_box() {
+    use w3_core::EntityView;
+
+    // 只给 id=2 注入真实 box；id=1 故意缺 id。
+    let mut boxes = std::collections::BTreeMap::new();
+    boxes.insert(2u64, ([600.0, 380.0], [640.0, 440.0]));
+    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0)
+        .with_projection(ScreenProjection::new(
+            &Camera::new(1280.0 / 720.0),
+            &synthetic_terrain(),
+            1280.0,
+            720.0,
+        ))
+        .with_entity_boxes(boxes);
+
+    // 缺 id 的 box 紧致（宽高 = 2*PICK_RADIUS=48），远小于旧巨框。
+    let (min, max) = mapper.entity_screen_box(1, [0.0, 0.0]);
+    assert!(
+        (max[0] - min[0]) <= 48.0 && (max[1] - min[1]) <= 48.0,
+        "缺 id 不得回退旧四面体巨框，实际 {}x{}",
+        max[0] - min[0],
+        max[1] - min[1]
+    );
+    // 未注入 boxes（合成 mapper）仍走旧口径，既有单测零改动。
+    let bare = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0);
+    let (bmin, bmax) = bare.entity_screen_box(1, [0.0, 0.0]);
+    let (omin, omax) = bare.unit_screen_bounds([0.0, 0.0]);
+    assert_eq!(bmin, omin);
+    assert_eq!(bmax, omax);
+
+    // 端到端：缺 id 实体不会因巨框被「隔空」拖框误选。
+    let view = WorldView {
+        tick: 0,
+        rng: 0,
+        entities: vec![EntityView {
+            id: 1,
+            x: 0,
+            y: 0,
+            facing: 0,
+            hp: 100,
+            owner: 1,
+            alive: true,
+            has_target: false,
+        }],
+    };
+    let events: Vec<Event> = Vec::new();
+    let far = [50.0, 50.0]; // 远离逻辑点中心的屏幕角落
+    let mut input = InputState::new(1);
+    input
+        .apply(InputAction::SelectStart(far), &view, &mapper, &events)
+        .unwrap();
+    input
+        .apply(InputAction::SelectEnd(far), &view, &mapper, &events)
+        .unwrap();
+    assert!(
+        !input.selection().contains(&1),
+        "缺 id 实体不得被远处拖框因巨框误选"
+    );
+}
+
+/// W3 回归：HUD 真的消费注入的 box（端到端），而非仅 mapper 内部自洽。
+/// 断言 `HudModel::collect` 产出的单位 bounds_min/max 等于注入 box（经
+/// to_logical 换算）；若 HUD 仍读旧锚点 / 旧巨框，此断言失败。
+#[test]
+fn hud_collect_uses_injected_entity_box_bounds() {
+    let app = build_app();
+    let view: WorldView = app.driver().sim().read_view();
+    let snap = snapshot(&app);
+    let entity_id = view.entities[0].id;
+
+    let injected: ([f64; 2], [f64; 2]) = ([300.0, 200.0], [340.0, 260.0]);
+    let mut boxes = std::collections::BTreeMap::new();
+    boxes.insert(entity_id, injected);
+    // pixels_per_point=2.0 → 逻辑坐标为物理坐标的一半。
+    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0)
+        .with_projection(ScreenProjection::new(
+            &Camera::new(1280.0 / 720.0),
+            &synthetic_terrain(),
+            1280.0,
+            720.0,
+        ))
+        .with_pixels_per_point(2.0)
+        .with_entity_boxes(boxes);
+
+    let hud = HudModel::collect(&view, &snap, &Default::default(), &[], &mapper, 1);
+    let unit = hud.units.iter().find(|u| u.id == entity_id).unwrap();
+    assert!(
+        (unit.bounds_min[0] - 150.0).abs() < 1.0
+            && (unit.bounds_min[1] - 100.0).abs() < 1.0
+            && (unit.bounds_max[0] - 170.0).abs() < 1.0
+            && (unit.bounds_max[1] - 130.0).abs() < 1.0,
+        "HUD bounds 应等于注入 box 的 to_logical，实际 min={:?} max={:?}",
+        unit.bounds_min,
+        unit.bounds_max
+    );
+    // 中心同样来自注入 box（物理 [320,230] → 逻辑 [160,115]）。
+    assert!((unit.screen[0] - 160.0).abs() < 1.0);
+    assert!((unit.screen[1] - 115.0).abs() < 1.0);
+}

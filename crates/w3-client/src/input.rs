@@ -13,6 +13,7 @@
 //! 不新增浮点到权威状态的路径。
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use w3_app::freeze_f64;
 use w3_core::{
@@ -72,11 +73,16 @@ impl std::fmt::Display for InputError {
 /// 屏幕 ↔ 世界（XZ 平面）的拾取映射，纯表现层 `f64`。
 ///
 /// `world_span` 为视口覆盖的世界宽度，`pan` / `zoom` 来自表现层相机状态。
-/// 注入 `ScreenProjection` 后，`world_to_screen` 以单位占位标记中心平面
-/// 为基准、`screen_to_world` 以 y=0 地面为基准，二者各司其职；未注入时
-/// 退回轴对齐线性映射（供单元测试）。结果 MUST 经 `freeze_f64` 冻结后
+/// 注入 `ScreenProjection` 后，`screen_to_world` 以 y=0 地面为基准；未注入
+/// 时退回轴对齐线性映射（供单元测试）。结果 MUST 经 `freeze_f64` 冻结后
 /// 才进入权威状态。不使用三角函数或超越函数，跨平台差异与确定性无关。
-#[derive(Clone, Copy, Debug)]
+///
+/// **实体屏幕包围盒**：注入 `entity_boxes`（由 `Scene::entity_screen_boxes`
+/// 从真实模型逐顶点投影）后，`entity_screen_box` / `entity_screen_center`
+/// 是 HUD 标记与框选命中的**单一真值源**，替代旧 `world_to_screen` /
+/// `unit_screen_bounds` 那套按程序化四面体低空平面估算的口径（会与放大 4×
+/// 且贴地的真实模型错位上百像素）。未注入时回退旧方法，既有单测零改动。
+#[derive(Clone, Debug)]
 pub struct ScreenMapper {
     pub width: f64,
     pub height: f64,
@@ -87,6 +93,8 @@ pub struct ScreenMapper {
     projection: Option<w3_render::ScreenProjection>,
     /// 物理像素 / 逻辑像素（窗口 `scale_factor`）；默认 1.0 表示无缩放。
     pixels_per_point: f64,
+    /// 实体 ID → 真实模型屏幕包围盒（物理像素）；`None` = 回退旧口径。
+    entity_boxes: Option<Arc<BTreeMap<u64, ([f64; 2], [f64; 2])>>>,
 }
 
 impl ScreenMapper {
@@ -100,6 +108,7 @@ impl ScreenMapper {
             zoom,
             projection: None,
             pixels_per_point: 1.0,
+            entity_boxes: None,
         }
     }
 
@@ -119,6 +128,48 @@ impl ScreenMapper {
             1.0
         };
         self
+    }
+
+    /// 注入由 `Scene::entity_screen_boxes` 产出的真实模型屏幕包围盒，作为
+    /// HUD 标记 / 选中框 / 框选命中的单一真值源。纯表现层，不进权威状态。
+    pub fn with_entity_boxes(mut self, boxes: BTreeMap<u64, ([f64; 2], [f64; 2])>) -> Self {
+        self.entity_boxes = Some(Arc::new(boxes));
+        self
+    }
+
+    /// 实体真实模型屏幕包围盒（物理像素）：命中测试 / 框选用。
+    ///
+    /// - 未注入 boxes（验收用合成 mapper / 线性映射单测）：回退旧
+    ///   `unit_screen_bounds`，保证既有单测零改动。
+    /// - 已注入但缺该 id（首帧前 scene 空、运行时新实体尚未 `consume`、
+    ///   相机背后实体被投影过滤）：**不回退旧 24 单位四面体巨框**（那会在
+    ///   zoom=7 下一框选中全屏、正是「选不上 / 乱选」根因），改用一个以
+    ///   `world_to_screen` 为中心、`PICK_RADIUS` 为半径的紧致 box，使命中
+    ///   自然收敛到单位逻辑点附近、绝不产生近全屏框。该实体在下一帧
+    ///   `consume` 后即有真实 box，短窗口内降级可接受。
+    pub fn entity_screen_box(&self, id: u64, world: [f64; 2]) -> ([f64; 2], [f64; 2]) {
+        if let Some(boxes) = &self.entity_boxes {
+            if let Some(&b) = boxes.get(&id) {
+                return b;
+            }
+            let center = self.world_to_screen(world);
+            return (
+                [center[0] - PICK_RADIUS, center[1] - PICK_RADIUS],
+                [center[0] + PICK_RADIUS, center[1] + PICK_RADIUS],
+            );
+        }
+        self.unit_screen_bounds(world)
+    }
+
+    /// 实体真实模型屏幕包围盒的中心（物理像素）：HUD 队伍色点 / 选中框
+    /// 锚点。未注入 boxes 时回退 `world_to_screen`，既有行为零改动。
+    pub fn entity_screen_center(&self, id: u64, world: [f64; 2]) -> [f64; 2] {
+        if let Some(boxes) = &self.entity_boxes {
+            if let Some(&(min, max)) = boxes.get(&id) {
+                return [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
+            }
+        }
+        self.world_to_screen(world)
     }
 
     /// 物理屏幕坐标 → egui 逻辑坐标。
@@ -336,7 +387,10 @@ impl InputState {
                 entity.x as f64 / SCALE as f64,
                 entity.y as f64 / SCALE as f64,
             ];
-            let (unit_min, unit_max) = mapper.unit_screen_bounds(world);
+            // 单一真值源：用 Scene 真实模型顶点投影的实体屏幕包围盒判定命中，
+            // 替代旧 `unit_screen_bounds`（24 世界单位四面体估算，放大后近乎
+            // 全屏、拖框选不准）。未注入 boxes 时回退旧口径，既有测试零改动。
+            let (unit_min, unit_max) = mapper.entity_screen_box(entity.id, world);
             let inside = if is_click {
                 end[0] >= unit_min[0] - PICK_RADIUS
                     && end[0] <= unit_max[0] + PICK_RADIUS
@@ -372,13 +426,13 @@ impl InputState {
                 entity.x as f64 / SCALE as f64,
                 entity.y as f64 / SCALE as f64,
             ];
-            let (unit_min, unit_max) = mapper.unit_screen_bounds(world);
+            let (unit_min, unit_max) = mapper.entity_screen_box(entity.id, world);
             let inside = point[0] >= unit_min[0] - PICK_RADIUS
                 && point[0] <= unit_max[0] + PICK_RADIUS
                 && point[1] >= unit_min[1] - PICK_RADIUS
                 && point[1] <= unit_max[1] + PICK_RADIUS;
             if inside {
-                let center = mapper.world_to_screen(world);
+                let center = mapper.entity_screen_center(entity.id, world);
                 let distance = (center[0] - point[0]).hypot(center[1] - point[1]);
                 if best.is_none_or(|(d, _)| distance < d) {
                     best = Some((distance, entity.id));

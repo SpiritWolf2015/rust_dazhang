@@ -57,7 +57,7 @@
 | 完整 WC3 玩法的**结构**：单位 / 技能 / 科技 / 英雄 / 物品 / JASS 行为如何分层 | 仓库 `core/`、`jassparser/`、`fdfparser/` |
 | 按种族 / 英雄分组的技能行为定义（人族单位 1538 行、人族英雄 829 行、兽族英雄 222 行、通用被动 2253 行、reactions 2064 行；合计约 1.6 万行） | `core/assets/abilityBehaviors/*.json` |
 | 英雄技能清单：`Human/{Archmage,MountainKing,Paladin}`、`Orc/{TaurenChieftain}` | `resources/Scripts/Abilities/` |
-| 对战初始化语义 | `resources/Scripts/melee.jui` |
+| JASS UI 帧定义，仅作 FDF / UI 格式参考；`melee.jui` **不是**对战初始化动作表，该语义见 `godot_warcraft3/docs/design/game/ROADMAP.md` §0 / §2-C | `resources/Scripts/melee.jui` |
 | 经典规则待核清单（复活常量、UnitBalance 836 行、技能 799 项、补丁差异） | 借鉴「先核来源再写数值」的做法 |
 
 **硬性边界**：AGPLv3 与本项目 GPLv3 组合有条件，**只借鉴设计语义、不得复制代码**；若将来要引入其代码，须按 ADR 0001 复核点重新评估许可证，不得直接并入（`docs/references/UPSTREAM.md:21`）。本项目也不引入其 Java / LibGDX 依赖。
@@ -116,11 +116,11 @@
 
 ### P8.5 深度玩法（必做，全量；用户 2026-11-14 拍板纳入）
 
-参考 `godot_warcraft3` N1 / N2 / N4-A、`ITEMS_AND_MELEE_AI_PLAN.md`（道具 I0–I4、AI A0–A4）与 Warsmash `melee.jui` / `abilityBehaviors/*.json`。**五个子系统各单独开 change，串行推进，不塞回 P8.0–P8.4**：
+参考 `godot_warcraft3` N1 / N2 / N4-A、`ITEMS_AND_MELEE_AI_PLAN.md`（道具 I0–I4、AI A0–A4）与 Warsmash `Abilities/{Human,Orc}/` / `abilityBehaviors/*.json`（`melee.jui` 经核验仅为 JASS UI 帧定义，不作对战初始化语义）。**五个子系统各单独开 change，串行推进，不塞回 P8.0–P8.4**：
 
 | 子阶段 | 内容 | 参照 | 验收 |
 |---|---|---|---|
-| P8.5a 英雄复活 | 祭坛复活队列、费用 / 时间读冻结常量、英雄状态与背包恢复 | godot N1 `HeroDeathRegistry` / Warsmash `melee.jui` 复活常量 | 英雄阵亡后可复活、复活后状态与哈希一致 |
+| P8.5a 英雄复活 | 祭坛复活队列、费用 / 时间读冻结常量、英雄状态与背包恢复 | godot N1 `HeroDeathRegistry` / 复活常量待本机导出表核对（不指向 `melee.jui`） | 英雄阵亡后可复活、复活后状态与哈希一致 |
 | P8.5b 主城升级 | 主城 Keep / Stronghold 升级、解锁二线单位与科技 | godot N1 `building_upgrade`、F7 | 升级后训练 / 解锁生效，快照哈希稳定 |
 | P8.5c 野怪营地与掉落 | 中立野怪 AI（leash / 归巢）、死亡掉落表、确定性随机码 | godot `UNIT_AI.md` / `ItemDropTable` | 清野可重复、掉落逐帧一致 |
 | P8.5d 物品 / 商店 / 回城卷轴 | 六格背包、地面拾取、商店购买、回城卷轴 | godot `ITEM_SYSTEM.md` I0–I4、N4-A | 拾取 / 购买 / 使用闭环，实例不共用充能 |

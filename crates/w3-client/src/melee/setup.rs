@@ -7,9 +7,13 @@
 use std::collections::BTreeMap;
 
 use w3_core::{
-    Command, CommandKind, EntityId, Frame, GameplayCommand, GameplayCommandKind, SimFixed,
-    StaticWorld,
+    Command, CommandKind, DefId, EntityId, Frame, FrozenDefinitions, GameplayCommand,
+    GameplayCommandKind, SimFixed, StaticWorld,
 };
+
+use crate::input::{MovabilityMap, derive_movability};
+
+use super::defs::Race;
 
 /// 合成世界格数。
 pub const WORLD_WIDTH: u32 = 32;
@@ -145,6 +149,13 @@ pub struct MeleeSetup {
     pub gameplay_commands: Vec<GameplayCommand>,
     /// 表现层类型映射（实体 ID → 类型），不进权威状态。
     pub kinds: BTreeMap<u64, EntityKind>,
+    /// 表现层定义的关联（实体 ID → 分段 `DefId`），只用于从冻结定义派生
+    /// 可移动性判据（design D1 / D2）。`CommandKind::Spawn` 只携带冻结初值、
+    /// 不携带 `DefId`，故种族维度只停在这一层，MUST NOT 进入权威状态 /
+    /// 状态哈希 / 快照；两族装配的开局命令字节完全一致。
+    pub def_ids: BTreeMap<u64, DefId>,
+    /// 本局本地玩家所选种族（定义层参数，回落人族段）。
+    pub race: Race,
     pub local_hall: EntityId,
     pub ai_hall: EntityId,
     pub local_peasants: Vec<EntityId>,
@@ -157,6 +168,7 @@ pub struct MeleeSetup {
 struct Builder {
     commands: Vec<Command>,
     kinds: BTreeMap<u64, EntityKind>,
+    def_ids: BTreeMap<u64, DefId>,
     next_id: u64,
     next_sequence: [u32; 3],
 }
@@ -166,12 +178,15 @@ impl Builder {
         Self {
             commands: Vec::new(),
             kinds: BTreeMap::new(),
+            def_ids: BTreeMap::new(),
             next_id: 1,
             next_sequence: [0; 3],
         }
     }
 
     /// 追加一条 `Spawn`；ID 按构造顺序分配，与内核执行顺序一致。
+    /// `def_id` 是该出生实体在 client 侧冻结定义中的分段编号（表现层关联，
+    /// 不写入 `CommandKind::Spawn` 的权威初值）。
     fn spawn(
         &mut self,
         player: u8,
@@ -182,6 +197,7 @@ impl Builder {
         damage: i64,
         range: i64,
         kind: EntityKind,
+        def_id: DefId,
     ) -> EntityId {
         let slot = &mut self.next_sequence[player as usize];
         *slot += 1;
@@ -203,21 +219,35 @@ impl Builder {
             },
         ));
         self.kinds.insert(id, kind);
+        self.def_ids.insert(id, def_id);
         EntityId::new(id).expect("melee setup: reason=invalid_entity_id")
     }
 }
 
 impl MeleeSetup {
-    /// 构造对称开局：双方各一座主城、三名农民、一处金矿与一片树林。
+    /// 构造默认开局：回落人族段（本地人族、AI 兽族），既有入口行为不变。
+    ///
+    /// 装配层 `def_ids` 的段位差异不影响任何 `Spawn` 命令字节，故权威状态
+    /// 哈希、快照与改动前一致（design D2 / ADR 0002）。
+    pub fn new() -> Self {
+        Self::with_race(Race::Human)
+    }
+
+    /// 按种族参数构造对称开局：双方各一座主城、三名农民、一处金矿与一片
+    /// 树林；本地玩家用 `race` 段、AI 对手用 `race.opponent()` 段，中立
+    /// 资源固定用 `9xx` 段（design D2 定义层种族分段）。
     ///
     /// 主城落在真实 Echo Isles 的两个 sloc（见 [`LOCAL_START`] / [`AI_START`]），
     /// 农民朝地图中心方向聚在主城前方、金矿与树林在侧后方，全部落在各自陆块
     /// 的地面上。主城相距约 155 世界单位，处于合成士兵经移动后的攻城射程内，
-    /// 使一局可在合理帧数内分出胜负。坐标全为编译期整数常量。
-    pub fn new() -> Self {
+    /// 使一局可在合理帧数内分出胜负。坐标全为编译期整数常量；种族参数只
+    /// 写入表现层 `def_ids`，MUST NOT 新增权威状态字段或改动 `Spawn` 初值。
+    pub fn with_race(race: Race) -> Self {
         let mut b = Builder::new();
         let local = opening_layout(LOCAL_START, 1, LOCAL_SPREAD);
         let ai = opening_layout(AI_START, -1, AI_SPREAD);
+        let local_race = race;
+        let ai_race = race.opponent();
 
         // 本地玩家（player 1）：ID 1..=6。
         let local_hall = b.spawn(
@@ -229,6 +259,7 @@ impl MeleeSetup {
             0,
             0,
             EntityKind::TownHall,
+            local_race.town_hall(),
         );
         let local_peasants = vec![
             b.spawn(
@@ -240,6 +271,7 @@ impl MeleeSetup {
                 4,
                 4,
                 EntityKind::Peasant,
+                local_race.peasant(),
             ),
             b.spawn(
                 LOCAL_PLAYER,
@@ -250,6 +282,7 @@ impl MeleeSetup {
                 4,
                 4,
                 EntityKind::Peasant,
+                local_race.peasant(),
             ),
             b.spawn(
                 LOCAL_PLAYER,
@@ -260,6 +293,7 @@ impl MeleeSetup {
                 4,
                 4,
                 EntityKind::Peasant,
+                local_race.peasant(),
             ),
         ];
         let local_mine = b.spawn(
@@ -271,6 +305,7 @@ impl MeleeSetup {
             0,
             0,
             EntityKind::GoldMine,
+            local_race.gold_mine(),
         );
         b.spawn(
             LOCAL_PLAYER,
@@ -281,6 +316,7 @@ impl MeleeSetup {
             0,
             0,
             EntityKind::Tree,
+            local_race.tree(),
         );
 
         // AI 对手（player 2）：ID 7..=12。
@@ -293,6 +329,7 @@ impl MeleeSetup {
             0,
             0,
             EntityKind::TownHall,
+            ai_race.town_hall(),
         );
         let ai_peasants = vec![
             b.spawn(
@@ -304,6 +341,7 @@ impl MeleeSetup {
                 4,
                 4,
                 EntityKind::Peasant,
+                ai_race.peasant(),
             ),
             b.spawn(
                 AI_PLAYER,
@@ -314,6 +352,7 @@ impl MeleeSetup {
                 4,
                 4,
                 EntityKind::Peasant,
+                ai_race.peasant(),
             ),
             b.spawn(
                 AI_PLAYER,
@@ -324,6 +363,7 @@ impl MeleeSetup {
                 4,
                 4,
                 EntityKind::Peasant,
+                ai_race.peasant(),
             ),
         ];
         let ai_mine = b.spawn(
@@ -335,8 +375,19 @@ impl MeleeSetup {
             0,
             0,
             EntityKind::GoldMine,
+            ai_race.gold_mine(),
         );
-        b.spawn(AI_PLAYER, ai[5].0, ai[5].1, 200, 0, 0, 0, EntityKind::Tree);
+        b.spawn(
+            AI_PLAYER,
+            ai[5].0,
+            ai[5].1,
+            200,
+            0,
+            0,
+            0,
+            EntityKind::Tree,
+            ai_race.tree(),
+        );
 
         // 双方各提交一条开局 `Gather`：既让农民开始采集，也确保两个玩家的
         // 经济实体在内核中登记（`resolve_victory` 要求至少两个 active 玩家）。
@@ -365,6 +416,8 @@ impl MeleeSetup {
             commands: b.commands,
             gameplay_commands,
             kinds: b.kinds,
+            def_ids: b.def_ids,
+            race,
             local_hall,
             ai_hall,
             local_peasants,
@@ -372,6 +425,19 @@ impl MeleeSetup {
             local_mine,
             ai_mine,
         }
+    }
+
+    /// 装配期从 client 侧冻结定义派生 `EntityId → 可移动性` 只读映射
+    /// （design D1）：判据是 `FrozenDefinitions::units()` 的
+    /// `UnitDef.speed_raw`，MUST NOT 用运行时 `speed` 或建筑类型白名单。
+    /// 该映射是表现层只读数据，MUST NOT 进入权威状态 / 状态哈希 / 快照。
+    pub fn movability(&self, defs: &FrozenDefinitions) -> MovabilityMap {
+        derive_movability(defs, &self.def_ids)
+    }
+
+    /// 只读分段定义关联（实体 ID → `DefId`），供验收核对段位。
+    pub fn def_ids(&self) -> &BTreeMap<u64, DefId> {
+        &self.def_ids
     }
 
     /// 表现层模型键映射，供 `ModelLibrary::bind_entity` 注入。
@@ -538,5 +604,123 @@ mod tests {
             ai_hall.0 - local_hall.0 > 100,
             "两主城应分处东西两片陆块、相距足够远以便一局分出胜负"
         );
+    }
+
+    /// 两族装配：双方各取对应段的 `DefId`，且一局仍是 12 个 `Spawn`。
+    #[test]
+    fn two_races_assemble_with_segmented_def_ids() {
+        use crate::melee::defs::{
+            HUMAN_BARRACKS, HUMAN_PEASANT, HUMAN_SOLDIER, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE,
+            NEUTRAL_TREE, ORC_BARRACKS, ORC_PEASANT, ORC_SOLDIER, ORC_TOWN_HALL,
+        };
+
+        let human = MeleeSetup::with_race(Race::Human);
+        let orc = MeleeSetup::with_race(Race::Orc);
+        assert_eq!(human.race, Race::Human);
+        assert_eq!(orc.race, Race::Orc);
+
+        for setup in [&human, &orc] {
+            assert_eq!(setup.commands.len(), 12, "reason=opening_spawn_count");
+            assert_eq!(
+                setup.gameplay_commands.len(),
+                2,
+                "reason=opening_gather_count"
+            );
+            assert_eq!(setup.kinds.len(), 12, "reason=all_entities_tagged");
+            assert_eq!(setup.def_ids.len(), 12, "reason=all_entities_have_def_id");
+        }
+
+        // 人族本地单位落在 1xx 段、AI 对手落在 2xx 段。
+        let human_local: Vec<DefId> = [1, 2, 3, 4]
+            .iter()
+            .map(|id| *human.def_ids.get(id).unwrap())
+            .collect();
+        assert!(
+            human_local
+                .iter()
+                .all(|id| (100..200).contains(id) || (900..1000).contains(id)),
+            "reason=human_local_units_in_1xx_or_neutral"
+        );
+        assert_eq!(human.def_ids.get(&1), Some(&HUMAN_TOWN_HALL));
+        assert_eq!(human.def_ids.get(&2), Some(&HUMAN_PEASANT));
+        assert_eq!(human.def_ids.get(&5), Some(&NEUTRAL_GOLD_MINE));
+        assert_eq!(human.def_ids.get(&6), Some(&NEUTRAL_TREE));
+        assert_eq!(human.def_ids.get(&7), Some(&ORC_TOWN_HALL));
+        assert_eq!(human.def_ids.get(&8), Some(&ORC_PEASANT));
+        assert_eq!(human.def_ids.get(&11), Some(&NEUTRAL_GOLD_MINE));
+
+        // 兽族参数翻转：本地 2xx、AI 1xx，中立资源恒为 9xx。
+        assert_eq!(orc.def_ids.get(&1), Some(&ORC_TOWN_HALL));
+        assert_eq!(orc.def_ids.get(&2), Some(&ORC_PEASANT));
+        assert_eq!(orc.def_ids.get(&5), Some(&NEUTRAL_GOLD_MINE));
+        assert_eq!(orc.def_ids.get(&6), Some(&NEUTRAL_TREE));
+        assert_eq!(orc.def_ids.get(&7), Some(&HUMAN_TOWN_HALL));
+        assert_eq!(orc.def_ids.get(&8), Some(&HUMAN_PEASANT));
+        assert_eq!(orc.def_ids.get(&11), Some(&NEUTRAL_GOLD_MINE));
+
+        // 分段常量确实落在各自段内（两族士兵 / 兵营段位）。
+        assert!((100..200).contains(&HUMAN_SOLDIER));
+        assert!((100..200).contains(&HUMAN_BARRACKS));
+        assert!((200..300).contains(&ORC_SOLDIER));
+        assert!((200..300).contains(&ORC_BARRACKS));
+    }
+
+    /// 回落兼容：未传种族参数回落人族段，既有入口行为完全不变。
+    #[test]
+    fn race_fallback_matches_human_segment_exactly() {
+        let fallback = MeleeSetup::new();
+        let human = MeleeSetup::with_race(Race::Human);
+        assert_eq!(fallback.race, Race::Human);
+        assert_eq!(fallback.def_ids, human.def_ids);
+        assert_eq!(fallback.commands, human.commands);
+        assert_eq!(fallback.gameplay_commands, human.gameplay_commands);
+        assert_eq!(fallback.kinds, human.kinds);
+        assert_eq!(spawn_positions(&fallback), spawn_positions(&human));
+    }
+
+    /// 种族参数只改表现层 `def_ids`，`Spawn` 命令字节完全一致
+    /// （design D2：不新增权威状态、逐帧哈希与基线一致）。
+    #[test]
+    fn race_does_not_change_authoritative_spawn_commands() {
+        let human = MeleeSetup::with_race(Race::Human);
+        let orc = MeleeSetup::with_race(Race::Orc);
+        assert_eq!(
+            human.commands, orc.commands,
+            "reason=spawn_bytes_race_independent"
+        );
+        assert_eq!(
+            human.gameplay_commands, orc.gameplay_commands,
+            "reason=gameplay_bytes_race_independent"
+        );
+        assert_eq!(human.kinds, orc.kinds, "reason=kinds_race_independent");
+        assert_ne!(
+            human.def_ids, orc.def_ids,
+            "reason=def_ids_are_race_specific"
+        );
+    }
+
+    /// 可移动性判据由冻结定义 `speed_raw` 派生：农民可移动、建筑 / 资源点
+    /// 不可移动；MUST NOT 用运行时 `speed`（`Builder::spawn` 强制 `max(1)`）。
+    #[test]
+    fn movability_is_derived_from_definition_speed_raw() {
+        let defs = crate::melee::defs::synthetic_definitions();
+        let setup = MeleeSetup::new();
+        let map = setup.movability(&defs);
+        assert_eq!(map.len(), 12, "reason=one_entry_per_opening_entity");
+        // 本地 3 农民（ID 2,3,4）与 AI 3 农民（ID 8,9,10）可移动。
+        for id in [2, 3, 4, 8, 9, 10] {
+            assert_eq!(map.get(&id), Some(&true), "reason=peasant_movable id={id}");
+        }
+        // 双方主城（1,7）与资源点（5,6,11,12）不可移动。
+        for id in [1, 5, 6, 7, 11, 12] {
+            assert_eq!(map.get(&id), Some(&false), "reason=immovable id={id}");
+        }
+        // 运行时 Spawn 的 speed 被抬到 max(1)（> 0），但判据仍判主城不可移动，
+        // 证明没有回退到运行时 `speed`。
+        for command in &setup.commands {
+            if let CommandKind::Spawn { speed, .. } = command.kind {
+                assert!(speed.raw() > 0, "reason=runtime_speed_is_always_positive");
+            }
+        }
     }
 }

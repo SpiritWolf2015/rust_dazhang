@@ -12,8 +12,8 @@
 
 use w3_client::{
     ClientApp, ClientCommand, ClientError, FixedStepClient, FrameAdvance, HudAssetError, HudAssets,
-    HudModel, InputAction, InputError, InputState, LEAD_FRAMES, ScreenMapper, StepDriver,
-    TICKS_PER_LOGIC_FRAME, TICKS_PER_SECOND, ZH,
+    HudModel, InputAction, InputError, InputState, LEAD_FRAMES, MovabilityMap, ScreenMapper,
+    StepDriver, TICKS_PER_LOGIC_FRAME, TICKS_PER_SECOND, ZH,
 };
 use w3_core::{
     AbilityDef, Command, CommandError, CommandKind, EffectDef, EffectKind, EntityId, Event, Frame,
@@ -79,6 +79,12 @@ fn snapshot(app: &ClientApp<FixedStepClient>) -> Snapshot {
 /// 配合 `Snapshot: PartialEq` 逐字段相等断言。
 fn snapshot_bytes(snapshot: &Snapshot) -> Vec<u8> {
     format!("{snapshot:?}").into_bytes()
+}
+
+/// 既有 interaction 单测未注入判据映射：空映射沿用「全部可移动」的
+/// 旧行为契约（design D1 的 `unwrap_or(true)` 回落），仅适配 `apply` 新签名。
+fn legacy_movability() -> MovabilityMap {
+    MovabilityMap::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -657,6 +663,7 @@ fn physical_mouse_picks_enemy_under_high_dpi() {
             &view,
             &mapper,
             &events,
+            &legacy_movability(),
         )
         .unwrap();
     input
@@ -665,6 +672,7 @@ fn physical_mouse_picks_enemy_under_high_dpi() {
             &view,
             &mapper,
             &events,
+            &legacy_movability(),
         )
         .unwrap();
     assert!(!input.selection().is_empty());
@@ -679,7 +687,13 @@ fn physical_mouse_picks_enemy_under_high_dpi() {
     let (min, max) = mapper.unit_screen_bounds(world);
     let center = [(min[0] + max[0]) * 0.5, (min[1] + max[1]) * 0.5];
     let commands = input
-        .apply(InputAction::Cast(center), &view, &mapper, &events)
+        .apply(
+            InputAction::Cast(center),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(matches!(
         commands[0],
@@ -870,10 +884,22 @@ fn entity_screen_boxes_drive_selection_and_hud_center() {
     // ② 在真实 box 中心单击 → 选中该实体。
     let mut input = InputState::new(1);
     input
-        .apply(InputAction::SelectStart(center), &view, &mapper, &events)
+        .apply(
+            InputAction::SelectStart(center),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     input
-        .apply(InputAction::SelectEnd(center), &view, &mapper, &events)
+        .apply(
+            InputAction::SelectEnd(center),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(input.selection().contains(&1), "box 中心单击应选中实体");
 
@@ -885,10 +911,22 @@ fn entity_screen_boxes_drive_selection_and_hud_center() {
     );
     let mut input2 = InputState::new(1);
     input2
-        .apply(InputAction::SelectStart(outside), &view, &mapper, &events)
+        .apply(
+            InputAction::SelectStart(outside),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     input2
-        .apply(InputAction::SelectEnd(outside), &view, &mapper, &events)
+        .apply(
+            InputAction::SelectEnd(outside),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(
         !input2.selection().contains(&1),
@@ -949,10 +987,22 @@ fn entity_screen_box_missing_id_never_falls_back_to_giant_box() {
     let far = [50.0, 50.0]; // 远离逻辑点中心的屏幕角落
     let mut input = InputState::new(1);
     input
-        .apply(InputAction::SelectStart(far), &view, &mapper, &events)
+        .apply(
+            InputAction::SelectStart(far),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     input
-        .apply(InputAction::SelectEnd(far), &view, &mapper, &events)
+        .apply(
+            InputAction::SelectEnd(far),
+            &view,
+            &mapper,
+            &events,
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(
         !input.selection().contains(&1),

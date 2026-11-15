@@ -7,16 +7,24 @@ use std::collections::BTreeSet;
 
 use w3_client::melee::defs::{BARRACKS, SOLDIER};
 use w3_client::melee::{
-    AI_PLAYER, LOCAL_PLAYER, MeleeDriver, MeleeSetup, synthetic_definitions, synthetic_world,
+    AI_PLAYER, LOCAL_PLAYER, MeleeDriver, MeleeSetup, Race, synthetic_definitions, synthetic_world,
 };
-use w3_client::{ClientCommand, FixedStepClient, LOGIC_FPS, StepDriver, TICKS_PER_LOGIC_FRAME};
+use w3_client::{
+    ClientCommand, FixedStepClient, LOGIC_FPS, MovabilityMap, StepDriver, TICKS_PER_LOGIC_FRAME,
+};
 use w3_core::{
     Command, CommandKind, EntityId, Frame, GameplayCommand, GameplayCommandKind, MatchConfig,
-    RtsMatch,
+    RtsMatch, Snapshot,
 };
 
 const SEED: u64 = 0x5eed;
 const CONTENT_HASH: u64 = 0xC0FFEE;
+
+/// 既有输入翻译回归未注入判据映射：空映射沿用「全部可移动」的旧行为契约
+/// （design D1 的 `unwrap_or(true)` 回落），仅适配 `apply` 新签名。
+fn legacy_movability() -> MovabilityMap {
+    MovabilityMap::new()
+}
 
 /// 按开局脚本装配一局；`horizon = 0` 时不注入 AI 脚本，便于隔离玩家操作。
 fn build_driver(setup: &MeleeSetup, horizon: u64) -> MeleeDriver {
@@ -290,7 +298,13 @@ fn input_translation_covers_melee_actions_and_groups() {
 
     // 全屏框选：选中集合是表现层状态，不生成任何命令。
     input
-        .apply(InputAction::SelectStart([0.0, 0.0]), &view, &mapper, &[])
+        .apply(
+            InputAction::SelectStart([0.0, 0.0]),
+            &view,
+            &mapper,
+            &[],
+            &legacy_movability(),
+        )
         .unwrap();
     input
         .apply(
@@ -298,12 +312,19 @@ fn input_translation_covers_melee_actions_and_groups() {
             &view,
             &mapper,
             &[],
+            &legacy_movability(),
         )
         .unwrap();
     assert!(!input.selection().is_empty());
 
     let gather = input
-        .apply(InputAction::Gather, &view, &mapper, &[])
+        .apply(
+            InputAction::Gather,
+            &view,
+            &mapper,
+            &[],
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(gather.iter().any(|command| matches!(
         command,
@@ -312,7 +333,13 @@ fn input_translation_covers_melee_actions_and_groups() {
     )));
 
     let build = input
-        .apply(InputAction::Build, &view, &mapper, &[])
+        .apply(
+            InputAction::Build,
+            &view,
+            &mapper,
+            &[],
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(matches!(
         build[0],
@@ -321,7 +348,13 @@ fn input_translation_covers_melee_actions_and_groups() {
     ));
 
     let cancel = input
-        .apply(InputAction::CancelTrain, &view, &mapper, &[])
+        .apply(
+            InputAction::CancelTrain,
+            &view,
+            &mapper,
+            &[],
+            &legacy_movability(),
+        )
         .unwrap();
     assert!(matches!(
         cancel[0],
@@ -329,7 +362,9 @@ fn input_translation_covers_melee_actions_and_groups() {
             if matches!(gameplay.kind, GameplayCommandKind::CancelTrain { .. })
     ));
 
-    let stop = input.apply(InputAction::Stop, &view, &mapper, &[]).unwrap();
+    let stop = input
+        .apply(InputAction::Stop, &view, &mapper, &[], &legacy_movability())
+        .unwrap();
     assert!(stop.iter().any(|command| matches!(
         command,
         ClientCommand::Simulation(simulation)
@@ -339,13 +374,25 @@ fn input_translation_covers_melee_actions_and_groups() {
     // 编组与按组选择：纯表现层动作，不生成命令、不改哈希。
     assert!(
         input
-            .apply(InputAction::AssignGroup(3), &view, &mapper, &[])
+            .apply(
+                InputAction::AssignGroup(3),
+                &view,
+                &mapper,
+                &[],
+                &legacy_movability()
+            )
             .unwrap()
             .is_empty()
     );
     assert!(
         input
-            .apply(InputAction::SelectGroup(3), &view, &mapper, &[])
+            .apply(
+                InputAction::SelectGroup(3),
+                &view,
+                &mapper,
+                &[],
+                &legacy_movability()
+            )
             .unwrap()
             .is_empty()
     );
@@ -358,6 +405,7 @@ fn input_translation_covers_melee_actions_and_groups() {
             &view,
             &mapper,
             &[],
+            &legacy_movability(),
         )
         .unwrap();
     assert!(moves.len() > 1);
@@ -390,4 +438,140 @@ fn ai_commands_are_frame_frozen_not_clock_driven() {
         batched.sim().compute_state_hash()
     );
     assert_eq!(per_frame.snapshot(), batched.snapshot());
+}
+
+/// 按既有完整闭环脚本把一局打到胜负结算，返回逐帧状态哈希与终局快照。
+/// 一局内两族对抗共用一个 `RtsMatch` 与一份 `FrozenDefinitions`；种族参数
+/// 只写入表现层 `def_ids`，`Spawn` 命令字节完全一致（design D2）。
+fn play_full_match(setup: &MeleeSetup) -> (Vec<u64>, Snapshot) {
+    let mut driver = build_driver(setup, 0);
+    let mut hashes = Vec::new();
+    let step = |driver: &mut MeleeDriver, hashes: &mut Vec<u64>, frames: u64| {
+        for _ in 0..frames {
+            driver.advance_ticks(TICKS_PER_LOGIC_FRAME);
+            hashes.push(driver.sim().compute_state_hash());
+        }
+    };
+    step(&mut driver, &mut hashes, 1);
+
+    let mut sequence = 100u32;
+    let mut frame = driver.view().tick + 1;
+    for _ in 0..5 {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame,
+            GameplayCommandKind::Gather {
+                unit: setup.local_peasants[0],
+            },
+        );
+        sequence += 1;
+        frame += 1;
+    }
+    step(&mut driver, &mut hashes, 6);
+    assert!(driver.snapshot().gameplay.players[&LOCAL_PLAYER].gold > 1);
+
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Train {
+            producer: setup.local_hall,
+            unit_def: BARRACKS,
+            is_building: true,
+        },
+    );
+    sequence += 1;
+    step(&mut driver, &mut hashes, 50);
+
+    let before: BTreeSet<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .collect();
+    let train_frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        train_frame,
+        GameplayCommandKind::Train {
+            producer: setup.local_hall,
+            unit_def: SOLDIER,
+            is_building: false,
+        },
+    );
+    sequence += 1;
+    step(&mut driver, &mut hashes, 35);
+    let produced: Vec<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .filter(|id| !before.contains(id))
+        .collect();
+    assert!(!produced.is_empty(), "训练必须生成新实体");
+    let soldier = EntityId::new(produced[0]).expect("melee: reason=invalid_soldier_id");
+
+    let attack_start = driver.view().tick + 1;
+    for offset in 0..8 {
+        submit_simulation(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            attack_start + offset,
+            CommandKind::Attack {
+                attacker: soldier,
+                target: setup.ai_hall,
+            },
+        );
+        sequence += 1;
+    }
+    step(&mut driver, &mut hashes, 20);
+
+    let snapshot = driver.snapshot();
+    assert!(snapshot.gameplay.victory.resolved, "一局必须打到胜负结算");
+    assert_eq!(snapshot.gameplay.victory.winner, Some(LOCAL_PLAYER));
+    (hashes, snapshot)
+}
+
+/// 两族参数各装配一局并打完，逐帧哈希与快照字节与「未传种族参数」基线一致
+/// （design D2：种族选择不引入运行时权威状态，`SNAPSHOT_VERSION` 仍为 3）。
+#[test]
+fn both_races_play_full_match_with_baseline_frame_hashes() {
+    let baseline = play_full_match(&MeleeSetup::new());
+    assert!(!baseline.0.is_empty(), "基线必须含逐帧哈希");
+
+    for race in [Race::Human, Race::Orc] {
+        let (hashes, snapshot) = play_full_match(&MeleeSetup::with_race(race));
+        assert_eq!(
+            hashes, baseline.0,
+            "reason=frame_hashes_match_baseline race={race:?}"
+        );
+        assert_eq!(
+            snapshot, baseline.1,
+            "reason=snapshot_bytes_match_baseline race={race:?}"
+        );
+    }
+}
+
+/// 回落兼容：未传种族参数回落人族段，一局仍能装配并打完，且与显式人族
+/// 参数的逐帧哈希 / 快照完全一致。
+#[test]
+fn race_fallback_matches_human_segment_in_full_match() {
+    let fallback = play_full_match(&MeleeSetup::new());
+    let human = play_full_match(&MeleeSetup::with_race(Race::Human));
+    assert_eq!(MeleeSetup::new().race, Race::Human);
+    assert_eq!(
+        fallback.0, human.0,
+        "reason=fallback_frame_hashes_match_human"
+    );
+    assert_eq!(
+        fallback.1, human.1,
+        "reason=fallback_snapshot_bytes_match_human"
+    );
 }

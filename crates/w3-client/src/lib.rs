@@ -57,7 +57,8 @@ pub use client::FixedStepClient;
 pub use hud::{HudAssetError, HudAssets, HudModel, draw};
 pub use i18n::{Texts, ZH};
 pub use input::{
-    ClientCommand, InputAction, InputError, InputState, LEAD_FRAMES, LOCAL_PLAYER, ScreenMapper,
+    ClientCommand, InputAction, InputError, InputState, LEAD_FRAMES, LOCAL_PLAYER, MovabilityMap,
+    ScreenMapper, derive_movability, filter_movable,
 };
 pub use net_driver::NetSessionDriver;
 pub use presentation::present;

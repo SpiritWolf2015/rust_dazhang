@@ -96,13 +96,16 @@ fn main() {
     );
 
     let setup = MeleeSetup::new();
+    let defs = synthetic_definitions();
+    // 装配期由 client 侧冻结定义 `speed_raw` 派生只读可移动性映射，
+    // 注入输入翻译层；表现层专属，不进权威状态 / 哈希 / 快照（design D1）。
+    let movability = setup.movability(&defs);
     let config = MatchConfig {
         seed: SEED,
         logic_fps: LOGIC_FPS,
         content_hash: CONTENT_HASH,
     };
-    let mut sim =
-        RtsMatch::create_with_definitions(config, synthetic_world(), synthetic_definitions());
+    let mut sim = RtsMatch::create_with_definitions(config, synthetic_world(), defs);
     for command in &setup.commands {
         sim.submit_command(*command)
             .expect("melee example: reason=spawn_command_rejected");
@@ -135,6 +138,7 @@ fn main() {
         .with_entity_models(real_map.entity_models)
         .with_textures(Some(real_map.textures))
         .with_entity_kinds(kinds)
+        .with_movability(movability)
         .with_initial_camera(initial_zoom, initial_pan)
         .run()
         .expect("melee example: reason=window_run_failed");

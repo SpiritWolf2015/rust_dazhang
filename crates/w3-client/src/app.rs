@@ -40,7 +40,9 @@ use crate::camera::{CameraAction, CameraState, PAN_STEP, YAW_STEP, ZOOM_STEP};
 use crate::client::FixedStepClient;
 use crate::hud::{self, HudAssets, HudModel, MinimapBackdrop, minimap_backdrop};
 use crate::i18n::{Texts, ZH};
-use crate::input::{ClientCommand, InputAction, InputError, InputState, ScreenMapper};
+use crate::input::{
+    ClientCommand, InputAction, InputError, InputState, MovabilityMap, ScreenMapper,
+};
 use crate::melee::EntityKind;
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -197,6 +199,10 @@ pub struct ClientApp<P: StepDriver> {
     minimap_backdrop: Option<MinimapBackdrop>,
     /// 装配层注入的实体类型标签（表现层专属，不进权威状态 / 哈希 / 快照）。
     entity_kinds: BTreeMap<u64, EntityKind>,
+    /// 装配层注入的可移动性只读映射（由 client 侧冻结定义 `speed_raw`
+    /// 派生，design D1）。表现层专属，MUST NOT 进权威状态 / 哈希 / 快照。
+    /// 未注入时为空映射，沿用既有「未登记实体视为可移动」行为。
+    movability: MovabilityMap,
     /// 命令卡点击待翻译的输入动作（表现层，在 GPU 借用结束后提交）。
     pending_input_action: Option<InputAction>,
     /// 真实模型贴图数组（上传 GPU `texture_2d_array`，纯表现层）。
@@ -234,6 +240,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             texts: ZH,
             minimap_backdrop: None,
             entity_kinds: BTreeMap::new(),
+            movability: MovabilityMap::new(),
             pending_input_action: None,
             textures: None,
             window: None,
@@ -255,6 +262,15 @@ impl<P: StepDriver + 'static> ClientApp<P> {
     /// 不改动既有 `new` 签名，既有入口不受影响。
     pub fn with_entity_kinds(mut self, kinds: BTreeMap<u64, EntityKind>) -> Self {
         self.entity_kinds = kinds;
+        self
+    }
+
+    /// 注入可移动性只读映射（表现层数据，design D1）。
+    /// 由装配期 `MeleeSetup::movability(&defs)` 从 client 侧冻结定义
+    /// `UnitDef.speed_raw` 派生；群体 `Move` 只作用于该映射判定可移动的实体。
+    /// 不改动既有 `new` 签名，未注入时沿用既有行为。
+    pub fn with_movability(mut self, movability: MovabilityMap) -> Self {
+        self.movability = movability;
         self
     }
 
@@ -360,6 +376,12 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         self.last_error
     }
 
+    /// 最近一次输入是否因「选中集合全为不可移动实体」而无可执行目标。
+    /// 表现层只读反馈位，供 HUD / 验收读取；不进权威状态 / 哈希 / 快照。
+    pub fn no_movable_target(&self) -> bool {
+        self.input.no_movable_target()
+    }
+
     /// 由宿主显式喂入整数 tick（验收用；真实循环由 [`HostClock`] 驱动）。
     /// 返回值中的 `steps` 即本轮推进的整数逻辑帧数，`step()` 全程无参。
     pub fn advance_with_ticks(&mut self, elapsed_ticks: u64) -> FrameAdvance {
@@ -374,7 +396,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         let events = self.last_events.clone();
         let commands = self
             .input
-            .apply(action, &view, &mapper, &events)
+            .apply(action, &view, &mapper, &events, &self.movability)
             .map_err(ClientError::Input)?;
         for command in &commands {
             self.driver.enqueue(command.clone())?;

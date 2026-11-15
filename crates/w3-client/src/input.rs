@@ -17,11 +17,54 @@ use std::sync::Arc;
 
 use w3_app::freeze_f64;
 use w3_core::{
-    Command, CommandKind, EntityId, Event, Frame, GameplayCommand, GameplayCommandKind, SCALE,
-    SimFixed, WorldView,
+    Command, CommandKind, DefId, EntityId, Event, Frame, FrozenDefinitions, GameplayCommand,
+    GameplayCommandKind, SCALE, SimFixed, WorldView,
 };
 
 use crate::melee::defs::BARRACKS;
+
+/// 表现层只读可移动性映射：`EntityId → 是否可移动`。
+///
+/// 装配期由 client 侧冻结定义 [`FrozenDefinitions::units`] 的
+/// `UnitDef::speed_raw` 派生（design D1），经 [`crate::app::ClientApp`]
+/// 注入输入翻译层。该映射是表现层专属数据，MUST NOT 进入 FNV-1a 状态哈希、
+/// `SNAPSHOT_VERSION`（当前 3）快照或任何权威状态字段（ADR 0002）。
+/// 映射未登记的实体（如运行时生产出的新单位）沿用既有行为视为可移动，
+/// 不做类型白名单推断；只有显式登记为 `false` 的实体被过滤。
+pub type MovabilityMap = BTreeMap<u64, bool>;
+
+/// 装配期从 client 侧冻结定义派生 `EntityId → 可移动性` 映射（design D1）。
+///
+/// 判据是 `UnitDef::speed_raw > 0`：`speed_raw == 0` 的建筑 / 资源点不可移动。
+/// `entity_defs` 是装配层记录的 `EntityId → DefId` 关联（不是运行时视图）。
+/// 定义缺失的实体按不可移动处理（显式保守，不放行未知类型）。
+pub fn derive_movability(
+    defs: &FrozenDefinitions,
+    entity_defs: &BTreeMap<u64, DefId>,
+) -> MovabilityMap {
+    entity_defs
+        .iter()
+        .map(|(&id, &def_id)| {
+            let movable = defs
+                .units()
+                .get(&def_id)
+                .is_some_and(|unit| unit.speed_raw > 0);
+            (id, movable)
+        })
+        .collect()
+}
+
+/// 按只读可移动性映射从选中集合筛出可生成 `Move` 的实体（design D1）。
+///
+/// `BTreeSet` 迭代即稳定 `EntityId` 顺序，落点分配只作用于筛后集合；
+/// 映射显式登记为 `false` 的建筑 / 金矿 / 树木 MUST NOT 生成 `Move`。
+pub fn filter_movable(selection: &BTreeSet<u64>, movability: &MovabilityMap) -> Vec<u64> {
+    selection
+        .iter()
+        .copied()
+        .filter(|id| movability.get(id).copied().unwrap_or(true))
+        .collect()
+}
 
 /// 命令提前量：执行帧 = 当前冻结逻辑帧号 + 该常量（整数帧，ADR 0002 §2）。
 /// 固定值，与 `Instant` / 呈现帧号 / 刷新率无关。
@@ -290,6 +333,9 @@ pub struct InputState {
     groups: BTreeMap<u8, BTreeSet<u64>>,
     /// 群体移动分组号（非 0，按稳定实体 ID 分配落点）。
     next_group: u32,
+    /// 最近一次输入是否因「选中集合全为不可移动实体」而无可执行目标。
+    /// 表现层只读反馈位，MUST NOT 进入权威状态 / 状态哈希 / 快照。
+    no_movable_target: bool,
 }
 
 impl Default for InputState {
@@ -309,7 +355,15 @@ impl InputState {
             next_sequence: 1,
             groups: BTreeMap::new(),
             next_group: 1,
+            no_movable_target: false,
         }
+    }
+
+    /// 最近一次输入是否因全为不可移动实体而无可执行目标（明确反馈位）。
+    ///
+    /// 该反馈只在表现层供 HUD / 验收读取，不生成任何命令、不改写权威状态。
+    pub fn no_movable_target(&self) -> bool {
+        self.no_movable_target
     }
 
     /// 取下一个非 0 群体移动分组号；表现层单调递增，不进权威状态。
@@ -453,7 +507,10 @@ impl InputState {
 
     /// 处理一个归一化输入动作，返回需要提交的命令（可能为空）。
     ///
-    /// `view` 与 `events` 都是只读输入；事件仅用于展示，不参与命令生成。
+    /// `view` / `events` / `movability` 都是只读输入；事件仅用于展示，
+    /// 不参与命令生成。`movability` 是装配期由 client 侧冻结定义
+    /// `UnitDef.speed_raw` 派生的表现层只读映射，只用于群体 `Move` 过滤
+    /// （design D1），MUST NOT 进入权威状态 / 状态哈希 / 快照。
     /// 提交失败由宿主显式报告，本层对不满足前置条件的动作显式返回错误。
     pub fn apply(
         &mut self,
@@ -461,7 +518,9 @@ impl InputState {
         view: &WorldView,
         mapper: &ScreenMapper,
         _events: &[Event],
+        movability: &MovabilityMap,
     ) -> Result<Vec<ClientCommand>, InputError> {
+        self.no_movable_target = false;
         match action {
             InputAction::SelectStart(point) => {
                 self.drag_start = Some(point);
@@ -499,13 +558,31 @@ impl InputState {
                         .collect())
                 } else {
                     let (x, y) = mapper.freeze_point(point)?;
+                    // 群体 Move 只作用于由冻结定义 speed_raw 派生的可移动
+                    // 实体（design D1）：建筑 / 金矿 / 树木在此被筛除，
+                    // 落点按筛后集合的稳定 EntityId 顺序分配，不因过滤改变。
+                    let movers: Vec<EntityId> = filter_movable(&self.selection, movability)
+                        .into_iter()
+                        .filter_map(EntityId::new)
+                        .collect();
+                    if movers.is_empty() {
+                        // 全为不可移动实体：不生成空命令、不改权威状态 /
+                        // 哈希，以英文结构化日志明确报告并置反馈位。
+                        log::warn!(
+                            target: "w3_client",
+                            "no movable target in selection: reason=all_immovable selected={}",
+                            self.selection.len()
+                        );
+                        self.no_movable_target = true;
+                        return Ok(Vec::new());
+                    }
                     // 多选时共用一个非 0 分组号，由内核按稳定实体 ID 分配落点。
-                    let group = if selected.len() > 1 {
+                    let group = if movers.len() > 1 {
                         self.take_group()
                     } else {
                         0
                     };
-                    Ok(selected
+                    Ok(movers
                         .into_iter()
                         .map(|entity| {
                             self.simulation(

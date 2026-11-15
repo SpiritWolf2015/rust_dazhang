@@ -11,6 +11,6 @@ pub mod driver;
 pub mod setup;
 
 pub use ai::AiScript;
-pub use defs::{ExportSource, synthetic_definitions};
+pub use defs::{ExportSource, Race, synthetic_definitions};
 pub use driver::MeleeDriver;
 pub use setup::{AI_PLAYER, EntityKind, LOCAL_PLAYER, MeleeSetup, synthetic_world};

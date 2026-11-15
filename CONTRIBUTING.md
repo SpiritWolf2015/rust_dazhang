@@ -53,4 +53,4 @@ cargo test -p w3-core --test determinism -- --nocapture
 
 ## 范围
 
-第一版范围见 [ADR 0003](docs/decisions/0003-scope.md)：Melee 优先。JASS / 触发器 VM、自定义地图、战役、迷雾等属于远期；提交这类实现前先开 ADR 讨论。
+1.0 最终范围与业务规则以 [WC3-MELEE-RULES.md](docs/references/WC3-MELEE-RULES.md) §0 为单一权威：只做局域网联机对战（含真人 VS AI 玩家，AI 玩家全部功能属 1.0）与回放、4 种族 / 道具 / 野怪 / 中立建筑、战争迷雾 / 隐身；不做纯本地单机对局形态、地图编辑器、RPG 自定义地图、剧情战役。分期与「为什么决定」见 [ADR 0003](docs/decisions/0003-scope.md)（含 2026-11-14 修订记录）。JASS / 触发器 VM、自定义地图、战役等仍属不做，提交这类实现前先开 ADR 讨论；迷雾 / 隐身已纳入 1.0，不属远期。

@@ -26,8 +26,8 @@ context: |
   任何改动权威状态、帧序、命令排序、哈希编码或快照字段的变更，
   都必须保持 crates/w3-core/tests/determinism.rs 全绿。
 
-  第一版范围之外：JASS/wtg 触发器 VM、自定义地图、战役、战争迷雾/隐身、
-  Mod API、跨版本存档、Godot 宿主、官方战网。
+  ADR 0003 第一版原「范围之外」（1.0 已修订，见 0003 修订记录与 WC3-MELEE-RULES.md §0）：
+  JASS/wtg 触发器 VM、自定义地图、战役、Mod API、跨版本存档、Godot 宿主、官方战网。
 
   开发约定见 CODEBUDDY.md：源码注释（含 pub rustdoc）一律中文；
   git 提交信息描述一律中文（Conventional Commits 英文 type 前缀保留）；

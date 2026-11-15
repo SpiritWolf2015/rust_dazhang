@@ -5,8 +5,8 @@
 ## 1. 项目速览
 
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
-- **1.0 版本范围（用户 2026-11-14 拍板）**：只做**局域网联机对战**与**回放录像保存 / 加载**，把**4 个种族、各种道具、地图野怪、中立建筑**功能做完；**不做**单机对战、地图编辑器、RPG 自定义地图、剧情战役。完整范围、规则编号 `R-x.y` 与「为什么决定」的待拍板张力见 `docs/references/WC3-MELEE-RULES.md` §0（业务规则单一权威，玩法实现 / review / 单测 MUST 引用其规则编号）。
-- 阶段：P0–P6 全部已实施并归档；当前 active OpenSpec change 与主 specs 以 `openspec list` / `openspec list --specs` 为准（不在本文件枚举，易过时）。`melee-playable-loop` 已归档（`2026-11-14-melee-playable-loop`），其单机对 AI 能力与 1.0「不做单机对战」的张力见 `WC3-MELEE-RULES.md` §0.3 T1。
+- **1.0 版本范围（用户 2026-11-14 拍板，同日再澄清）**：只做**局域网联机对战**（含**真人 VS AI 敌人玩家**，AI 玩家全部功能属 1.0 必做；仅不做**纯本地单机对局形态**）与**回放录像保存 / 加载**，把**4 个种族、各种道具、地图野怪、中立建筑**功能做完，**战争迷雾 / 隐身纳入 1.0**（表现层只读派生，不进权威状态 / 哈希 / 快照）；**不做**地图编辑器、RPG 自定义地图、剧情战役。完整范围、规则编号 `R-x.y` 与张力处置见 `docs/references/WC3-MELEE-RULES.md` §0（业务规则单一权威，玩法实现 / review / 单测 MUST 引用其规则编号）。
+- 阶段：P0–P6 全部已实施并归档；当前 active OpenSpec change 与主 specs 以 `openspec list` / `openspec list --specs` 为准（不在本文件枚举，易过时）。`melee-playable-loop` 已归档（`2026-11-14-melee-playable-loop`），其单机对 AI 能力已按用户拍板保留为 1.0 联机对战的 AI 玩家功能、本地窗口作开发夹具，处置见 `WC3-MELEE-RULES.md` §0.3 T1。
 - 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 - 架构设计原则（SRP / OCP / LSP / DIP / ISP / LoD / CARP 与本项目硬红线）已内联到 `openspec/config.yaml` 的 context 与 `critic.md` 审查清单；本文件与 ADR 为单一权威，不另立独立原则文档。
 

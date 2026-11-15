@@ -43,9 +43,20 @@ def ref_exists(ref: str) -> bool:
 
 
 def log_subjects(cmd: list[str]) -> list[tuple[str, str]]:
-    """执行一次 git log，返回 (sha, subject) 列表。"""
+    """执行一次 git log，返回 (sha, subject) 列表。
+
+    `git log` 输出按 UTF-8 解码（commit message 与仓库文本基线一致，见
+    CODEBUDDY.md §2）。MUST 显式指定 `encoding`：Windows CI 的默认 locale
+    为 cp1252，若依赖 `text=True` 的隐式 locale 解码，中文提交信息会抛
+    UnicodeDecodeError 并使门禁失败。
+    """
     result = subprocess.run(
-        cmd, cwd=ROOT, capture_output=True, text=True, check=True
+        cmd,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
     )
     rows = []
     for line in result.stdout.splitlines():

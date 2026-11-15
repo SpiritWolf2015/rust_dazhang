@@ -63,3 +63,7 @@ config.toml
 Thumbs.db
 .idea/
 .vscode
+
+# Python 字节码缓存（门禁脚本 / 单测运行时产生，勿入库、勿进编码扫描）
+__pycache__/
+*.py[cod]

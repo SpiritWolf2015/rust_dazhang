@@ -68,6 +68,17 @@ def openspec_command(name: str) -> list[str]:
     return ["openspec", "validate", name]
 
 
+def openspec_validate_all_command() -> list[str]:
+    """构造 `openspec validate --all`（非 strict，校验全部主 specs）。
+
+    归档后 active change 可能为空，逐 change 校验不再覆盖任何主 spec；复用
+    `openspec_command` 的平台分支追加一条全量兜底，保证 `openspec/specs/**`
+    始终进门禁。MUST NOT 带 `--strict`：既有主 spec 存在超长 requirement，
+    严格模式会让门禁恒红。
+    """
+    return openspec_command("--all")
+
+
 def asset_scan() -> bool:
     """检查 git 跟踪文件里是否混入了游戏资产或导出数据。"""
     result = subprocess.run(
@@ -273,6 +284,10 @@ def main() -> int:
 
     for name in active_change_names():
         ok &= run(f"openspec validate {name}", openspec_command(name))
+
+    # 兜底：归档后 active change 可能为空，上面的逐 change 校验不再覆盖任何
+    # 主 spec；追加一条非 strict 的全量校验，保证主 specs 始终进门禁。
+    ok &= run("openspec validate --all (main specs)", openspec_validate_all_command())
 
     ok &= asset_scan()
     ok &= decision_memo_check()

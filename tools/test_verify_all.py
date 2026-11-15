@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import verify_all as v
@@ -181,6 +182,81 @@ class FingerprintTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("problem=bad arguments", result.stderr)
+
+
+class ValidateAllFallbackTests(unittest.TestCase):
+    """全量门禁的 `openspec validate --all` 主 specs 兜底（R3）。"""
+
+    def test_command_is_all_non_strict_and_cross_platform(self):
+        """命令 MUST 含 `--all`、MUST NOT 含 `--strict`；两种 os.name 分支都要覆盖主 specs。"""
+        cmd = v.openspec_validate_all_command()
+        self.assertEqual(cmd[-1], "--all")
+        self.assertNotIn("--strict", cmd)
+        # 与单 change 校验共用同一平台前缀（Windows 经 cmd.exe，其余直调）。
+        single = v.openspec_command("c1")
+        self.assertEqual(cmd[:-1], single[:-1])
+        with mock.patch.object(v.os, "name", "nt"):
+            self.assertEqual(
+                v.openspec_validate_all_command(),
+                ["cmd", "/c", "openspec", "validate", "--all"],
+            )
+        with mock.patch.object(v.os, "name", "posix"):
+            self.assertEqual(
+                v.openspec_validate_all_command(),
+                ["openspec", "validate", "--all"],
+            )
+
+    @staticmethod
+    def _main_commands(fallback_override=None):
+        """跑一遍 `main()`（外部子进程调用全部 mock），返回 `(退出码, 命令列表)`。
+
+        `fallback_override` 非 None 时把兜底命令替换为该值，用于构造缺陷态：
+        等价于让全量校验命令不再出现在 `main()` 的命令序列中（仍保留一次
+        `run` 调用），其余检查一字不动。
+        """
+        with contextlib.ExitStack() as stack:
+            run = stack.enter_context(mock.patch.object(v, "run", return_value=True))
+            stack.enter_context(mock.patch.object(v, "active_change_names", return_value=[]))
+            stack.enter_context(mock.patch.object(v, "asset_scan", return_value=True))
+            stack.enter_context(mock.patch.object(v, "decision_memo_check", return_value=True))
+            stack.enter_context(mock.patch.object(v, "spec_gate_check", return_value=True))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            if fallback_override is not None:
+                stack.enter_context(
+                    mock.patch.object(
+                        v, "openspec_validate_all_command", return_value=fallback_override
+                    )
+                )
+            code = v.main()
+        return code, [call.args[1] for call in run.call_args_list]
+
+    def test_main_runs_validate_all_even_with_no_active_changes(self):
+        """正式态：归档后 active change 为空，`main()` 仍 MUST 跑一条全量校验。
+
+        精确匹配 `openspec_validate_all_command()` 的返回值，避免 `cargo fmt
+        --all` 之类同样含 `--all` 字样的命令造成假阳性（B1 修复）。
+        """
+        code, commands = self._main_commands()
+        self.assertEqual(code, 0)
+        self.assertIn(
+            v.openspec_validate_all_command(),
+            commands,
+            "reason=main_specs_not_validated_when_no_active_changes",
+        )
+
+    def test_reverse_validation_missing_fallback_is_caught(self):
+        """反向验证（A-B，两遍都真实跑 `main()`）：摘除兜底后，同一条精确断言
+        在缺陷态必失败、正式态通过，证明上一条测试不是恒真、缺陷态能被抓出。"""
+        fallback = v.openspec_validate_all_command()
+        # 正式态：含全量兜底。
+        _, formal = self._main_commands()
+        self.assertIn(fallback, formal)
+        # 缺陷态：把兜底命令退化为空（等价于从调用链摘除），其余检查不变。
+        _, broken = self._main_commands(fallback_override=[])
+        self.assertNotIn(fallback, broken)
+        # 元断言：正式态那条断言在缺陷态必然抛 AssertionError。
+        with self.assertRaises(AssertionError):
+            self.assertIn(fallback, broken)
 
 
 if __name__ == "__main__":

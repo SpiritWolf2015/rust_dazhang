@@ -70,11 +70,19 @@
 
 **完整闭环演练结论**：决策纪要 → 规格门（`critic` 报告 + 人拍板 + 指纹回填 `e5ad65e6…`） → apply（`--fingerprint` CLI + 8 个单测含反向验证，真实 CLI 输出与回填指纹逐字节一致） → 代码门（全清单复审，B1 已修） → 门禁（`Verification OK`） **全程跑通**；8 个工作流提交（`93cf95c`…`b3b7b64`）的规则**未发现互斥打架**。演练中真实抓到并修正：3 处证据锚错锚、`status` 前缀匹配撞车、apply 后 C5 锚漂移（B1）、`spec.md` Req2 正文超长触发 `--strict` WARNING、spec 与 design 对「四件套完整性」定义不齐、Scenario 1 缺显式验证点。`tasks.md` 全部勾选后，因复选框归一化，指纹与 `status: approved` 均保持不变（已由 `spec_gate_check()` 复核）。未冒充通过的环节均在待确认项如实登记。
 
+## 归档说明（2026-11-15，用户指令「清理指纹遗留」）
+
+- 本 change 是「规格门指纹 CLI」工作流闭环的**首次从零演练载体**：`--fingerprint <change>` 只读子命令、8 个单测（含反向验证）、`verification-cli` capability 均已交付，`status: approved` + fingerprint `e5ad65e6…`，tasks 15/15 全勾，完整闭环演练结论见「代码门复审与完整闭环演练结论」小节。演练中真实抓到并修正的错锚、前缀撞车、apply 后锚漂移等问题均如实登记，不冒充一次通过。
+- **「清理」处置**：按 §9 归档到 `openspec/changes/archive/`，delta spec `verification-cli` 合并进主 specs 成为正式 capability；归档后 active change 集合移除本 change，`verify_all.py` 的规格锁定 / 纪要校验不再针对它，指纹遗留（active change 列表里的演练条目）随之清除。`--fingerprint` 子命令本身作为正式门禁能力**保留在 `tools/verify_all.py`**，不随归档删除。
+- **后续独立议题（不在归档处理，如实保留）**：待确认项里的 `spec_gate_check()` 对 `status: pending` 报错语义、`memo_section_body()` 前缀匹配、Python 单测挂进 `verify_all.py` 的 `main()`、P7 阶段 / `CODEBUDDY.md` §1 速览措辞滞后等，均为演练后独立议题，归档不清除、不改门禁逻辑。
+- **人工边界**：AI 不碰远端（`CODEBUDDY.md` §4）；归档为本地 commit，push 由人工执行。
+
 ## 停止条件（追加阶段 / 归档前）
 
 1. C1–C9 逐条仍有证据锚、无一条被本轮改动证伪。
 2. 规格门由人拍板、`fingerprint:` 回填、`status: approved`，且 `verify_all.py` 的 `spec_gate_check()` 不报失配。
 3. 待确认项已清空或显式豁免；不以「预设问题问完」「问了 N 轮」当收敛。
+4. 归档时：演练结论、delta 合并去向、`--fingerprint` 能力保留、后续独立议题均已如实登记（本「归档说明」小节）。
 
 ## 规格门
 

@@ -53,11 +53,19 @@
 - **本机 GPU native 崩溃（间歇性驱动 / 环境故障，如实记录、不冒充也不夸大）**：apply 期间 `client-owner` 曾报本机 `cargo test --workspace` / `python tools/verify_all.py` 因 2 个 GPU 测试二进制 native 崩溃（`w3-client/tests/real_map_e2e.rs` `0xc0000005 STATUS_ACCESS_VIOLATION` / `w3-render/tests/gpu_headless.rs` `0xc0000374 STATUS_HEAP_CORRUPTION`）未全绿；leader 亦独立复现过一次 `0xc0000005`（单独跑 `gpu_headless`）。证据链认定与本次改动无关：① 两崩溃测试文件相对 HEAD **零改动**、对本次改动符号（`movability` / `derive_movability` / `def_ids` / `Race` / `synthetic_definitions` / `filter_movable`）**零引用**；② `w3-render` / `Cargo.lock` 零 diff；③ 属 Windows native 异常码（非 Rust 断言 exit 101）；④ `client-owner` 在纯净 `d8af94d` 隔离 worktree 复现同崩溃（转述，`critic` 未独立核验）。**间歇性判定 + 提交前连续复测全绿**：`python tools/verify_all.py` 连续 2 次 `Verification OK`（exit 0，含 `cargo test` 步）、单独 `gpu_headless` GPU 测试第 2 次 `ok`、`cargo test --workspace` 不带 skip 全绿（28 个 `test result: ok`、无失败行）、CPU 侧 `determinism 26/26` / `isolation 3/3` / `movability 8/8` / `melee_loop 9/9`。**最新状态：本机 `verify_all.py` `Verification OK`，门禁全绿**；因曾出现间歇性 native 故障，仍建议人工 push 后由 CI 双平台 `verify_all.py` 作环境健壮性的权威复核。AI 未改门禁逻辑、未跳过测试、未把曾发生的崩溃冒充为「稳定失败」，也未把间歇性故障写成「从未发生」。
 - **文本层 residual（用户拍板维持规格锁定，下次解锁四件套时一并补齐）**：`critic` 代码门 residual——① 四件套（proposal / design / specs / tasks）未引用 `R-x.y` 规则编号（该硬规则于 `d8af94d` 才加入、四件套成文在 `624a3f4`、规格门批准时未追溯，实质符合 R1.1 / R1.4）；补引用属四件套改动会触发解锁重走规格门，故本轮不补、如实登记；② design D2「开局 `Spawn` 写对应段 `DefId`」字面与实现不一致（`w3-core` 的 `CommandKind::Spawn` 无 `DefId` 字段，种族段位落在装配层 `EntityId→DefId` 关联 `def_ids`，两族 Spawn 字节一致、方向正确且符合内核零改动硬约束）；`specs/faction-definitions/spec.md:30` Scenario「Spawn 命令的 DefId 落在各自段内」无法被直接单测验证（实际验证 `def_ids`）；③ `specs/unit-orders/spec.md` requirement 为无条件表述、3 个 Scenario 仅覆盖 frame-0 静态集合，未覆盖运行时新实体（已并入 B1 已知限制）。三者均为文本 / 追溯层缺口、不影响本 change 已交付的行为与确定性，按 `CODEBUDDY.md:107` 维持规格锁定，由后续解锁一并修订。
 
+## 归档说明（2026-11-15，用户指令「归档阵营基础」）
+
+- **tasks 复选框状态如实登记**：`tasks.md` 15 项保持 `- [ ]` 未勾，但**实现与验证实际全部完成**——D1（可移动性过滤 + 真 A-B 反向验证）、D2（DefId 分段 + 两族端到端 + 回落）、D3（反向验证）落地于 `crates/w3-client/`（10 文件），`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍 3；CPU 全绿（`determinism 26/26`、`movability 8/8`、`melee_loop 9/9`、workspace 全绿）；`critic` 两轮代码门 blocker 0（B1 与 GPU 环境限制按用户拍板登记为已知限制 / 待 CI 复核）；CI `run 43690389518` 三 job 全绿；本地 commit `a9c7221` / `2a8c54e` 已由人工 push。当初不勾复选框是为**保持四件套 0 diff、规格锁定不解锁**（`CODEBUDDY.md:107` / `spec_gate_check()` 复选框归一化），归档不改变此事实；与 `2026-11-14-melee-playable-loop` 带未勾任务归档先例一致。四件套指纹归档时仍为 `0de50d08…`，与规格门批准值一致。
+- **已知限制 / residual 承接（不冒充已闭合）**：B1（运行时动态实体、`playable` 默认态属 P8.0 范围外）、文本层 residual（四件套未引 `R-x.y`、D2「Spawn 写 DefId」字面偏离、unit-orders Scenario 仅 frame-0）、本机 GPU 间歇性 native 崩溃——均已在「待确认项」如实登记，由后续独立 change 承接，归档不清除、不改代码。
+- **归档后影响**：本 change 的 delta specs 合并进主 specs（新增 `faction-definitions` capability、`unit-orders` 增一条「群体移动只作用于可移动单位」requirement）；归档后 `verify_all.py` 的 `spec_gate_check()` / `decision_memo_check()` 不再校验本 change（active change 集合移除），规格锁定机制自然终止；`docs/roadmap/P8-human-orc-melee.md` §6「进入实施」状态需同步为已归档。
+- **人工边界**：AI 不碰远端（`CODEBUDDY.md` §4）；归档与文档同步为本地 commit，push 由人工执行。
+
 ## 停止条件（追加阶段 / 归档前）
 
 1. C1–C9 逐条仍有证据锚、无一条被本轮改动证伪。
 2. 规格门由人拍板、`fingerprint:` 回填、`status: approved`，且 `verify_all.py` 的 `spec_gate_check()` 不报失配。
 3. 待确认项已清空或显式豁免；不以「预设问题问完」「问了 N 轮」当收敛。
+4. 归档时：tasks 未勾原因、已知限制承接、delta 合并去向均已如实登记（本「归档说明」小节）。
 
 ## 规格门
 

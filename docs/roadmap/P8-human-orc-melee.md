@@ -157,6 +157,6 @@
 
 1. ~~用户确认水位~~ → **已确认（2026-11-14）**：采用更重水位，P8.5 全量（英雄复活 / 主城升级 / 野怪 / 物品 / 迷雾）纳入必做。
 2. ~~1.0 范围两处张力~~ → **已拍板对齐（2026-11-14）**：联机对战含真人 VS AI 玩家、AI 全部功能属 1.0（仅不做纯本地单机对局形态）；战争迷雾 / 隐身纳入 1.0。见 `WC3-MELEE-RULES.md` §0.3 与 ADR 0003 修订记录。
-3. ~~P8.0 立项与规格门~~ → **规格门已批准（2026-11-14），进入实施**：`p8-faction-foundation` 四件套 + `decision-memo.md` 已按 §9 由人拍板批准并回填指纹，走 apply → `critic` 代码门 → 门禁 → 本地 commit（push 人工）。
+3. ~~P8.0 立项与规格门~~ → **已实施并归档（2026-11-15）**：`p8-faction-foundation` 按 §9 由人拍板批准规格门（回填指纹）→ apply（`crates/w3-client/` 群体移动过滤 + 定义层种族分段，`w3-core` 零 diff）→ 两轮 `critic` 代码门 blocker 0 → CPU 全绿 → 人工 push 后 CI 三 job 全绿（`run 43690389518`）→ 归档 `2026-11-15-p8-faction-foundation`，delta 合并进主 specs（`faction-definitions` 新建、`unit-orders` +1）。已知限制（运行时动态实体、`playable` 默认态、文本层 residual）在归档纪要如实登记、由后续 change 承接。
 4. P8.1 与 P8.2 **串行**推进，各自单独 change；P8.3 在两族 CPU 闭环都绿之后开；两族之后的 P9+ 承接不死 / 暗夜，收敛到 1.0 四族。
 5. 每阶段结束按 `feedback` 惯例如实登记已知限制，不为呈现问题扩范围。

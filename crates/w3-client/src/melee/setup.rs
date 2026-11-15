@@ -154,6 +154,16 @@ pub struct MeleeSetup {
     /// 不携带 `DefId`，故种族维度只停在这一层，MUST NOT 进入权威状态 /
     /// 状态哈希 / 快照；两族装配的开局命令字节完全一致。
     pub def_ids: BTreeMap<u64, DefId>,
+    /// P8.1 新类别的装配期绑定（槽位 → 分段 `DefId`，design D4）。
+    ///
+    /// `CommandKind::Spawn` 不含 `DefId`，frame-0 静态集合只有
+    /// 主城 / 农民 / 资源点，故新增六类不进 `def_ids`、不改任何 `Spawn`
+    /// 命令字节；它们只在装配层按 [`Race::category_def_ids`] 记录为
+    /// 只读查表，供 AI 脚本选训练 / 施法 / 研发目标与可移动性派生。
+    /// 这是表现层专属数据，MUST NOT 进入权威状态 / 哈希 / 快照；
+    /// 运行时 `Train` / `Build` 产生的新实体不在此表（P8.0 已知限制 B1，
+    /// 本 change 不擅自闭合、不改 `unwrap_or` 语义、不扩展视图）。
+    pub category_def_ids: BTreeMap<u64, DefId>,
     /// 本局本地玩家所选种族（定义层参数，回落人族段）。
     pub race: Race,
     pub local_hall: EntityId,
@@ -417,6 +427,7 @@ impl MeleeSetup {
             gameplay_commands,
             kinds: b.kinds,
             def_ids: b.def_ids,
+            category_def_ids: local_race.category_def_ids(),
             race,
             local_hall,
             ai_hall,
@@ -433,6 +444,20 @@ impl MeleeSetup {
     /// 该映射是表现层只读数据，MUST NOT 进入权威状态 / 状态哈希 / 快照。
     pub fn movability(&self, defs: &FrozenDefinitions) -> MovabilityMap {
         derive_movability(defs, &self.def_ids)
+    }
+
+    /// 装配期从冻结定义为新增类别派生 `槽位 → 可移动性` 只读映射
+    /// （design D1 / D7）：判据仍是 `UnitDef.speed_raw > 0`，MUST NOT
+    /// 用运行时 `speed` 或建筑类型白名单。该映射是表现层只读数据，
+    /// MUST NOT 进入权威状态 / 状态哈希 / 快照；只覆盖 frame-0 静态
+    /// 装配的新类别绑定，不擅自闭合 P8.0 运行时动态实体限制 B1。
+    pub fn category_movability(&self, defs: &FrozenDefinitions) -> MovabilityMap {
+        derive_movability(defs, &self.category_def_ids)
+    }
+
+    /// 只读新增类别装配绑定（槽位 → `DefId`），供验收核对段位与唯一性。
+    pub fn category_def_ids(&self) -> &BTreeMap<u64, DefId> {
+        &self.category_def_ids
     }
 
     /// 只读分段定义关联（实体 ID → `DefId`），供验收核对段位。
@@ -697,6 +722,82 @@ mod tests {
             human.def_ids, orc.def_ids,
             "reason=def_ids_are_race_specific"
         );
+    }
+
+    /// P8.1 新类别装配绑定（design D4）：人族 `1xx`、兽族 `2xx`，
+    /// 六类各占独立槽位；`Spawn` / `gameplay_commands` 字节不受影响。
+    #[test]
+    fn category_bindings_are_segmented_without_touching_spawn_bytes() {
+        use crate::melee::defs::{
+            CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE,
+            CATEGORY_SMITHY,
+        };
+
+        let human = MeleeSetup::with_race(Race::Human);
+        let orc = MeleeSetup::with_race(Race::Orc);
+        let slots = [
+            CATEGORY_RANGED,
+            CATEGORY_SIEGE,
+            CATEGORY_FARM,
+            CATEGORY_ALTAR,
+            CATEGORY_SMITHY,
+            CATEGORY_HERO,
+        ];
+        for setup in [&human, &orc] {
+            assert_eq!(setup.category_def_ids.len(), 6, "reason=six_new_categories");
+            let (lo, hi) = match setup.race {
+                Race::Human => (100, 200),
+                Race::Orc => (200, 300),
+            };
+            for slot in slots {
+                let def_id = *setup
+                    .category_def_ids
+                    .get(&slot)
+                    .expect("melee setup: reason=missing_category_slot");
+                assert!(
+                    (lo..hi).contains(&def_id),
+                    "reason=category_def_id_in_race_segment slot={slot} id={def_id}"
+                );
+            }
+        }
+        // 新类别绑定与 frame-0 `def_ids` 命名空间隔离，不新增实体。
+        for slot in slots {
+            assert!(
+                !human.def_ids.contains_key(&slot),
+                "reason=category_slot_must_not_be_an_entity_id"
+            );
+        }
+        assert_ne!(
+            human.category_def_ids, orc.category_def_ids,
+            "reason=category_binding_is_race_specific"
+        );
+        assert_eq!(human.commands, orc.commands, "reason=spawn_bytes_unchanged");
+        assert_eq!(
+            human.gameplay_commands, orc.gameplay_commands,
+            "reason=opening_gameplay_bytes_unchanged"
+        );
+    }
+
+    /// P8.1 可移动性（design D7 / tasks 2.3）：新增建筑不可移动、
+    /// 远程 / 反重甲单位与英雄可移动；判据来自冻结定义 `speed_raw`，
+    /// 不来自运行时 `speed` 或建筑类型白名单。
+    #[test]
+    fn category_movability_is_derived_from_definition_speed_raw() {
+        use crate::melee::defs::{
+            CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE,
+            CATEGORY_SMITHY,
+        };
+
+        let defs = crate::melee::defs::synthetic_definitions();
+        let setup = MeleeSetup::new();
+        let map = setup.category_movability(&defs);
+        assert_eq!(map.len(), 6, "reason=one_entry_per_new_category");
+        for slot in [CATEGORY_RANGED, CATEGORY_SIEGE, CATEGORY_HERO] {
+            assert_eq!(map.get(&slot), Some(&true), "reason=movable slot={slot}");
+        }
+        for slot in [CATEGORY_FARM, CATEGORY_ALTAR, CATEGORY_SMITHY] {
+            assert_eq!(map.get(&slot), Some(&false), "reason=immovable slot={slot}");
+        }
     }
 
     /// 可移动性判据由冻结定义 `speed_raw` 派生：农民可移动、建筑 / 资源点

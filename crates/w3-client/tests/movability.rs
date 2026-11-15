@@ -12,7 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_client::melee::defs::{
-    HUMAN_PEASANT, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE, ORC_PEASANT, ORC_TOWN_HALL,
+    HUMAN_ALTAR, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT, HUMAN_RANGED, HUMAN_SIEGE, HUMAN_SMITHY,
+    HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE, NEUTRAL_TREE, ORC_PEASANT, ORC_TOWN_HALL,
 };
 use w3_client::melee::synthetic_definitions;
 use w3_client::{
@@ -20,8 +21,8 @@ use w3_client::{
     ScreenMapper, TICKS_PER_LOGIC_FRAME, derive_movability, filter_movable,
 };
 use w3_core::{
-    Command, CommandKind, DefId, EntityView, Frame, SCALE, SNAPSHOT_VERSION, SimFixed, StaticWorld,
-    WorldView,
+    Command, CommandKind, DefId, EntityView, Frame, FrozenDefinitions, SCALE, SNAPSHOT_VERSION,
+    SimFixed, StaticWorld, UnitDef, WorldView,
 };
 use w3_render::{ModelLibrary, TerrainMesh, TerrainVertex};
 
@@ -553,4 +554,379 @@ fn reverse_validation_degenerate_filter_fails_the_same_assertion() {
         !only_peasant_moves(&broken_commands),
         "reason=degenerate_filter_must_fail_the_same_assertion"
     );
+}
+
+// ---------------------------------------------------------------------------
+// P8.1 人族新增实体 R1.4 回归（design D1 / D7、unit-orders delta）
+//
+// 键盘 `M` / `A` 移动按 R13.6 MUST 与右键共用同一输入翻译与命令生成处；
+// 当前 `InputState::apply` 的 `ContextAction`（右键 + 命令卡 Move）即该
+// 单一接缝，`filter_movable` 是唯一的 `Move` 生成点。R13.7 已登记「`KeyM`
+// 键位接线差距由后续 change 承接」，本 change 不新增 `InputAction` 变体、
+// 不改键位；以下回归覆盖共享接缝与 `filter_movable` 纯函数本身，不冒充已解决运行时动态实体（P8.0 B1）。
+// ---------------------------------------------------------------------------
+
+/// 人族新增实体的 frame-0 静态装配槽位 ID（判据来自冻结定义）。
+const H_PEASANT: u64 = 1;
+const H_RANGED: u64 = 2;
+const H_SIEGE: u64 = 3;
+const H_HERO: u64 = 4;
+const H_FARM: u64 = 5;
+const H_ALTAR: u64 = 6;
+const H_SMITHY: u64 = 7;
+const H_HALL: u64 = 8;
+const H_MINE: u64 = 9;
+const H_TREE: u64 = 10;
+
+fn human_entity(id: u64, x_world: i64, hp: i64) -> EntityView {
+    EntityView {
+        id,
+        x: x_world * SCALE,
+        y: 0,
+        facing: 0,
+        hp,
+        owner: 1,
+        alive: true,
+        has_target: false,
+    }
+}
+
+/// 含人族新增六类 + 主城 / 金矿 / 树木的 frame-0 静态装配夹具：
+/// 视图实体、`EntityId→DefId` 关联、由冻结定义 `speed_raw` 派生的只读映射。
+fn human_fixture() -> (WorldView, ScreenMapper, MovabilityMap, BTreeMap<u64, DefId>) {
+    let view = WorldView {
+        tick: 4,
+        rng: 0,
+        entities: vec![
+            human_entity(H_PEASANT, 0, 60),
+            human_entity(H_RANGED, 10, 90),
+            human_entity(H_SIEGE, 20, 180),
+            human_entity(H_HERO, 30, 400),
+            human_entity(H_FARM, 40, 200),
+            human_entity(H_ALTAR, 50, 300),
+            human_entity(H_SMITHY, 60, 300),
+            human_entity(H_HALL, 70, 120),
+            human_entity(H_MINE, 80, 500),
+            human_entity(H_TREE, 90, 200),
+        ],
+    };
+    // 两行网格，注入真实模型屏幕包围盒；右键点 [1100,600] 不落在任何盒内。
+    let mut boxes = BTreeMap::new();
+    let row_one = [H_PEASANT, H_RANGED, H_SIEGE, H_HERO, H_FARM];
+    let row_two = [H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE];
+    for (index, &id) in row_one.iter().enumerate() {
+        let x0 = 100.0 + 180.0 * index as f64;
+        boxes.insert(id, ([x0, 100.0], [x0 + 40.0, 140.0]));
+    }
+    for (index, &id) in row_two.iter().enumerate() {
+        let x0 = 100.0 + 180.0 * index as f64;
+        boxes.insert(id, ([x0, 300.0], [x0 + 40.0, 340.0]));
+    }
+    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0).with_entity_boxes(boxes);
+
+    let def_ids: BTreeMap<u64, DefId> = [
+        (H_PEASANT, HUMAN_PEASANT),
+        (H_RANGED, HUMAN_RANGED),
+        (H_SIEGE, HUMAN_SIEGE),
+        (H_HERO, HUMAN_HERO),
+        (H_FARM, HUMAN_FARM),
+        (H_ALTAR, HUMAN_ALTAR),
+        (H_SMITHY, HUMAN_SMITHY),
+        (H_HALL, HUMAN_TOWN_HALL),
+        (H_MINE, NEUTRAL_GOLD_MINE),
+        (H_TREE, NEUTRAL_TREE),
+    ]
+    .into_iter()
+    .collect();
+    let movability = derive_movability(&synthetic_definitions(), &def_ids);
+    (view, mapper, movability, def_ids)
+}
+
+/// 退化定义（缺陷态）：把新增人口建筑 / 祭坛 / 研发建筑的 `speed_raw`
+/// 改成非 0，模拟「新定义未遵循 `speed_raw == 0`」的缺陷实现。
+/// 仅用于反向验证；生产实现 MUST 用 `synthetic_definitions()`。
+fn degenerate_defs_with_movable_buildings() -> FrozenDefinitions {
+    let defs = synthetic_definitions();
+    let units: Vec<(DefId, UnitDef)> = defs
+        .units()
+        .iter()
+        .map(|(&id, &def)| {
+            let mut def = def;
+            if matches!(id, HUMAN_FARM | HUMAN_ALTAR | HUMAN_SMITHY) {
+                def.speed_raw = 3 * SCALE;
+            }
+            (id, def)
+        })
+        .collect();
+    let abilities = defs
+        .abilities()
+        .iter()
+        .map(|(&id, d)| (id, d.clone()))
+        .collect();
+    let items = defs.items().iter().map(|(&id, &d)| (id, d)).collect();
+    let upgrades = defs.upgrades().iter().map(|(&id, &d)| (id, d)).collect();
+    FrozenDefinitions::new(units, abilities, items, upgrades)
+        .expect("movability: reason=degenerate_defs_rebuild_failed")
+}
+
+/// 被反向验证的断言：混合集合只为可移动单位生成 `Move`（稳定 EntityId 顺序）。
+fn only_movable_units_move(commands: &[ClientCommand]) -> bool {
+    !commands.is_empty() && move_targets(commands) == vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO]
+}
+
+/// 反向验证·修复态：正式定义（`speed_raw == 0`）派生的映射通过
+/// 「只移动可移动单位」断言。与下一条缺陷态构成 `CODEBUDDY.md` §5 反例证据对。
+#[test]
+fn human_reverse_validation_formal_defs_pass_the_assertion() {
+    let (view, mapper, map, _) = human_fixture();
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &map);
+    assert_eq!(input.selection().len(), 10, "reason=all_ten_selected");
+    let commands = input
+        .apply(
+            InputAction::ContextAction([1100.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert!(
+        only_movable_units_move(&commands),
+        "reason=formal_defs_must_pass_the_assertion"
+    );
+    assert_eq!(
+        filter_movable(input.selection(), &map),
+        vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO]
+    );
+}
+
+/// 反向验证·缺陷态：退化定义（建筑 `speed_raw != 0`）下
+/// `derive_movability` 会把新增建筑判为可移动，同一条「只移动可移动单位」
+/// 断言必然失败；元断言证明缺陷被抓出（改坏验红）。
+#[test]
+fn human_reverse_validation_degenerate_defs_fail_the_same_assertion() {
+    let (view, mapper, _, def_ids) = human_fixture();
+    let degenerate_map = derive_movability(&degenerate_defs_with_movable_buildings(), &def_ids);
+    assert_eq!(degenerate_map.get(&H_FARM), Some(&true));
+    assert_eq!(degenerate_map.get(&H_ALTAR), Some(&true));
+    assert_eq!(degenerate_map.get(&H_SMITHY), Some(&true));
+
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &degenerate_map);
+    let broken_commands = input
+        .apply(
+            InputAction::ContextAction([1100.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &degenerate_map,
+        )
+        .unwrap();
+    assert_eq!(
+        move_targets(&broken_commands),
+        vec![
+            H_PEASANT, H_RANGED, H_SIEGE, H_HERO, H_FARM, H_ALTAR, H_SMITHY
+        ],
+        "reason=degenerate_defs_move_new_buildings"
+    );
+    assert!(
+        !only_movable_units_move(&broken_commands),
+        "reason=degenerate_defs_must_fail_the_same_assertion"
+    );
+    // 正式定义仍能通过同一断言（修复态）。
+    let formal = derive_movability(&synthetic_definitions(), &def_ids);
+    let mut fixed_input = InputState::new(1);
+    select_all(&mut fixed_input, &view, &mapper, &formal);
+    let fixed_commands = fixed_input
+        .apply(
+            InputAction::ContextAction([1100.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &formal,
+        )
+        .unwrap();
+    assert!(only_movable_units_move(&fixed_commands));
+}
+
+/// 新增实体可移动性由冻结定义 `speed_raw` 派生（design D1 / D7）：
+/// 远程 / 反重甲 / 英雄可移动；人口建筑 / 祭坛 / 研发建筑 / 主城 /
+/// 金矿 / 树木不可移动；MUST NOT 用运行时 `speed` 或建筑类型白名单。
+#[test]
+fn human_new_defs_movability_is_derived_from_speed_raw() {
+    let (_, _, map, _) = human_fixture();
+    assert_eq!(map.len(), 10, "reason=one_entry_per_registered_entity");
+    for id in [H_PEASANT, H_RANGED, H_SIEGE, H_HERO] {
+        assert_eq!(map.get(&id), Some(&true), "reason=movable id={id}");
+    }
+    for id in [H_FARM, H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE] {
+        assert_eq!(map.get(&id), Some(&false), "reason=immovable id={id}");
+    }
+    // 判据确为定义层 `speed_raw`：三类新增建筑速度必须是 0。
+    let defs = synthetic_definitions();
+    for def_id in [HUMAN_FARM, HUMAN_ALTAR, HUMAN_SMITHY] {
+        assert_eq!(
+            defs.units().get(&def_id).unwrap().speed_raw,
+            0,
+            "reason=new_building_speed_raw_zero def={def_id}"
+        );
+    }
+}
+
+/// 混合框选集合（农民 + 远程 + 新增人口建筑 / 祭坛 / 研发建筑 + 主城 +
+/// 金矿 + 树木）右键移动：只为可移动单位生成 `Move`，位置不变、落点按
+/// 稳定 `EntityId` 顺序，且与「只选中可移动单位」等效脚本逐条一致（R1.4）。
+#[test]
+fn human_mixed_selection_only_moves_movable_units() {
+    let (view, mapper, map, _) = human_fixture();
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &map);
+    assert_eq!(input.selection().len(), 10, "reason=all_ten_selected");
+
+    let commands = input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    let targets = move_targets(&commands);
+    assert_eq!(
+        targets,
+        vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO],
+        "reason=stable_entity_id_order"
+    );
+    assert!(!input.no_movable_target(), "reason=movable_targets_exist");
+    // 新增建筑 / 资源点 / 主城 MUST NOT 收到 Move、位置不变。
+    for id in [H_FARM, H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE] {
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                ClientCommand::Simulation(Command {
+                    kind: CommandKind::Move { entity, .. },
+                    ..
+                }) if entity.value() == id
+            )),
+            "reason=immovable_must_not_move id={id}"
+        );
+    }
+    assert_eq!(view.entities[4].x, 40 * SCALE);
+    assert_eq!(view.entities[7].x, 70 * SCALE);
+
+    // 等效脚本：只含四个可移动单位，命令字节逐条相同（落点不受过滤影响）。
+    let movers_view = WorldView {
+        tick: view.tick,
+        rng: view.rng,
+        entities: view
+            .entities
+            .iter()
+            .filter(|entity| targets.contains(&entity.id))
+            .cloned()
+            .collect(),
+    };
+    let mut only = InputState::new(1);
+    select_all(&mut only, &movers_view, &mapper, &map);
+    let only_commands = only
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &movers_view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert_eq!(
+        commands, only_commands,
+        "reason=landing_slots_unchanged_by_filter"
+    );
+    assert!(commands.iter().any(|command| matches!(
+        command,
+        ClientCommand::Simulation(Command {
+            kind: CommandKind::Move { group, .. },
+            ..
+        }) if *group > 0
+    )));
+}
+
+/// 全为新增建筑 / 主城 / 资源点时不生成任何 `Move`，有明确无可执行目标
+/// 反馈；权威状态哈希与快照不变（R1.4 / R13.6）。
+#[test]
+fn human_all_immovable_selection_emits_no_move_with_feedback() {
+    let (view, mapper, map, _) = human_fixture();
+    let immovable_view = WorldView {
+        tick: view.tick,
+        rng: view.rng,
+        entities: view
+            .entities
+            .iter()
+            .filter(|entity| {
+                [H_FARM, H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE].contains(&entity.id)
+            })
+            .cloned()
+            .collect(),
+    };
+    let mut input = InputState::new(1);
+    select_all(&mut input, &immovable_view, &mapper, &map);
+    assert_eq!(input.selection().len(), 6, "reason=only_immovable_selected");
+    let commands = input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &immovable_view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert!(commands.is_empty(), "reason=no_move_commands");
+    assert!(input.no_movable_target(), "reason=explicit_feedback_flag");
+}
+
+/// 全为新增建筑时 `ClientApp` 权威状态哈希 / 快照不变：映射来自冻结定义
+/// `speed_raw`，而非手填或运行时 `speed`（R1.4 / ADR 0002）。
+#[test]
+fn human_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
+    let defs = synthetic_definitions();
+    let entity_defs: BTreeMap<u64, DefId> = [(1u64, HUMAN_FARM), (2u64, HUMAN_ALTAR)]
+        .into_iter()
+        .collect();
+    let movability = derive_movability(&defs, &entity_defs);
+    assert_eq!(movability.get(&1), Some(&false));
+    assert_eq!(movability.get(&2), Some(&false));
+    assert_eq!(SNAPSHOT_VERSION, 3, "reason=snapshot_version_unchanged");
+
+    let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
+    driver.submit_command(spawn(1, 0, 120)).unwrap();
+    driver.submit_command(spawn(2, 4, 500)).unwrap();
+    let mut app = ClientApp::new(driver, synthetic_terrain(), ModelLibrary::default(), 0)
+        .with_movability(movability);
+    app.advance_with_ticks(TICKS_PER_LOGIC_FRAME);
+
+    let hash_before = app.driver().sim().compute_state_hash();
+    let snapshot_before = app.driver().sim().capture_snapshot();
+    let mapper = app.screen_mapper();
+    let center = mapper.world_to_screen([0.0, 0.0]);
+    let target = [center[0] + 320.0, center[1] + 220.0];
+
+    app.apply_input(InputAction::SelectStart([0.0, 0.0]))
+        .unwrap();
+    app.apply_input(InputAction::SelectEnd([1280.0, 720.0]))
+        .unwrap();
+    assert!(!app.selection().is_empty());
+    let commands = app.apply_input(InputAction::ContextAction(target)).unwrap();
+    assert!(commands.is_empty(), "reason=no_commands_generated");
+    assert!(app.no_movable_target(), "reason=explicit_feedback_surface");
+    assert_eq!(
+        app.driver().sim().compute_state_hash(),
+        hash_before,
+        "reason=all_immovable_must_not_change_state_hash"
+    );
+    assert_eq!(
+        app.driver().sim().capture_snapshot(),
+        snapshot_before,
+        "reason=all_immovable_must_not_change_snapshot"
+    );
+    assert!(app.last_error().is_none(), "reason=no_input_error");
 }

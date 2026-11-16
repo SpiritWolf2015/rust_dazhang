@@ -182,6 +182,9 @@ pub struct EntityView {
     pub x: i64,
     pub y: i64,
     pub facing: i64,
+    /// 投影自 `UnitState.speed` 的只读视图字段，供表现层 R1.4 分层判据；
+    /// 不进入权威状态 / 状态哈希 / 快照。
+    pub speed: i64,
     pub hp: i64,
     pub owner: u8,
     pub alive: bool,
@@ -1429,6 +1432,7 @@ impl RtsMatch {
                         x: unit.x.raw(),
                         y: unit.y.raw(),
                         facing: unit.facing.raw(),
+                        speed: unit.speed.raw(),
                         hp: unit.hp,
                         owner: unit.owner,
                         alive: unit.alive,
@@ -1792,6 +1796,7 @@ impl RtsMatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gameplay::UnitDef;
 
     fn spawn(x: i64, y: i64, hp: i64, damage: i64) -> CommandKind {
         CommandKind::Spawn {
@@ -1887,5 +1892,364 @@ mod tests {
         let target_view = view.entities.iter().find(|e| e.id == 3).unwrap();
         assert!(!target_view.alive);
         assert_eq!(target_view.hp, 0);
+    }
+
+    /// 构造含「建筑 speed_raw == 0 / 单位 speed_raw > 0」两类冻结定义的对局。
+    /// 全部数值为合成原创常量，仅用于只读投影验证，不冻结冒充原版。
+    fn movability_defs() -> (FrozenDefinitions, i64, i64) {
+        let building_speed_raw = 0;
+        let unit_speed_raw = SimFixed::from_int(5).unwrap().raw();
+        let building = UnitDef {
+            hp: 50,
+            mana: 0,
+            speed_raw: building_speed_raw,
+            damage: 0,
+            range_raw: 0,
+            supply: 0,
+            train_frames: 2,
+        };
+        let unit = UnitDef {
+            hp: 80,
+            mana: 0,
+            speed_raw: unit_speed_raw,
+            damage: 10,
+            range_raw: SimFixed::from_int(10).unwrap().raw(),
+            supply: 1,
+            train_frames: 2,
+        };
+        let defs = FrozenDefinitions::new(
+            vec![(1, building), (2, unit)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        (defs, building_speed_raw, unit_speed_raw)
+    }
+
+    /// 经既有公开入口与 `Train` 生产路径产出建筑与普通单位，推进到完成帧。
+    fn production_match() -> (RtsMatch, i64, i64) {
+        let (defs, building_speed_raw, unit_speed_raw) = movability_defs();
+        let config = MatchConfig {
+            seed: 1,
+            logic_fps: 30,
+            content_hash: defs.content_hash(),
+        };
+        let mut sim = RtsMatch::create_with_definitions(config, StaticWorld::default(), defs);
+        sim.submit_command(Command::new(Frame::new(0), 1, 1, spawn(0, 0, 100, 0)))
+            .unwrap();
+        let producer = EntityId::new(1).unwrap();
+        sim.submit_gameplay_command(GameplayCommand::new(
+            Frame::new(1),
+            1,
+            1,
+            GameplayCommandKind::Train {
+                producer,
+                unit_def: 1,
+                is_building: true,
+            },
+        ))
+        .unwrap();
+        sim.submit_gameplay_command(GameplayCommand::new(
+            Frame::new(1),
+            1,
+            2,
+            GameplayCommandKind::Train {
+                producer,
+                unit_def: 2,
+                is_building: false,
+            },
+        ))
+        .unwrap();
+        // 帧 0 出生，帧 1 入队并递减，帧 2 生产完成。
+        for _ in 0..3 {
+            sim.step();
+        }
+        (sim, building_speed_raw, unit_speed_raw)
+    }
+
+    /// 只读投影一致性：视图 speed 等于 spawn 命令的 speed.raw()，两实体不串值，
+    /// 且与权威快照记录一致；消费只读视图不改写权威状态。
+    #[test]
+    fn read_view_projects_authoritative_speed_without_crossover() {
+        let slow = SimFixed::from_int(3).unwrap();
+        let fast = SimFixed::from_int(7).unwrap();
+        assert_ne!(slow.raw(), fast.raw(), "two distinct speeds are required");
+
+        let mut sim = RtsMatch::create(MatchConfig::default());
+        for (sequence, speed) in [(1, slow), (2, fast)] {
+            sim.submit_command(Command::new(
+                Frame::new(0),
+                1,
+                sequence,
+                CommandKind::Spawn {
+                    x: SimFixed::ZERO,
+                    y: SimFixed::ZERO,
+                    hp: 100,
+                    speed,
+                    attack_damage: 0,
+                    attack_range: SimFixed::ZERO,
+                },
+            ))
+            .unwrap();
+        }
+        sim.step();
+
+        let view = sim.read_view();
+        assert_eq!(
+            view.entities.len(),
+            2,
+            "both spawned entities must be visible"
+        );
+        let first = view.entities.iter().find(|e| e.id == 1).unwrap();
+        let second = view.entities.iter().find(|e| e.id == 2).unwrap();
+        assert_eq!(
+            first.speed,
+            slow.raw(),
+            "view.speed must equal spawn speed.raw() for entity 1"
+        );
+        assert_eq!(
+            second.speed,
+            fast.raw(),
+            "view.speed must equal spawn speed.raw() for entity 2"
+        );
+        assert_ne!(
+            first.speed, second.speed,
+            "projection must not cross values between entities"
+        );
+
+        // 视图 speed 投影的是权威 UnitState.speed，与快照的 PositionRecord.speed 逐条一致。
+        let snapshot = sim.capture_snapshot();
+        for entity in &view.entities {
+            let record = snapshot
+                .positions
+                .iter()
+                .find(|p| p.entity == entity.id)
+                .unwrap();
+            assert_eq!(
+                entity.speed, record.speed,
+                "read-only projection must mirror authoritative PositionRecord.speed"
+            );
+        }
+
+        // 只读视图消费前后，同一实例的哈希与快照必须完全一致。
+        let hash_before = sim.compute_state_hash();
+        let snapshot_before = sim.capture_snapshot();
+        let _ = sim.read_view();
+        let _ = sim.read_view();
+        assert_eq!(
+            sim.compute_state_hash(),
+            hash_before,
+            "read_view must not mutate state hash"
+        );
+        assert_eq!(
+            sim.capture_snapshot(),
+            snapshot_before,
+            "read_view must not mutate snapshot"
+        );
+    }
+
+    /// 运行时动态实体可观测性：生产出的建筑 view.speed == 0、
+    /// 普通单位 view.speed > 0，表现层可由只读视图判定可移动性。
+    #[test]
+    fn runtime_production_building_and_unit_speeds_are_observable() {
+        let (sim, building_speed_raw, unit_speed_raw) = production_match();
+        assert_eq!(building_speed_raw, 0, "building def speed_raw must be zero");
+        assert!(unit_speed_raw > 0, "unit def speed_raw must be positive");
+
+        let view = sim.read_view();
+        assert_eq!(
+            view.entities.len(),
+            3,
+            "producer plus two runtime entities must exist"
+        );
+        // 生产者来自 frame-0 Spawn（speed 被抬过），本测试只判定运行时动态实体。
+        let runtime: Vec<EntityView> = view
+            .entities
+            .iter()
+            .filter(|e| e.id != 1)
+            .cloned()
+            .collect();
+        assert_eq!(
+            runtime.len(),
+            2,
+            "exactly two runtime entities must be produced"
+        );
+
+        let zeros: Vec<&EntityView> = runtime.iter().filter(|e| e.speed == 0).collect();
+        let positives: Vec<&EntityView> = runtime.iter().filter(|e| e.speed > 0).collect();
+        assert_eq!(
+            zeros.len(),
+            1,
+            "exactly one runtime entity must be immovable (building)"
+        );
+        assert_eq!(
+            positives.len(),
+            1,
+            "exactly one runtime entity must be movable (unit)"
+        );
+        assert_eq!(
+            zeros[0].speed, building_speed_raw,
+            "runtime building view.speed must equal def.speed_raw == 0"
+        );
+        assert_eq!(
+            zeros[0].speed, 0,
+            "runtime building view.speed must be exactly zero"
+        );
+        assert_eq!(
+            positives[0].speed, unit_speed_raw,
+            "runtime unit view.speed must equal def.speed_raw"
+        );
+        assert!(
+            positives[0].speed > 0,
+            "runtime unit view.speed must be positive"
+        );
+        assert_ne!(
+            zeros[0].id, positives[0].id,
+            "building and unit must be distinct entities"
+        );
+
+        // 权威快照记录同时证明 complete_production 写入的是真实 def.speed_raw。
+        let snapshot = sim.capture_snapshot();
+        for entity in &runtime {
+            let record = snapshot
+                .positions
+                .iter()
+                .find(|p| p.entity == entity.id)
+                .unwrap();
+            assert_eq!(
+                entity.speed, record.speed,
+                "view.speed must mirror authoritative PositionRecord.speed"
+            );
+        }
+    }
+
+    /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
+    /// 快照版本仍为 3，只读视图消费与快照往返均不改变权威状态。
+    #[test]
+    fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
+        assert_eq!(SNAPSHOT_VERSION, 3, "snapshot version must remain 3");
+        assert_eq!(SIM_VERSION, 3, "sim version must remain 3");
+
+        let (defs, _, _) = movability_defs();
+        let config = MatchConfig {
+            seed: 0x5eed,
+            logic_fps: 30,
+            content_hash: defs.content_hash(),
+        };
+
+        // 同一对局序列：frame-0 Spawn、运行时 Train、普通 Move。
+        let build = || {
+            let mut sim =
+                RtsMatch::create_with_definitions(config, StaticWorld::default(), defs.clone());
+            sim.submit_command(Command::new(Frame::new(0), 1, 1, spawn(0, 0, 100, 0)))
+                .unwrap();
+            sim.submit_gameplay_command(GameplayCommand::new(
+                Frame::new(1),
+                1,
+                1,
+                GameplayCommandKind::Train {
+                    producer: EntityId::new(1).unwrap(),
+                    unit_def: 2,
+                    is_building: false,
+                },
+            ))
+            .unwrap();
+            sim.submit_command(Command::new(
+                Frame::new(2),
+                1,
+                2,
+                CommandKind::Move {
+                    entity: EntityId::new(1).unwrap(),
+                    x: SimFixed::from_int(4).unwrap(),
+                    y: SimFixed::from_int(3).unwrap(),
+                    group: 0,
+                    append: false,
+                },
+            ))
+            .unwrap();
+            sim
+        };
+
+        let mut a = build();
+        let mut b = build();
+        for frame in 0..12 {
+            a.step();
+            b.step();
+            assert_eq!(
+                a.compute_state_hash(),
+                b.compute_state_hash(),
+                "frame {frame}: state hash diverged at {:?}",
+                a.first_difference(&b)
+            );
+            assert_eq!(
+                a.capture_snapshot(),
+                b.capture_snapshot(),
+                "frame {frame}: snapshot diverged"
+            );
+            assert_eq!(
+                a.read_view(),
+                b.read_view(),
+                "frame {frame}: read-only view diverged"
+            );
+            assert_eq!(
+                a.first_difference(&b),
+                None,
+                "frame {frame}: no differences expected"
+            );
+        }
+
+        // 快照头部版本与内容身份保持稳定。
+        let snapshot = a.capture_snapshot();
+        assert_eq!(
+            snapshot.version, SNAPSHOT_VERSION,
+            "snapshot version must stay 3"
+        );
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 3");
+        assert_eq!(
+            snapshot.defs_hash,
+            defs.content_hash(),
+            "defs_hash must stay unchanged"
+        );
+        assert_eq!(
+            snapshot.content_hash, config.content_hash,
+            "content_hash must stay unchanged"
+        );
+
+        // 只读视图消费前后，同一实例的哈希与快照完全一致。
+        let hash_before = a.compute_state_hash();
+        let snapshot_before = a.capture_snapshot();
+        let view = a.read_view();
+        assert_eq!(
+            a.compute_state_hash(),
+            hash_before,
+            "read_view must not affect state hash"
+        );
+        assert_eq!(
+            a.capture_snapshot(),
+            snapshot_before,
+            "read_view must not affect snapshot"
+        );
+        assert!(!view.entities.is_empty(), "view must still be populated");
+
+        // 快照往返继续一致（含新视图字段的只读取值）。
+        let restored =
+            RtsMatch::restore_snapshot(snapshot, StaticWorld::default(), config.content_hash)
+                .unwrap();
+        assert_eq!(
+            a.compute_state_hash(),
+            restored.compute_state_hash(),
+            "restore must preserve hash"
+        );
+        assert_eq!(
+            a.read_view(),
+            restored.read_view(),
+            "restore must preserve read-only view"
+        );
+        assert_eq!(
+            a.first_difference(&restored),
+            None,
+            "restore must not introduce differences"
+        );
     }
 }

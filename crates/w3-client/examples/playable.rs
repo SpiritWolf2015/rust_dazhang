@@ -204,6 +204,12 @@ fn main() {
 
     // 单一装配点：窗口 / GpuContext / 输入 / HUD / 30 Hz 累加器全部由
     // `ClientApp` 内部流程创建，example 只提供合成数据与装配参数。
+    // 可移动性判据刻意不注入 `with_movability`：`ClientApp::new` 默认空映射
+    // 由 `input::effective_movability` 从只读视图 `EntityView.speed` 现算兜底。
+    // 本场景四个 `Spawn` 单位 speed 均为 3 > 0，兜底后全部可移动、行为正确；
+    // 纯 `Spawn` 脚本没有装配期 `def_ids` 关联，注入映射反而多余。若此后经
+    // `Train` / `Build` 产出建筑（视图 speed == 0），兜底同样会判不可移动，
+    // 空映射不再触发旧 `unwrap_or(true)` 全放行缺陷态（design D5 / R1.4）。
     ClientApp::new(driver, fallback_terrain(), library, MAX_FRAMES)
         .run()
         .expect("playable: reason=window_run_failed");

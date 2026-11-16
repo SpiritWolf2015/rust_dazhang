@@ -58,7 +58,7 @@ pub use hud::{HudAssetError, HudAssets, HudModel, draw};
 pub use i18n::{Texts, ZH};
 pub use input::{
     ClientCommand, InputAction, InputError, InputState, LEAD_FRAMES, LOCAL_PLAYER, MovabilityMap,
-    ScreenMapper, derive_movability, filter_movable,
+    ScreenMapper, derive_movability, effective_movability, filter_movable,
 };
 pub use net_driver::NetSessionDriver;
 pub use presentation::present;

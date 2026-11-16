@@ -541,6 +541,7 @@ impl ModelLibrary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use w3_core::SCALE;
 
     const DOC: &str = r#"{
         "bones": [
@@ -573,6 +574,7 @@ mod tests {
             x: 0,
             y: 0,
             facing: 0,
+            speed: 3 * SCALE,
             hp: 100,
             owner,
             alive: true,

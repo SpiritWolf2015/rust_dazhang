@@ -240,6 +240,10 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             texts: ZH,
             minimap_backdrop: None,
             entity_kinds: BTreeMap::new(),
+            // 默认空映射：群体 Move 前由 `input::effective_movability` 从只读
+            // 视图 `EntityView.speed` 现算兜底，所有实体都有可移动性判据，
+            // 空映射不再等价「全部可移动」缺陷态（design D5 / R1.4）。
+            // 装配期定义可经 `with_movability` 注入，未注入时由兜底覆盖。
             movability: MovabilityMap::new(),
             pending_input_action: None,
             textures: None,

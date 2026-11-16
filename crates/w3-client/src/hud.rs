@@ -663,6 +663,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 100,
                 owner: 1,
                 alive: true,

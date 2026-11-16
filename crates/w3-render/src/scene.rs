@@ -918,6 +918,7 @@ mod tests {
             x,
             y: 0,
             facing: 0,
+            speed: 3 * SCALE,
             hp: 100,
             owner,
             alive: true,

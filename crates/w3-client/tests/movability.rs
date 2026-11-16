@@ -17,12 +17,14 @@ use w3_client::melee::defs::{
 };
 use w3_client::melee::synthetic_definitions;
 use w3_client::{
-    ClientApp, ClientCommand, FixedStepClient, InputAction, InputState, MovabilityMap,
-    ScreenMapper, TICKS_PER_LOGIC_FRAME, derive_movability, filter_movable,
+    ClientApp, ClientCommand, FixedStepClient, InputAction, InputState, LOGIC_FPS, MovabilityMap,
+    ScreenMapper, TICKS_PER_LOGIC_FRAME, TICKS_PER_SECOND, derive_movability, effective_movability,
+    filter_movable,
 };
 use w3_core::{
-    Command, CommandKind, DefId, EntityView, Frame, FrozenDefinitions, SCALE, SNAPSHOT_VERSION,
-    SimFixed, StaticWorld, UnitDef, WorldView,
+    Command, CommandKind, DefId, EntityId, EntityView, Frame, FrozenDefinitions, GameplayCommand,
+    GameplayCommandKind, MatchConfig, RtsMatch, SCALE, SNAPSHOT_VERSION, SimFixed, StaticWorld,
+    UnitDef, WorldView,
 };
 use w3_render::{ModelLibrary, TerrainMesh, TerrainVertex};
 
@@ -55,6 +57,7 @@ fn mixed_fixture() -> (WorldView, ScreenMapper, MovabilityMap) {
                 x: 0,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 60,
                 owner: 1,
                 alive: true,
@@ -65,6 +68,7 @@ fn mixed_fixture() -> (WorldView, ScreenMapper, MovabilityMap) {
                 x: 10 * SCALE,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 120,
                 owner: 1,
                 alive: true,
@@ -75,6 +79,7 @@ fn mixed_fixture() -> (WorldView, ScreenMapper, MovabilityMap) {
                 x: -10 * SCALE,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 500,
                 owner: 1,
                 alive: true,
@@ -259,6 +264,7 @@ fn multi_peasant_group_landing_slots_match_peasants_only_script() {
                 x: 0,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 60,
                 owner: 1,
                 alive: true,
@@ -269,6 +275,7 @@ fn multi_peasant_group_landing_slots_match_peasants_only_script() {
                 x: 10 * SCALE,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 120,
                 owner: 1,
                 alive: true,
@@ -279,6 +286,7 @@ fn multi_peasant_group_landing_slots_match_peasants_only_script() {
                 x: -10 * SCALE,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 500,
                 owner: 1,
                 alive: true,
@@ -289,6 +297,7 @@ fn multi_peasant_group_landing_slots_match_peasants_only_script() {
                 x: 20 * SCALE,
                 y: 0,
                 facing: 0,
+                speed: 3 * SCALE,
                 hp: 60,
                 owner: 1,
                 alive: true,
@@ -584,6 +593,7 @@ fn human_entity(id: u64, x_world: i64, hp: i64) -> EntityView {
         x: x_world * SCALE,
         y: 0,
         facing: 0,
+        speed: 3 * SCALE,
         hp,
         owner: 1,
         alive: true,
@@ -929,4 +939,700 @@ fn human_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
         "reason=all_immovable_must_not_change_snapshot"
     );
     assert!(app.last_error().is_none(), "reason=no_input_error");
+}
+
+// ---------------------------------------------------------------------------
+// change `runtime-entity-movability`（承接已知限制 B1）
+//
+// 运行时 Train / Build 动态实体不在装配期 def_ids 关联里。分层判据：frame-0
+// 装配实体沿用 derive_movability 派生的映射（其运行时视图 speed 被 max(1)
+// 抬成 >0，不可用视图 speed 区分建筑）；运行时动态实体由只读视图
+// EntityView.speed 判定（complete_production 按真实 def.speed_raw 写入，
+// 建筑 0、单位 >0）。两条来源 MUST NOT 互相替代（design D2 / D3 / D4 / D5）。
+// ---------------------------------------------------------------------------
+
+/// 运行时动态实体的冻结定义编号（合成原创常量，不读取任何资产）。
+const RT_BUILDING_DEF: DefId = 1;
+const RT_UNIT_DEF: DefId = 2;
+
+/// 运行时生产对局的三类实体 ID。
+struct RuntimeIds {
+    producer: u64,
+    building: u64,
+    unit: u64,
+}
+
+/// 构造「建筑 speed_raw == 0 / 战斗单位 speed_raw > 0」两类冻结定义。
+/// 全部为编译期整数常量，train_frames 取 2 便于推进到完成帧。
+fn runtime_definitions() -> (FrozenDefinitions, i64, i64) {
+    let building_speed_raw = 0;
+    let unit_speed_raw = SimFixed::from_int(5).unwrap().raw();
+    let building = UnitDef {
+        hp: 50,
+        mana: 0,
+        speed_raw: building_speed_raw,
+        damage: 0,
+        range_raw: 0,
+        supply: 0,
+        train_frames: 2,
+    };
+    let unit = UnitDef {
+        hp: 80,
+        mana: 0,
+        speed_raw: unit_speed_raw,
+        damage: 10,
+        range_raw: SimFixed::from_int(10).unwrap().raw(),
+        supply: 1,
+        train_frames: 2,
+    };
+    let defs = FrozenDefinitions::new(
+        vec![(RT_BUILDING_DEF, building), (RT_UNIT_DEF, unit)],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .expect("movability: reason=runtime_definitions_invalid");
+    (defs, building_speed_raw, unit_speed_raw)
+}
+
+/// 经 `RtsMatch` 既有公开通路真实生产运行时建筑与战斗单位，推进到完成帧。
+/// 帧 0 出生、帧 1 入队并递减、帧 2 生产完成；`step()` 全程无参。
+fn runtime_production_match() -> (RtsMatch, FrozenDefinitions) {
+    let (defs, _, _) = runtime_definitions();
+    let config = MatchConfig {
+        seed: SEED,
+        logic_fps: LOGIC_FPS,
+        content_hash: defs.content_hash(),
+    };
+    let mut sim = RtsMatch::create_with_definitions(config, StaticWorld::default(), defs.clone());
+    sim.submit_command(spawn(1, 0, 100))
+        .expect("movability: reason=producer_spawn_rejected");
+    let producer = EntityId::new(1).expect("movability: reason=invalid_producer_id");
+    sim.submit_gameplay_command(GameplayCommand::new(
+        Frame::new(1),
+        1,
+        1,
+        GameplayCommandKind::Train {
+            producer,
+            unit_def: RT_BUILDING_DEF,
+            is_building: true,
+        },
+    ))
+    .expect("movability: reason=building_train_rejected");
+    sim.submit_gameplay_command(GameplayCommand::new(
+        Frame::new(1),
+        1,
+        2,
+        GameplayCommandKind::Train {
+            producer,
+            unit_def: RT_UNIT_DEF,
+            is_building: false,
+        },
+    ))
+    .expect("movability: reason=unit_train_rejected");
+    for _ in 0..3 {
+        sim.step();
+    }
+    (sim, defs)
+}
+
+/// 由真实生产视图注入每个实体的可控屏幕包围盒：全屏拖框选中全部，
+/// 右键点落在所有盒之外（走群体 `Move` 分支而非 `Attack` 分支）。
+fn runtime_mapper(view: &WorldView) -> ScreenMapper {
+    let mut boxes = BTreeMap::new();
+    for (index, entity) in view.entities.iter().enumerate() {
+        let x0 = 100.0 + 200.0 * index as f64;
+        boxes.insert(entity.id, ([x0, 100.0], [x0 + 40.0, 140.0]));
+    }
+    ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0).with_entity_boxes(boxes)
+}
+
+/// 完整夹具：真实生产对局、只读视图、拾取映射、装配期映射与三类实体 ID。
+/// 装配期映射只登记 frame-0 生产者（可移动单位定义），运行时 Train 产出的
+/// 实体刻意不在关联中——精确复现 B1「映射未登记动态实体」的场景。
+fn runtime_fixture() -> (
+    RtsMatch,
+    FrozenDefinitions,
+    WorldView,
+    ScreenMapper,
+    MovabilityMap,
+    RuntimeIds,
+) {
+    let (sim, defs) = runtime_production_match();
+    let view = sim.read_view();
+    assert_eq!(
+        view.entities.len(),
+        3,
+        "reason=producer_plus_two_runtime_entities"
+    );
+    let runtime: Vec<&EntityView> = view.entities.iter().filter(|e| e.id != 1).collect();
+    let ids = RuntimeIds {
+        producer: 1,
+        building: runtime
+            .iter()
+            .find(|e| e.speed == 0)
+            .expect("movability: reason=runtime_building_missing")
+            .id,
+        unit: runtime
+            .iter()
+            .find(|e| e.speed > 0)
+            .expect("movability: reason=runtime_unit_missing")
+            .id,
+    };
+    let def_ids: BTreeMap<u64, DefId> = [(ids.producer, RT_UNIT_DEF)].into_iter().collect();
+    let assembly = derive_movability(&defs, &def_ids);
+    let mapper = runtime_mapper(&view);
+    (sim, defs, view, mapper, assembly, ids)
+}
+
+/// 被反向验证的单一断言：运行时生产建筑 MUST NOT 出现在 `Move` 生成集合中。
+fn runtime_building_does_not_move(commands: &[ClientCommand], building_id: u64) -> bool {
+    !move_targets(commands).contains(&building_id)
+}
+
+/// 全屏框选并右键，走真实 `InputState::apply` 群体 `Move` 路径。
+fn runtime_group_move(
+    view: &WorldView,
+    mapper: &ScreenMapper,
+    movability: &MovabilityMap,
+) -> Vec<ClientCommand> {
+    let mut input = InputState::new(1);
+    select_all(&mut input, view, mapper, movability);
+    assert_eq!(
+        input.selection().len(),
+        view.entities.len(),
+        "reason=all_entities_selected"
+    );
+    input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            view,
+            mapper,
+            &[],
+            movability,
+        )
+        .unwrap()
+}
+
+/// 合并函数纯函数断言（tasks 2.1 / D2 / D3）：四类输入的分层判据。
+/// frame-0 已登记项原样保留（即使视图 speed 被 max(1) 抬成 >0 也不覆盖），
+/// 未登记的运行时实体按 `EntityView.speed != 0` 补判据；两条来源不互相替代。
+#[test]
+fn effective_movability_merges_registered_and_runtime_entities() {
+    let base: MovabilityMap = [(1, true), (2, false), (3, false)].into_iter().collect();
+    let positive = 3 * SCALE;
+    let view = WorldView {
+        tick: 4,
+        rng: 0,
+        entities: vec![
+            EntityView {
+                id: 1,
+                x: 0,
+                y: 0,
+                facing: 0,
+                speed: positive,
+                hp: 60,
+                owner: 1,
+                alive: true,
+                has_target: false,
+            },
+            // frame-0 主城：视图 speed 被 max(1) 抬成 >0，但已登记 false。
+            EntityView {
+                id: 2,
+                x: 10 * SCALE,
+                y: 0,
+                facing: 0,
+                speed: positive,
+                hp: 120,
+                owner: 1,
+                alive: true,
+                has_target: false,
+            },
+            // frame-0 金矿：同上。
+            EntityView {
+                id: 3,
+                x: -10 * SCALE,
+                y: 0,
+                facing: 0,
+                speed: positive,
+                hp: 500,
+                owner: 1,
+                alive: true,
+                has_target: false,
+            },
+            // 运行时建筑：未登记、speed == 0。
+            EntityView {
+                id: 4,
+                x: 0,
+                y: 0,
+                facing: 0,
+                speed: 0,
+                hp: 50,
+                owner: 1,
+                alive: true,
+                has_target: false,
+            },
+            // 运行时战斗单位：未登记、speed > 0。
+            EntityView {
+                id: 5,
+                x: 0,
+                y: 0,
+                facing: 0,
+                speed: 5 * SCALE,
+                hp: 80,
+                owner: 1,
+                alive: true,
+                has_target: false,
+            },
+        ],
+    };
+    let selection: BTreeSet<u64> = [1, 2, 3, 4, 5].into_iter().collect();
+
+    let effective = effective_movability(&base, &view);
+    assert_eq!(effective.len(), 5, "reason=all_entities_have_criterion");
+    // 已登记项原样保留：frame-0 建筑 / 金矿的视图 speed > 0 不得覆盖 false。
+    assert_eq!(effective.get(&1), Some(&true), "reason=registered_peasant");
+    assert_eq!(
+        effective.get(&2),
+        Some(&false),
+        "reason=registered_hall_kept"
+    );
+    assert_eq!(
+        effective.get(&3),
+        Some(&false),
+        "reason=registered_mine_kept"
+    );
+    // 未登记运行时实体按视图 speed 补判据。
+    assert_eq!(
+        effective.get(&4),
+        Some(&false),
+        "reason=runtime_building_immovable"
+    );
+    assert_eq!(
+        effective.get(&5),
+        Some(&true),
+        "reason=runtime_unit_movable"
+    );
+    // 纯函数：输入映射未被改写。
+    assert_eq!(base.len(), 3, "reason=input_map_not_mutated");
+    assert_eq!(base.get(&2), Some(&false), "reason=input_entry_not_mutated");
+    // 经真实 filter_movable：只为可移动单位生成 Move，稳定 EntityId 顺序。
+    assert_eq!(
+        filter_movable(&selection, &effective),
+        vec![1, 5],
+        "reason=only_movable_entities"
+    );
+}
+
+/// 核心回归（tasks 3.1 / R1.4 / R13.6）：真实生产出的运行时建筑
+/// （view.speed == 0）在含它的混合选中集合里 MUST NOT 生成 Move、位置不变；
+/// 运行时战斗单位（view.speed > 0）与 frame-0 生产者正常响应 Move。
+#[test]
+fn runtime_building_does_not_move_but_unit_and_peasant_do() {
+    let (sim, defs, view, mapper, assembly, ids) = runtime_fixture();
+    let (_, building_speed_raw, unit_speed_raw) = runtime_definitions();
+
+    // 只读视图 speed 如实投影内核真实 def.speed_raw。
+    let building = view.entities.iter().find(|e| e.id == ids.building).unwrap();
+    let unit = view.entities.iter().find(|e| e.id == ids.unit).unwrap();
+    let producer = view.entities.iter().find(|e| e.id == ids.producer).unwrap();
+    assert_eq!(
+        building.speed, building_speed_raw,
+        "reason=building_speed_zero"
+    );
+    assert_eq!(building.speed, 0, "reason=building_speed_exactly_zero");
+    assert_eq!(unit.speed, unit_speed_raw, "reason=unit_speed_matches_def");
+    assert!(unit.speed > 0, "reason=unit_speed_positive");
+    // frame-0 装配实体运行时视图 speed 被 max(1) 抬成 >0。
+    assert!(producer.speed > 0, "reason=frame0_speed_lifted");
+    assert_ne!(ids.building, ids.unit, "reason=distinct_runtime_entities");
+
+    // 装配期映射只登记 frame-0 生产者，运行时实体未登记（B1）。
+    assert_eq!(assembly.len(), 1, "reason=assembly_registers_frame0_only");
+    assert_eq!(assembly.get(&ids.producer), Some(&true));
+    assert!(
+        !assembly.contains_key(&ids.building),
+        "reason=building_unregistered"
+    );
+    assert!(
+        !assembly.contains_key(&ids.unit),
+        "reason=unit_unregistered"
+    );
+    // 合并后：已登记项原样保留，运行时建筑补 false、单位补 true。
+    let effective = effective_movability(&assembly, &view);
+    assert_eq!(effective.get(&ids.building), Some(&false));
+    assert_eq!(effective.get(&ids.unit), Some(&true));
+
+    let hash_before = sim.compute_state_hash();
+    let snapshot_before = sim.capture_snapshot();
+    let commands = runtime_group_move(&view, &mapper, &assembly);
+    let targets = move_targets(&commands);
+
+    // 运行时建筑 MUST NOT 生成 Move。
+    assert!(
+        runtime_building_does_not_move(&commands, ids.building),
+        "reason=runtime_building_must_not_move"
+    );
+    assert!(
+        !targets.contains(&ids.building),
+        "reason=no_move_for_building"
+    );
+    // 运行时战斗单位与 frame-0 生产者正常响应 Move，按稳定 EntityId 顺序。
+    let mut expected = vec![ids.producer, ids.unit];
+    expected.sort_unstable();
+    assert_eq!(targets, expected, "reason=stable_entity_id_order");
+    assert!(targets.contains(&ids.unit), "reason=runtime_unit_moves");
+    assert!(
+        targets.contains(&ids.producer),
+        "reason=frame0_peasant_moves"
+    );
+    // 位置不变：没有任何指向运行时建筑的 Move 命令，视图坐标不变。
+    assert!(!commands.iter().any(|command| matches!(
+        command,
+        ClientCommand::Simulation(Command {
+            kind: CommandKind::Move { entity, .. },
+            ..
+        }) if entity.value() == ids.building
+    )));
+    let (building_x, building_y) = (building.x, building.y);
+    let building_after = view.entities.iter().find(|e| e.id == ids.building).unwrap();
+    assert_eq!(building_after.x, building_x, "reason=building_x_unchanged");
+    assert_eq!(building_after.y, building_y, "reason=building_y_unchanged");
+
+    // 表现层只读：apply 不反写权威状态，状态哈希 / 快照 / 版本不变。
+    assert_eq!(
+        sim.compute_state_hash(),
+        hash_before,
+        "reason=apply_must_not_change_state_hash"
+    );
+    assert_eq!(
+        sim.capture_snapshot(),
+        snapshot_before,
+        "reason=apply_must_not_change_snapshot"
+    );
+    assert_eq!(SNAPSHOT_VERSION, 3, "reason=snapshot_version_3");
+    assert_eq!(snapshot_before.version, SNAPSHOT_VERSION);
+    assert_eq!(snapshot_before.defs_hash, defs.content_hash());
+    assert_eq!(snapshot_before.content_hash, defs.content_hash());
+}
+
+/// 等效脚本逐帧验收（tasks 5.1 / ADR 0002）：混合选中（含运行时建筑）过滤后
+/// 的命令与「只选中可移动单位」的等效脚本逐条相同；两个同构实例提交同一
+/// 脚本后逐帧状态哈希 / 快照 / 只读视图一致，运行时建筑位置不变，快照仍 v3。
+#[test]
+fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
+    let (mut a, defs, view, mapper, assembly, ids) = runtime_fixture();
+    let (mut b, _) = runtime_production_match();
+    assert_eq!(
+        a.compute_state_hash(),
+        b.compute_state_hash(),
+        "reason=isomorphic_instances_start_equal"
+    );
+
+    // 混合选中（含运行时建筑）走真实 apply 群体 Move 路径。
+    let mixed = runtime_group_move(&view, &mapper, &assembly);
+    // 等效脚本：视图只保留可移动单位，同一拾取映射与装配期映射。
+    let movers_view = WorldView {
+        tick: view.tick,
+        rng: view.rng,
+        entities: view
+            .entities
+            .iter()
+            .filter(|e| e.id != ids.building)
+            .cloned()
+            .collect(),
+    };
+    let only = runtime_group_move(&movers_view, &mapper, &assembly);
+    assert_eq!(mixed, only, "reason=filter_must_not_change_landing_slots");
+    assert!(move_targets(&mixed).contains(&ids.unit));
+    assert!(!move_targets(&mixed).contains(&ids.building));
+
+    let building_before = view.entities.iter().find(|e| e.id == ids.building).unwrap();
+    let (building_x, building_y) = (building_before.x, building_before.y);
+
+    // 命令经公开入口提交给两同构实例（权威状态所有者的合法行为）。
+    for command in &mixed {
+        if let ClientCommand::Simulation(cmd) = command {
+            a.submit_command(*cmd).unwrap();
+            b.submit_command(*cmd).unwrap();
+        }
+    }
+    for frame in 0..12 {
+        a.step();
+        b.step();
+        assert_eq!(
+            a.compute_state_hash(),
+            b.compute_state_hash(),
+            "reason=hash_diverged frame={frame}"
+        );
+        assert_eq!(
+            a.capture_snapshot(),
+            b.capture_snapshot(),
+            "reason=snapshot_diverged frame={frame}"
+        );
+        assert_eq!(
+            a.read_view(),
+            b.read_view(),
+            "reason=view_diverged frame={frame}"
+        );
+    }
+    // 运行时建筑未收到 Move，位置不变；快照仍为 v3。
+    let after = a.read_view();
+    let building_after = after
+        .entities
+        .iter()
+        .find(|e| e.id == ids.building)
+        .unwrap();
+    assert_eq!(building_after.x, building_x, "reason=building_x_unchanged");
+    assert_eq!(building_after.y, building_y, "reason=building_y_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 3, "reason=snapshot_version_3");
+    let snapshot = a.capture_snapshot();
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION);
+    assert_eq!(snapshot.defs_hash, defs.content_hash());
+    assert_eq!(snapshot.content_hash, defs.content_hash());
+}
+
+/// frame-0 回归不退化（P8.0 / D2 铁律）：frame-0 主城 / 金矿的视图 speed
+/// 被 max(1) 抬成 >0，但已登记 false 必须原样保留；分层判据不得把
+/// frame-0 建筑误放行（否则 R1 bug 从 frame-0 路径复发）。
+#[test]
+fn frame0_mixed_selection_not_regressed_by_effective_movability() {
+    let (view, mapper, map) = mixed_fixture();
+    // 既有夹具的 frame-0 实体（含建筑 / 资源点）运行时视图 speed 全 >0。
+    assert!(
+        view.entities.iter().all(|e| e.speed > 0),
+        "reason=frame0_view_speed_lifted"
+    );
+    // 三个实体都已登记，合并函数不新增也不覆盖任何项。
+    let effective = effective_movability(&map, &view);
+    assert_eq!(effective, map, "reason=registered_frame0_entries_preserved");
+    assert_eq!(effective.get(&HALL_ID), Some(&false));
+    assert_eq!(effective.get(&MINE_ID), Some(&false));
+
+    let commands = runtime_group_move(&view, &mapper, &map);
+    assert_eq!(
+        move_targets(&commands),
+        vec![PEASANT_ID],
+        "reason=only_frame0_peasant_moves"
+    );
+    assert_eq!(
+        view.entities[1].x,
+        10 * SCALE,
+        "reason=hall_position_unchanged"
+    );
+    assert_eq!(
+        view.entities[2].x,
+        -10 * SCALE,
+        "reason=mine_position_unchanged"
+    );
+}
+
+/// 默认空映射兜底（D5 / tasks 4.1 / B1 另一半）：`ClientApp::new` 默认空映射
+/// 与 `examples/playable.rs` 未注入态，view 含运行时生产建筑（speed == 0）
+/// 时 MUST NOT 生成 Move，效果与「显式注入正确映射」一致，空映射不再触发
+/// `unwrap_or(true)` 全放行。
+#[test]
+fn default_empty_movability_does_not_release_runtime_building() {
+    let (_, _, view, mapper, _, ids) = runtime_fixture();
+    let empty = MovabilityMap::new();
+
+    // 空映射经合并函数兜底后，view 里每个实体都有 speed 判据。
+    let effective = effective_movability(&empty, &view);
+    assert_eq!(
+        effective.len(),
+        view.entities.len(),
+        "reason=every_entity_has_criterion"
+    );
+    assert_eq!(
+        effective.get(&ids.building),
+        Some(&false),
+        "reason=building_immovable"
+    );
+    assert_eq!(effective.get(&ids.unit), Some(&true), "reason=unit_movable");
+    assert_eq!(
+        effective.get(&ids.producer),
+        Some(&true),
+        "reason=producer_movable"
+    );
+
+    let commands = runtime_group_move(&view, &mapper, &empty);
+    assert!(
+        runtime_building_does_not_move(&commands, ids.building),
+        "reason=empty_map_must_not_release_building"
+    );
+    assert!(
+        move_targets(&commands).contains(&ids.unit),
+        "reason=unit_still_moves"
+    );
+
+    // 与「显式注入正确映射」效果一致：按视图 speed 逐条登记的正确映射。
+    let injected: MovabilityMap = view.entities.iter().map(|e| (e.id, e.speed != 0)).collect();
+    let injected_commands = runtime_group_move(&view, &mapper, &injected);
+    assert_eq!(
+        move_targets(&commands),
+        move_targets(&injected_commands),
+        "reason=default_matches_explicit_injection"
+    );
+}
+
+/// 反向验证·正式态（`CODEBUDDY.md` §5 / D4）：合并函数在场时，
+/// 「运行时建筑不响应 Move」断言经真实 `InputState::apply` 路径通过。
+#[test]
+fn reverse_validation_formal_impl_passes_runtime_building_assertion() {
+    let (_, _, view, mapper, assembly, ids) = runtime_fixture();
+    let commands = runtime_group_move(&view, &mapper, &assembly);
+    assert!(
+        runtime_building_does_not_move(&commands, ids.building),
+        "reason=formal_impl_passes_the_assertion"
+    );
+    // 同一断言经真实 filter_movable 路径：有效映射过滤掉运行时建筑。
+    let selection: BTreeSet<u64> = view.entities.iter().map(|e| e.id).collect();
+    let formal = filter_movable(&selection, &effective_movability(&assembly, &view));
+    assert!(
+        !formal.contains(&ids.building),
+        "reason=formal_filter_narrows_set"
+    );
+}
+
+/// 退化合并函数（缺陷态，仅用于反向验证）：模拟「合并函数缺席」，
+/// 直接把装配期映射原样交回 `filter_movable`，未登记的运行时实体
+/// 回到 `unwrap_or(true)` 默认放行（即 B1 缺陷态）。生产实现 MUST 用
+/// [`effective_movability`]（design D3 / D4）。
+fn degenerate_effective_movability(base: &MovabilityMap, _view: &WorldView) -> MovabilityMap {
+    base.clone()
+}
+
+/// 反向验证·缺陷态（`CODEBUDDY.md` §5 / D4）：去掉动态实体兜底、退回旧
+/// `unwrap_or(true)` 默认放行，令「运行时建筑不响应 Move」断言失败。
+/// 退化实现经真实 `filter_movable` 与 `InputState::apply` 路径注入，不是旁路模拟。
+#[test]
+fn reverse_validation_degenerate_impl_fails_the_same_assertion() {
+    let (_, _, view, mapper, assembly, ids) = runtime_fixture();
+    let selection: BTreeSet<u64> = view.entities.iter().map(|e| e.id).collect();
+
+    // A/B 纯函数对照：合并函数在场过滤建筑，缺席（退化）则默认放行。
+    let formal = filter_movable(&selection, &effective_movability(&assembly, &view));
+    let degenerate = filter_movable(
+        &selection,
+        &degenerate_effective_movability(&assembly, &view),
+    );
+    assert!(
+        !formal.contains(&ids.building),
+        "reason=formal_merger_filters_building"
+    );
+    assert!(
+        degenerate.contains(&ids.building),
+        "reason=absent_merger_releases_building"
+    );
+
+    // 退化映射：把「旧 unwrap_or(true) 默认放行」的结果显式化（所有实体 true）。
+    // 合并函数「已登记项原样保留」不会覆盖它，因此可经真实 apply 路径复现
+    // 缺陷态；元断言证明它等价于空映射的 unwrap_or(true) 全放行。
+    let degenerate_map: MovabilityMap = view.entities.iter().map(|e| (e.id, true)).collect();
+    assert_eq!(
+        filter_movable(&selection, &degenerate_map),
+        filter_movable(&selection, &MovabilityMap::new()),
+        "reason=degenerate_map_equals_unwrap_or_true"
+    );
+    assert_eq!(
+        filter_movable(&selection, &degenerate_map),
+        degenerate,
+        "reason=degenerate_impl_injected_via_real_filter_movable"
+    );
+
+    // 缺陷态经真实 InputState::apply 群体 Move 路径：运行时建筑被放行。
+    let broken_commands = runtime_group_move(&view, &mapper, &degenerate_map);
+    assert!(
+        move_targets(&broken_commands).contains(&ids.building),
+        "reason=degenerate_impl_generates_move_for_building"
+    );
+    // 元断言：同一「建筑不 Move」断言在退化实现下必然失败（改坏验红）。
+    assert!(
+        !runtime_building_does_not_move(&broken_commands, ids.building),
+        "reason=degenerate_impl_fails_the_same_assertion"
+    );
+}
+
+/// 双刷新率逐帧验收（ADR 0002 §2）：含运行时动态实体的真实生产对局，
+/// 60 Hz / 144 Hz 呈现节奏喂入同一整数节拍序列后，逐帧帧号与
+/// `compute_state_hash()` 完全一致；累加器只数整数帧，`step()` 不接呈现帧率。
+fn runtime_replay_trace(refresh_hz: u64, seconds: u64) -> Vec<(u64, u64)> {
+    let ticks_per_redraw = TICKS_PER_SECOND / refresh_hz;
+    assert_eq!(ticks_per_redraw * refresh_hz, TICKS_PER_SECOND);
+    let (sim, _) = runtime_production_match();
+    let mut client = FixedStepClient::from_match(sim);
+    let mut trace = Vec::new();
+    for _ in 0..(refresh_hz * seconds) {
+        client.advance_with_observer(ticks_per_redraw, |s| {
+            trace.push((s.read_view().tick, s.compute_state_hash()));
+        });
+    }
+    trace
+}
+
+#[test]
+fn runtime_dynamic_entities_replay_is_refresh_rate_independent() {
+    let seconds = 2;
+    let at_60 = runtime_replay_trace(60, seconds);
+    let at_144 = runtime_replay_trace(144, seconds);
+    let expected_frames = u64::from(LOGIC_FPS) * seconds;
+
+    assert_eq!(
+        at_60.len() as u64,
+        expected_frames,
+        "reason=60hz_frame_count"
+    );
+    assert_eq!(
+        at_144.len() as u64,
+        expected_frames,
+        "reason=144hz_frame_count"
+    );
+    assert_eq!(at_60, at_144, "reason=60hz_144hz_frame_hash_identical");
+    // 逐帧帧号连续递增，防止「状态从未变化」造成的空泛通过。
+    for (index, (tick, _)) in at_60.iter().enumerate() {
+        // 生产夹具已推进 3 帧，累加器从当前冻结帧号继续。
+        assert_eq!(*tick, 3 + index as u64 + 1, "reason=frame_number_monotonic");
+    }
+    assert!(
+        at_60.windows(2).any(|pair| pair[0].1 != pair[1].1),
+        "reason=simulation_actually_advanced"
+    );
+}
+
+/// playable / 默认态显式处置（D5 / tasks 4.2）：`examples/playable.rs` 场景为
+/// 4 个 speed > 0 的 `Spawn` 单位、无建筑，`ClientApp::new` 默认空映射未注入
+/// `with_movability`。合并函数从只读视图 speed 现算兜底后，四个单位都有判据
+/// 且全部可移动，行为正确——如实登记「兜底已覆盖」，无需补一个明确注入：
+/// playable 是纯 `Spawn` 脚本、没有装配期 `def_ids` 关联可供派生，注入映射
+/// 反而多余且会掩盖兜底是否生效。
+#[test]
+fn playable_default_empty_map_keeps_all_spawn_units_movable() {
+    let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
+    // 复刻 playable 的四个分散 spawn 单位：speed 均为 3 * SCALE > 0。
+    for (sequence, x) in [(1u32, -32i64), (2, 0), (3, 32), (4, 0)] {
+        driver.submit_command(spawn(sequence, x, 100)).unwrap();
+    }
+    driver.advance_one_frame();
+    let view = driver.sim().read_view();
+    assert_eq!(view.entities.len(), 4, "reason=four_playable_spawn_units");
+    assert!(
+        view.entities.iter().all(|e| e.speed > 0),
+        "reason=all_playable_units_have_positive_speed"
+    );
+
+    // 默认空映射经合并函数兜底后，四个单位都按 speed 补为可移动。
+    let empty = MovabilityMap::new();
+    let effective = effective_movability(&empty, &view);
+    assert_eq!(effective.len(), 4, "reason=empty_map_fully_backfilled");
+    assert!(
+        effective.values().all(|&movable| movable),
+        "reason=all_units_movable_under_default_map"
+    );
+
+    // 走真实 apply 群体 Move 路径：默认态不再等价「全部可移动」缺陷态，
+    // 而是每个单位都有 speed 判据、正常响应 Move。
+    let commands = runtime_group_move(&view, &runtime_mapper(&view), &empty);
+    let mut expected: Vec<u64> = view.entities.iter().map(|e| e.id).collect();
+    expected.sort_unstable();
+    assert_eq!(move_targets(&commands), expected, "reason=all_units_move");
 }

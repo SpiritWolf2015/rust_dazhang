@@ -29,8 +29,9 @@ use crate::melee::defs::BARRACKS;
 /// `UnitDef::speed_raw` 派生（design D1），经 [`crate::app::ClientApp`]
 /// 注入输入翻译层。该映射是表现层专属数据，MUST NOT 进入 FNV-1a 状态哈希、
 /// `SNAPSHOT_VERSION`（当前 3）快照或任何权威状态字段（ADR 0002）。
-/// 映射未登记的实体（如运行时生产出的新单位）沿用既有行为视为可移动，
-/// 不做类型白名单推断；只有显式登记为 `false` 的实体被过滤。
+/// 本映射只登记 frame-0 装配实体；群体 `Move` 前 MUST 经
+/// [`effective_movability`] 用只读视图补齐运行时动态实体判据，再把产出的
+/// 有效映射交给 [`filter_movable`]，不做类型白名单推断。
 pub type MovabilityMap = BTreeMap<u64, bool>;
 
 /// 装配期从 client 侧冻结定义派生 `EntityId → 可移动性` 映射（design D1）。
@@ -64,6 +65,36 @@ pub fn filter_movable(selection: &BTreeSet<u64>, movability: &MovabilityMap) -> 
         .copied()
         .filter(|id| movability.get(id).copied().unwrap_or(true))
         .collect()
+}
+
+/// 合并装配期映射与当前只读视图，产出群体 `Move` 使用的有效可移动性映射
+/// （design D2 / D3 分层判据，R1.4 / R13.6）。
+///
+/// 判据按**实体来源分层**，两条来源 MUST NOT 互相替代：
+/// - `base` 已登记的 frame-0 装配实体**原样保留**（P8.0 D1 权威判据，
+///   来自 `UnitDef.speed_raw`）。`Builder::spawn` 因 `CommandQueue::submit`
+///   的 `speed > 0` 校验把 frame-0 建筑的 `speed` 抬到 `max(1)`，其运行时
+///   视图 `speed > 0` 无法区分建筑，故 MUST NOT 用视图 speed 覆盖已登记项，
+///   否则 R1 bug 从 frame-0 路径复发。
+/// - `base` 未登记的运行时动态实体（`Train` / `Build` 产出，不在装配期
+///   `def_ids` 关联中）按只读 `EntityView.speed != 0` 补一条判据：内核
+///   `complete_production` 以真实 `def.speed_raw` 写入 `UnitState.speed`
+///   （建筑 `0`、单位 `> 0`），视图 speed 在此才是可靠判据。
+///
+/// 纯函数、每次 `apply` 从当前 `view` 现算，不持久化映射、不监听生产事件、
+/// 不反写模拟状态；有效映射是表现层只读派生数据，MUST NOT 进入 FNV-1a
+/// 状态哈希、`SNAPSHOT_VERSION`（当前 3）快照或任何权威状态字段（ADR 0002）。
+/// 已登记项优先（原样保留），仅对未登记项按视图 speed 补齐，因此默认空映射
+/// （`ClientApp::new`）下 view 里所有实体也都有判据，不再等价「全部可移动」
+/// 缺陷态（design D5）。
+pub fn effective_movability(base: &MovabilityMap, view: &WorldView) -> MovabilityMap {
+    let mut effective = base.clone();
+    for entity in &view.entities {
+        effective
+            .entry(entity.id)
+            .or_insert_with(|| entity.speed != 0);
+    }
+    effective
 }
 
 /// 命令提前量：执行帧 = 当前冻结逻辑帧号 + 该常量（整数帧，ADR 0002 §2）。
@@ -558,10 +589,13 @@ impl InputState {
                         .collect())
                 } else {
                     let (x, y) = mapper.freeze_point(point)?;
-                    // 群体 Move 只作用于由冻结定义 speed_raw 派生的可移动
-                    // 实体（design D1）：建筑 / 金矿 / 树木在此被筛除，
+                    // 群体 Move 用分层判据产出的有效映射过滤（design D2 / D3）：
+                    // frame-0 已登记项原样保留，运行时动态实体由只读视图
+                    // speed 补齐；建筑 / 金矿 / 树木 / 运行时建筑在此被筛除，
                     // 落点按筛后集合的稳定 EntityId 顺序分配，不因过滤改变。
-                    let movers: Vec<EntityId> = filter_movable(&self.selection, movability)
+                    // 有效映射每次从当前只读视图现算，不持久化、不进权威状态。
+                    let effective = effective_movability(movability, view);
+                    let movers: Vec<EntityId> = filter_movable(&self.selection, &effective)
                         .into_iter()
                         .filter_map(EntityId::new)
                         .collect();

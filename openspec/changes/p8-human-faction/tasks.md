@@ -14,7 +14,7 @@
 
 - [x] 2.1 给 `Race`（`defs.rs:74-135`）扩展 `ranged()` / `siege()` / `farm()` / `altar()` / `smithy()` / `hero()` 一类分派，人族返回 `1xx` 新常量；**MUST NOT** 新增 `Player.race` 等运行时权威状态（C1 / 主 `melee-match/spec.md:127-129`）；验证：两族分派落在各自段内、与既有 6 个分派不冲突
 - [x] 2.2 扩 `crates/w3-client/src/melee/setup.rs` 人族开局 `def_ids` 关联到新类别；`CommandKind::Spawn` 字段与字节保持 `command.rs:14-21` 现状、逐字节不变（C2 / R4.1）；验证：`race_does_not_change_authoritative_spawn_commands`（`setup.rs:684-700`）仍通过、两族 `Spawn` 与 `gameplay_commands` 字节一致
-- [x] 2.3 校验新增建筑 / 资源点 / 主城经 `MeleeSetup::movability`（`setup.rs:434-436`）派生为不可移动、新单位 / 英雄派生为可移动；MUST NOT 扩展 `WorldView` / `EntityView`、MUST NOT 用运行时 `speed`、MUST NOT 回退建筑类型白名单（C4 / R1.4 / R13.6）；验证：`derive_movability` 对新 `DefId` 的断言全绿
+- [x] 2.3 校验新增建筑 / 资源点 / 主城经 `MeleeSetup::movability`（`setup.rs:434-436`）派生为不可移动、新单位 / 英雄派生为可移动；MUST NOT 扩展 `WorldView` / `EntityView`、MUST NOT 用运行时 `speed`、MUST NOT 回退建筑类型白名单（C4 / R1.4 / R13.6）；验证：`derive_movability` 对新 `DefId` 的断言全绿（注：该「不扩展视图 / 不用运行时 speed」为 P8.0 / P8.1 阶段性实现层约束，2026-11-16 经用户拍板由 change `runtime-entity-movability` 放松为只读视图分层判据；本条历史任务记录保留、复选框状态不变）
 
 ## 3. AI 命令脚本与端到端一局（D5 / D6）
 

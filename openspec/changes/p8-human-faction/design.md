@@ -67,7 +67,7 @@
 
 **备选方案**：
 1. 给 `CommandKind::Spawn` 加 `DefId` 字段 —— 否决：C2 / R2；改内核命令线格式、状态哈希与快照，两族 `Spawn` 字节不再一致。
-2. 在运行时视图里补 `DefId` —— 否决：MUST NOT 扩展 `WorldView` / `EntityView`（C4 / P8.0 D1），且会滑向改 `w3-core`。
+2. 在运行时视图里补 `DefId` —— 否决：MUST NOT 扩展 `WorldView` / `EntityView`（C4 / P8.0 D1），且会滑向改 `w3-core`。（注：该「不扩展视图 / 不用运行时 speed」为 P8.0 / P8.1 阶段性实现层约束，2026-11-16 经用户拍板由 change `runtime-entity-movability` 放松为只读视图分层判据；本条历史决策记录保留）
 3. 不做装配关联、靠 DefId 数值约定 —— 否决：AI 脚本 / 端到端脚本需要稳定 `EntityId→DefId` 查表，散落约定不可验证。
 
 **理由**：`MeleeSetup` 的 `def_ids`（`setup.rs:152-156`）已是「种族维度只停在这一层」的既定接缝，扩展它不影响任何权威命令。
@@ -108,7 +108,7 @@
 
 ### D7 R1.4 / R13.6 过滤沿用 P8.0 只读映射，不重开内核口子
 
-**决策**：新增建筑 `speed_raw == 0` 由 `MeleeSetup::movability`（`setup.rs:434-436`）经 `derive_movability` 派生为表现层只读映射；含新增建筑 / 资源点 / 主城的选中集合 MUST NOT 生成 `Move`（R1.4 / R13.6 `[已核]`、派生映射 `[取舍]` / P8.0 D1）。MUST NOT 扩展 `WorldView` / `EntityView`、MUST NOT 用运行时 `speed`、MUST NOT 回退建筑类型白名单（C4）。
+**决策**：新增建筑 `speed_raw == 0` 由 `MeleeSetup::movability`（`setup.rs:434-436`）经 `derive_movability` 派生为表现层只读映射；含新增建筑 / 资源点 / 主城的选中集合 MUST NOT 生成 `Move`（R1.4 / R13.6 `[已核]`、派生映射 `[取舍]` / P8.0 D1）。MUST NOT 扩展 `WorldView` / `EntityView`、MUST NOT 用运行时 `speed`、MUST NOT 回退建筑类型白名单（C4）。（注：该「不扩展视图 / 不用运行时 speed」为 P8.0 / P8.1 阶段性实现层约束，2026-11-16 经用户拍板由 change `runtime-entity-movability` 放松为只读视图分层判据；本条历史决策记录保留）
 
 **备选方案**：
 1. 在 `w3-core` 收到 `Move` 时丢弃不可移动实体 —— 否决：改内核权威路径、要动状态哈希与快照（ADR 0002 / P8.0 D1 备选 1）。
@@ -142,7 +142,7 @@
 - **新增定义数量与 `defs_hash` 变化** → `compute_defs_hash`（`gameplay.rs:144-181`）对四类定义的条目数与每字段敏感，新增 6 `UnitDef` + 1 `AbilityDef` + 1–2 `UpgradeDef` 必然改变 `content_hash` / `defs_hash`；这是**预期内的冻结定义内容变化**、不是权威状态字段新增（C3）。缓解：D6 的端到端测试比对「相同脚本两实例逐帧哈希一致」而非与改动前的旧基线数值相等；`defs.rs:337-366` 的 `defs_hash_is_fixed_and_content_sensitive` 元断言复核内容敏感性，快照头部 `defs_hash` / `content_hash` 随之更新、`SNAPSHOT_VERSION` 仍 3。
 - **`speed_raw == 0` 语义** → 作为可移动性判据是 P8.0 约定；新增 3 类建筑 MUST 一致传 `speed == 0`，否则 `derive_movability` 误判、R1.4 bug 从新建筑路径复发。未来「可移动但速度为 0」（被定身）须在定义层显式区分、不能靠运行时状态改写（P8.0 `design.md` Risks 已登记）。缓解：D1 / D7 与 `unit-orders` delta 的 `speed_raw` 派生 Scenario + 反向验证。
 - **P8.1 不碰权威状态的边界** → 本 change 的「零改动 / `SNAPSHOT_VERSION` 仍 3」**仅适用于**复用既有 `Cast` / `Train` / `Research` / `Attack` / `Move` 路径 + 定义层内容扩展 + R1.4 过滤。英雄等级 / 复活 / 掉落 / 迷雾 / attack-move 新命令变体属 P8.5，会新增权威状态或命令面，MUST 另走 ADR 0002（状态哈希 + 快照 + `first_difference()` + determinism），不得借本条「零改动」旁路（`WC3-MELEE-RULES.md:304` R13.6 范围限定）。
-- **运行时动态实体承接** → P8.0 已知限制（B1）：`CommandKind::Spawn` 不含 `DefId`、运行时 `Train` / `Build` 新实体不在装配期 `def_ids` 关联中，其可移动性在「内核零改动 + 不扩展视图」下无法判定。本 change 新增大量可训练 / 可建造实体，**不擅自改 `unwrap_or` 语义或扩视图**，登记为 `decision-memo.md` 待确认项由人拍板、由承接 change 处理；CPU 端到端脚本对 frame-0 静态集合与训练后实体的验证边界如实标注。
+- **运行时动态实体承接** → P8.0 已知限制（B1）：`CommandKind::Spawn` 不含 `DefId`、运行时 `Train` / `Build` 新实体不在装配期 `def_ids` 关联中，其可移动性在「内核零改动 + 不扩展视图」下无法判定。本 change 新增大量可训练 / 可建造实体，**不擅自改 `unwrap_or` 语义或扩视图**，登记为 `decision-memo.md` 待确认项由人拍板、由承接 change 处理；CPU 端到端脚本对 frame-0 静态集合与训练后实体的验证边界如实标注。（注：该「不扩展视图 / 不用运行时 speed」为 P8.0 / P8.1 阶段性实现层约束，2026-11-16 经用户拍板由 change `runtime-entity-movability` 放松为只读视图分层判据并完成承接；本条历史决策记录保留）
 - **数值 `[待核]` 不冒充原版** → 6 类新定义的数值全为合成原创常量，R5.3 克制倍率 / R6 经验 / R3.4 人口上限等具体数值 `[待核]`，以本机导出 SLK 核对、不入库；`CLASSIC_RULES_BASELINE.md:52` 明确「数据行完整 ≠ 玩法完成」，本 change 的验收线是「一局能按各阶段打完且逐帧哈希一致」，不是「数值对齐原版」。
 - **`file:line` 锚漂移** → 本文与 `decision-memo.md` 的 `file:line` 锚在成文前逐条打开核实；apply 后实现代码行号会漂移，按 `CODEBUDDY.md:107` 规格锁定与重审规则：四件套任一 artifact 改动即视为解锁，MUST 同步回查其余三份并重走规格门，不得只改一份。
 - **范围外承接** → 兽族 / 双族对抗 / HUD / P8.5 五个深度玩法由后续独立 change 承接（C8），本 change 不因「顺手」扩范围；联机 / 回放 / AI 玩家 / 迷雾是 1.0 已在能力或范围、不是不做项（C7）。

@@ -4,7 +4,7 @@
 
 ### Requirement: 人族新增实体沿用可移动性过滤并覆盖端到端一局
 
-人族新增单位 / 建筑 SHALL 沿用由冻结定义 `UnitDef.speed_raw` 派生的表现层只读可移动性映射（R1.4 / R13.6 / P8.0 D1）；含新增建筑 / 资源点 / 主城的选中集合 MUST NOT 为其生成 `Move` 命令、MUST NOT 改变位置。端到端一局 SHALL 覆盖「采集 → 建造 → 训练 → 英雄施法 → 研发 → 战斗 → 结算 → 重开」各阶段且逐帧哈希一致（R3.1 / R4 / R5 / R6 / R11 / ADR 0002）。系统 MUST NOT 扩展 `WorldView` / `EntityView`、用运行时 `speed` 或回退建筑类型白名单。
+人族新增单位 / 建筑 SHALL 沿用由冻结定义 `UnitDef.speed_raw` 派生的表现层只读可移动性映射（R1.4 / R13.6 / P8.0 D1）；含新增建筑 / 资源点 / 主城的选中集合 MUST NOT 为其生成 `Move` 命令、MUST NOT 改变位置。端到端一局 SHALL 覆盖「采集 → 建造 → 训练 → 英雄施法 → 研发 → 战斗 → 结算 → 重开」各阶段且逐帧哈希一致（R3.1 / R4 / R5 / R6 / R11 / ADR 0002）。判据按实体来源分层：frame-0 装配实体用装配期 `UnitDef.speed_raw` 派生的只读映射判定（权威），运行时 `Train` / `Build` 动态实体用只读 `EntityView.speed == 0` 判不可移动、`> 0` 判可移动，两条来源 MUST NOT 互相替代；系统 MUST NOT 回退建筑类型白名单（`WC3-MELEE-RULES.md` R1.4 / R13.6 / §14、change `runtime-entity-movability`）。
 
 #### Scenario: 新增实体可移动性由 speed_raw 派生
 

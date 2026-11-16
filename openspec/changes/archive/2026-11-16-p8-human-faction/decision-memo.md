@@ -52,6 +52,17 @@
 - **代码门结论**：只读 `critic` 全清单复审 **0 blocker、可进入本地 commit**；反向验证为真 A-B（退化定义漏接新定义 / 把建筑 `speed_raw` 改非 0 会让验收断言在缺陷态失败、修复态通过），非 trivially-green。`crates/w3-core/` 零 diff、`SNAPSHOT_VERSION` 仍 3、规格锁定指纹 `02ecdfc…` 未失配。四件套正文零改动、`tasks.md` 仅复选框归一化（不解锁）。
 - **数值 / 真窗口 / 参考缺口**：仍为上面「待确认项」中登记的合成原创 `[待核]` / 未执行待补验 / 项目原创取舍，归档前按停止条件逐条复核。
 
+## 归档说明（2026-11-16，用户明确豁免真窗口人工验收）
+
+> 本小节为纯文档登记，不进 FNV-1a 状态哈希 / `SNAPSHOT_VERSION` 快照、不含资产（ADR 0001 / ADR 0002）。证据锚均为仓库文件或本会话用户拍板（非仓库文件者由人工核对，不冒充已落库文档）。
+
+- **用户拍板（非沉默推定）**：2026-11-16 本会话用户明确指令「先不人工测，只标记未人工测试然后归档，然后新建后续 change 继续朝 1.0 的最终目标迭代开发」。证据形态：本会话用户消息（非仓库文件，由人工核对）。据此**显式豁免**「真窗口人工清单未逐项勾选前不得归档」约束，与归档 `2026-11-14-melee-playable-loop/smoke-checklist.md` 的 2026-11-14 用户明确豁免先例一致；不拿沉默当授权、不冒充通过。
+- **真窗口人工验收：全部「未执行 / 待补验」，如实标记、不补测、不冒充通过**。本轮梳理出的剩余真窗口人工项统一登记为未人工测试：① 上版「右键只移动可移动单位」bug 修复后的真窗口复验（用户 2026-11-14 真窗口发现主城 / 金矿随农民移动、明确豁免归档；此后 P8.0 `p8-faction-foundation` 与已归档 `runtime-entity-movability` 仅在 CPU 侧 `tests/movability.rs` 修复并回归，真窗口从未复验）；② 含运行时 `Train` / `Build` 产出建筑的混合选中集合右键 / `M` 移动（B1 承接，仅 CPU 侧验过）；③ 路线图 `P8-human-orc-melee.md:149` / `:117` §5 验收线「能框选、能打完一局并看到 `VICTORY`」（历史 `smoke-checklist.md:88` E 组标未执行；CPU `melee_loop.rs` 验过结算，egui overlay 的 `VICTORY` 字样未人工确认）；④ 人族 6 类新实体在真窗口的可见性 / 命令卡随类型变化 / `KeyM` 等经典键位两级 chords（P8.1 新定义只在装配层 `category_def_ids` 查表、不改开局 `Spawn` 字节，frame-0 仍是 12 个实体；运行时新实体走「模型缺键回退」四面体占位；HUD 属 P8.4、`KeyM` 差距见 `WC3-MELEE-RULES.md` R13.7）；⑤ `SetAi{false}` / `Leave` 对开发夹具 `examples/melee.rs` 的定时离席副作用；⑥ 归档 `smoke-checklist.md:84-90` 标「未执行 / 部分」的 A1–A5 / B1–B10 / D1–D2 / E1–E6 / F1–F3 / G1–G3 组。P8.1 为 CPU 侧定义 + 端到端闭环，CPU 侧已覆盖定义 / `defs_hash` / 反向验证改坏验红 / 逐帧哈希一局 / `cargo test --workspace` / CI 三 job 全绿（`run 43851211008`），真窗口 / GPU / egui overlay 一律未人工观察，**CI 绿灯不代替真窗口验收**。
+- **15/20 tasks 未勾原因（如实、不冒充已勾也不冒充未做）**：3.5 因 `app.rs` 的 `KeyM` 未接线为移动、`design.md` D7 明确本 change 不重开键位接线、frame-0 静态混合集合的 R1.4 过滤已由 `tests/movability.rs` 覆盖（后续 change 承接 / R13.7）；4.2 / 4.4 / 4.5 / 4.7 为流程收尾项——`determinism 26/26`、`verify_all.py Verification OK`、只读 `critic` 全清单 0 blocker、中文描述 commit + CI 全绿在 P8.1 apply 与本轮门禁中**实际已执行且有证据**，复选框刻意保持未勾以守「四件套 0 diff / 规格锁定不解锁」（与归档 P8.0 先例一致）。归档工具 `Warning: 5 incomplete task(s)` 由 `-y` 跳过、如实保留。
+- **delta 合并去向**：归档后主 `openspec/specs/` 新建 `human-faction` capability、`unit-orders` 并入 ADDED Requirement「人族新增实体沿用可移动性过滤并覆盖端到端一局」（该 delta `:7` 的过时全局禁令已于 2026-11-16 归档前消解为实体来源分层判据，见「归档前 delta 禁令消解与指纹重算」小节，**不污染主 spec、不复活互斥**）。
+- **已知限制承接（不冒充已解决）**：真窗口人工验收 A–F 组、本机 GPU headless 间歇性原生崩溃、经典键位接线（R13.7 / 后续 change）、运行时新实体「模型缺键回退」四面体占位、命令卡不随人族新类别变化（P8.4 HUD）、`SetAi` / `Leave` 定时离席、中文上屏（CJK 字体许可证按 `CODEBUDDY.md` §10 人工拍板）、数值 `[待核]` 以本机 SLK 核对、参考缺口 4 项、P8.2 兽族 / P8.3 双族对抗与 AI 选族 / P8.4 HUD / P8.5 五个深度玩法（英雄复活 / 主城升级 / 野怪 / 物品 / 迷雾）——由后续独立 change 承接，本 change 不扩范围、不补测、不改代码。
+- **人工边界**：本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀），push / fetch / pull / clone 及任何远端同步人工独占（`CODEBUDDY.md` §4 / §10）。
+
 ## 停止条件（追加阶段 / 归档前）
 
 1. C1–C8 逐条仍有证据锚、无一条被本轮改动证伪。

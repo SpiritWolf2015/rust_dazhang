@@ -36,7 +36,7 @@
 
 ### Requirement: 群体移动只作用于可移动单位
 
-群体右键 `Move` 命令生成时 SHALL 只选中**由 client 侧冻结定义派生的可移动性判据**判定为可移动的实体；建筑、金矿、树木等不可移动实体 MUST NOT 生成 `Move` 命令、MUST NOT 改变位置，且 MUST NOT 影响其余可移动单位的落点分配。该判据 SHALL 在装配期从 `FrozenDefinitions::units()` 的 `UnitDef.speed_raw` 派生为表现层只读映射并注入输入翻译层；过滤 SHALL 在输入翻译层完成。系统 MUST NOT 为传递该判据扩展 `WorldView` / `EntityView`、MUST NOT 用运行时实体 `speed` 替代、MUST NOT 回退到建筑类型白名单；`w3-core` 的命令语义、状态哈希字段集合与快照口径 MUST NOT 改变（ADR 0002）。
+群体 `Move` 命令生成时 SHALL 只选中可移动实体；建筑、金矿、树木等不可移动实体 MUST NOT 生成 `Move`、MUST NOT 改变位置、MUST NOT 影响其余单位落点分配。可移动性判据 SHALL 在表现层输入翻译层完成、MUST NOT 回退建筑类型白名单，并按实体来源分层：frame-0 装配实体用装配期冻结定义派生的只读映射判定（权威），运行时 `Train` / `Build` 动态实体用只读 `EntityView.speed == 0` 判不可移动、`> 0` 判可移动，两条来源 MUST NOT 互相替代。`EntityView.speed` SHALL 投影已有权威 `UnitState.speed`、MUST NOT 新增权威状态字段或改动命令语义 / 状态哈希 / 快照 / `SNAPSHOT_VERSION`（3）/ golden hash（ADR 0002；分层判据与约束放松依据见 `WC3-MELEE-RULES.md` R1.4 / R13.6 / §14）。
 
 #### Scenario: 混合选中集合右键移动
 

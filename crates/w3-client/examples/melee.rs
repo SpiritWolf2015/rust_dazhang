@@ -139,6 +139,9 @@ fn main() {
         .with_textures(Some(real_map.textures))
         .with_entity_kinds(kinds)
         .with_movability(movability)
+        // 装配层 `EntityId → DefId` 只读关联：HUD 命令卡据此按定义表
+        // 派生 12 格并随选中类型切换（tasks 1.4 / R13.1）。表现层专属。
+        .with_entity_defs(setup.def_ids().clone())
         .with_initial_camera(initial_zoom, initial_pan)
         .run()
         .expect("melee example: reason=window_run_failed");

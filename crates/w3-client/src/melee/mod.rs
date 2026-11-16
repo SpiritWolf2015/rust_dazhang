@@ -6,11 +6,16 @@
 //! `SNAPSHOT_VERSION`（当前 3）定义的快照。
 
 pub mod ai;
+pub mod command_card;
 pub mod defs;
 pub mod driver;
 pub mod setup;
 
 pub use ai::AiScript;
+pub use command_card::{
+    ButtonDef, CARD_SLOTS, CardCommand, CardId, CardKind, CommandCard, CommandCatalog, GRID_HEIGHT,
+    GRID_WIDTH, slot,
+};
 pub use defs::{ExportSource, Race, synthetic_definitions};
 pub use driver::MeleeDriver;
 pub use setup::{AI_PLAYER, EntityKind, LOCAL_PLAYER, MeleeSetup, synthetic_world};

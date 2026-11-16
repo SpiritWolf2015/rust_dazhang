@@ -21,6 +21,7 @@ use w3_core::{
     GameplayCommandKind, SCALE, SimFixed, WorldView,
 };
 
+use crate::melee::command_card::{CardCommand, CardId, CardKind, CommandCatalog};
 use crate::melee::defs::BARRACKS;
 
 /// 表现层只读可移动性映射：`EntityId → 是否可移动`。
@@ -350,6 +351,42 @@ pub enum InputAction {
     AssignGroup(u8),
     /// 按组选择（1..9）：恢复表现层编组选中集合。
     SelectGroup(u8),
+    /// 经典键 / 命令卡点击统一归一化：只携带被按下的字母，由当前卡的
+    /// 「键 → action」表在 `apply` 内翻译（R13.2 / D1）。键盘与点击都回传它，
+    /// MUST NOT 携带「命令来源标记」进命令面（C2 / R13.6）。
+    Hotkey(char),
+    /// `M` 移动瞄准：进入表现层瞄准态，不生成命令。
+    MoveAim,
+    /// `A` 攻击瞄准：进入表现层瞄准态（仅既有 `Attack` 指定目标入口）。
+    AttackAim,
+    /// 瞄准 / 放置态下的左键定点：复用右键同一命令生成处（D5 / R13.6）。
+    AimPoint([f64; 2]),
+    /// `Esc`：清空子菜单栈 / 放置态 / 瞄准态 / 队列，不生成命令（R13.3）。
+    CancelMenu,
+    /// `Tab`：混编同类型子组切换（表现层游标，R13.4）。
+    CycleSubgroup,
+    /// `Shift` 队列开关：true 时后续 `Move` 经既有 `append` 字段排队。
+    SetQueue(bool),
+}
+
+/// 表现层放置态内容：待左键定点的既有 `Train { is_building }` 参数。
+///
+/// 纯表现层局部状态，MUST NOT 进入权威状态 / FNV-1a 状态哈希 /
+/// `SNAPSHOT_VERSION`（当前 3）快照（D3 / ADR 0002）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingPlacement {
+    pub unit_def: u32,
+    pub is_building: bool,
+}
+
+/// 表现层瞄准态：`M` 移动 / `A` 攻击的待定点状态。
+///
+/// 纯表现层局部状态，MUST NOT 进入权威状态 / 状态哈希 / 快照（D3 / ADR 0002）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AimState {
+    None,
+    Move,
+    Attack,
 }
 
 /// 表现层输入状态：选中集合、框选矩形、命令序号。全部非权威。
@@ -367,6 +404,34 @@ pub struct InputState {
     /// 最近一次输入是否因「选中集合全为不可移动实体」而无可执行目标。
     /// 表现层只读反馈位，MUST NOT 进入权威状态 / 状态哈希 / 快照。
     no_movable_target: bool,
+    /// 子菜单栈：当前卡 ID 序列。空表示按选中集合类型定主卡；栈顶为
+    /// 当前子卡。纯表现层局部状态，MUST NOT 进入权威状态 / FNV-1a 状态
+    /// 哈希 / `SNAPSHOT_VERSION`（当前 3）快照（D3 / ADR 0002 / R13.3）。
+    submenu_stack: Vec<CardId>,
+    /// 放置态：待左键定点的建造命令（既有 `Train { is_building }` 参数）。
+    /// 纯表现层局部状态，MUST NOT 进入权威状态 / 状态哈希 / 快照（D3）。
+    placement: Option<PendingPlacement>,
+    /// 瞄准态：`M` 移动 / `A` 攻击的待定点状态。纯表现层局部状态，
+    /// MUST NOT 进入权威状态 / 状态哈希 / 快照（D5 / ADR 0002）。
+    aim: AimState,
+    /// 当前卡的「键 → action」表；每次 `apply` 由当前卡 `clear()` 后重建，
+    /// 使同一字母随卡与选中集合决定含义、旧卡绑定失效（R13.2 / R13.3）。
+    /// 纯表现层局部状态，MUST NOT 进入权威状态 / 状态哈希 / 快照。
+    key_actions: BTreeMap<char, CardCommand>,
+    /// 当前卡 ID（子菜单栈顶或按选中集合类型定的主卡），表现层只读。
+    current_card: CardId,
+    /// 混编选中集合的同类型子组游标（`Tab`），表现层只读。
+    subgroup_cursor: usize,
+    /// `Shift` 队列开关：true 时后续 `Move` 命令带 `append: true` 入队，
+    /// 逐条经既有命令面、不改 `ExecuteFrame → PlayerId → Sequence →
+    /// Arrival` 排序键（R13.4 / ADR 0002）。表现层只读。
+    queue_append: bool,
+    /// 注入的表现层只读定义表（DIP）：按钮 / 键位 / 格位单一真值源，
+    /// 同时作为反向验证注入退化目录的接缝。不进权威状态 / 哈希 / 快照。
+    catalog: CommandCatalog,
+    /// 注入的装配层 `EntityId → DefId` 只读关联，用于按定义表派生当前卡与
+    /// 子组分类（Risks / tasks 1.4）。表现层只读，MUST NOT 进权威状态。
+    entity_defs: BTreeMap<u64, u32>,
 }
 
 impl Default for InputState {
@@ -378,6 +443,8 @@ impl Default for InputState {
 impl InputState {
     /// 创建空选中集合的输入状态。
     pub fn new(local_player: u8) -> Self {
+        let catalog = CommandCatalog::standard();
+        let key_actions = catalog.key_actions(CardId::Main);
         Self {
             local_player,
             selection: BTreeSet::new(),
@@ -387,7 +454,101 @@ impl InputState {
             groups: BTreeMap::new(),
             next_group: 1,
             no_movable_target: false,
+            submenu_stack: Vec::new(),
+            placement: None,
+            aim: AimState::None,
+            key_actions,
+            current_card: CardId::Main,
+            subgroup_cursor: 0,
+            queue_append: false,
+            catalog,
+            entity_defs: BTreeMap::new(),
         }
+    }
+
+    /// 注入装配层 `EntityId → DefId` 只读关联（表现层数据，D2 / tasks 1.4）。
+    /// 用于由定义表派生当前命令卡与混编子组分类；不改动既有 `new` 签名、
+    /// 未注入时未登记实体按通用类型派生，不进权威状态 / 哈希 / 快照。
+    pub fn with_entity_defs(mut self, defs: BTreeMap<u64, u32>) -> Self {
+        self.entity_defs = defs;
+        self
+    }
+
+    /// 就地注入装配层 `EntityId → DefId` 只读关联，并立即按当前选中集合
+    /// 重建当前卡 / 键表（`ClientApp::with_entity_defs` 装配接线用，B1）。
+    ///
+    /// 与 HUD 显示卡的 `entity_defs` 同源、消除两个真值源分叉；只改表现层
+    /// 局部状态，MUST NOT 进权威状态 / FNV-1a 状态哈希 / 快照。
+    /// `ClientApp::new`（未注入）保持既有空关联行为不变。
+    pub fn set_entity_defs(&mut self, defs: BTreeMap<u64, u32>) {
+        self.entity_defs = defs;
+        self.refresh_card();
+    }
+
+    /// 注入表现层只读定义表（DIP）。生产实现用 `CommandCatalog::standard()`；
+    /// 本接缝供反向验证注入退化目录（全局静态键表）经真实 `apply` 路径
+    /// 证明「同一字母随卡切换」断言失败（C5 / D9）。
+    pub fn with_catalog(mut self, catalog: CommandCatalog) -> Self {
+        self.catalog = catalog;
+        self.key_actions = self.catalog.key_actions(self.current_card);
+        self
+    }
+
+    /// 当前卡 ID（表现层只读）。
+    pub fn current_card(&self) -> CardId {
+        self.current_card
+    }
+
+    /// 子菜单栈深度（表现层只读，`Esc` 清空后为 0）。
+    pub fn submenu_depth(&self) -> usize {
+        self.submenu_stack.len()
+    }
+
+    /// 当前放置态（表现层只读）。
+    pub fn placement(&self) -> Option<PendingPlacement> {
+        self.placement
+    }
+
+    /// 当前瞄准态（表现层只读）。
+    pub fn aim(&self) -> AimState {
+        self.aim
+    }
+
+    /// 当前 `Shift` 队列开关（表现层只读）。
+    pub fn queue_append(&self) -> bool {
+        self.queue_append
+    }
+
+    /// 当前混编子组游标（表现层只读）。
+    pub fn subgroup_cursor(&self) -> usize {
+        self.subgroup_cursor
+    }
+
+    /// 当前卡的「键 → action」表（表现层只读，供验收 / 反向验证核对）。
+    pub fn key_actions(&self) -> &BTreeMap<char, CardCommand> {
+        &self.key_actions
+    }
+
+    /// 由子菜单栈 + 选中集合类型定当前卡，并 `clear()` 后重建键表。
+    ///
+    /// 每次 `apply` 都重建，使同一字母随当前卡与选中集合决定含义、旧卡
+    /// 绑定失效（R13.2 / R13.3）。纯表现层，零权威状态写入。
+    fn refresh_card(&mut self) {
+        let card = self.submenu_stack.last().copied().unwrap_or_else(|| {
+            let kinds: Vec<CardKind> = self
+                .selection
+                .iter()
+                .filter_map(|id| {
+                    self.entity_defs
+                        .get(id)
+                        .map(|&def| self.catalog.kind_of(def))
+                })
+                .collect();
+            self.catalog.primary_card(&kinds)
+        });
+        self.current_card = card;
+        self.key_actions.clear();
+        self.key_actions = self.catalog.key_actions(card);
     }
 
     /// 最近一次输入是否因全为不可移动实体而无可执行目标（明确反馈位）。
@@ -552,6 +713,9 @@ impl InputState {
         movability: &MovabilityMap,
     ) -> Result<Vec<ClientCommand>, InputError> {
         self.no_movable_target = false;
+        // 每次输入先按「当前卡 + 选中集合」重建键→action 表，键盘与
+        // 命令卡点击都归一化进本方法、共用唯一命令生成处（D1 / D5）。
+        self.refresh_card();
         match action {
             InputAction::SelectStart(point) => {
                 self.drag_start = Some(point);
@@ -571,67 +735,10 @@ impl InputState {
                 Ok(Vec::new())
             }
             InputAction::ContextAction(point) => {
-                if self.selection.is_empty() {
-                    return Err(InputError::NoSelection);
-                }
-                let selected: Vec<EntityId> = self
-                    .selection
-                    .iter()
-                    .copied()
-                    .filter_map(EntityId::new)
-                    .collect();
-                if let Some(target) = self.pick_enemy(view, mapper, point) {
-                    Ok(selected
-                        .into_iter()
-                        .map(|attacker| {
-                            self.simulation(view, CommandKind::Attack { attacker, target })
-                        })
-                        .collect())
-                } else {
-                    let (x, y) = mapper.freeze_point(point)?;
-                    // 群体 Move 用分层判据产出的有效映射过滤（design D2 / D3）：
-                    // frame-0 已登记项原样保留，运行时动态实体由只读视图
-                    // speed 补齐；建筑 / 金矿 / 树木 / 运行时建筑在此被筛除，
-                    // 落点按筛后集合的稳定 EntityId 顺序分配，不因过滤改变。
-                    // 有效映射每次从当前只读视图现算，不持久化、不进权威状态。
-                    let effective = effective_movability(movability, view);
-                    let movers: Vec<EntityId> = filter_movable(&self.selection, &effective)
-                        .into_iter()
-                        .filter_map(EntityId::new)
-                        .collect();
-                    if movers.is_empty() {
-                        // 全为不可移动实体：不生成空命令、不改权威状态 /
-                        // 哈希，以英文结构化日志明确报告并置反馈位。
-                        log::warn!(
-                            target: "w3_client",
-                            "no movable target in selection: reason=all_immovable selected={}",
-                            self.selection.len()
-                        );
-                        self.no_movable_target = true;
-                        return Ok(Vec::new());
-                    }
-                    // 多选时共用一个非 0 分组号，由内核按稳定实体 ID 分配落点。
-                    let group = if movers.len() > 1 {
-                        self.take_group()
-                    } else {
-                        0
-                    };
-                    Ok(movers
-                        .into_iter()
-                        .map(|entity| {
-                            self.simulation(
-                                view,
-                                CommandKind::Move {
-                                    entity,
-                                    x,
-                                    y,
-                                    group,
-                                    append: false,
-                                },
-                            )
-                        })
-                        .collect())
-                }
+                // 右键与键盘 `M` / `A` 瞄准定点共用同一命令生成处：
+                // 拾取敌方 → 既有 `Attack`，否则 → 经 R1.4 分层过滤的
+                // 既有 `Move`（D5 / R13.6 / C3）。
+                self.context_commands(point, view, mapper, movability, false)
             }
             InputAction::Cast(point) => {
                 let caster = self.first_selected().ok_or(InputError::NoSelection)?;
@@ -665,21 +772,7 @@ impl InputState {
                     GameplayCommandKind::CancelTrain { producer, index: 0 },
                 )])
             }
-            InputAction::Gather => {
-                if self.selection.is_empty() {
-                    return Err(InputError::NoSelection);
-                }
-                let selected: Vec<EntityId> = self
-                    .selection
-                    .iter()
-                    .copied()
-                    .filter_map(EntityId::new)
-                    .collect();
-                Ok(selected
-                    .into_iter()
-                    .map(|unit| self.gameplay(view, GameplayCommandKind::Gather { unit }))
-                    .collect())
-            }
+            InputAction::Gather => self.gather_commands(view),
             InputAction::Build => {
                 let producer = self.first_selected().ok_or(InputError::NoSelection)?;
                 Ok(vec![self.gameplay(
@@ -691,21 +784,7 @@ impl InputState {
                     },
                 )])
             }
-            InputAction::Stop => {
-                if self.selection.is_empty() {
-                    return Err(InputError::NoSelection);
-                }
-                let selected: Vec<EntityId> = self
-                    .selection
-                    .iter()
-                    .copied()
-                    .filter_map(EntityId::new)
-                    .collect();
-                Ok(selected
-                    .into_iter()
-                    .map(|entity| self.simulation(view, CommandKind::Stop { entity }))
-                    .collect())
-            }
+            InputAction::Stop => self.stop_commands(view),
             InputAction::AssignGroup(group) => {
                 self.groups.insert(group, self.selection.clone());
                 Ok(Vec::new())
@@ -716,6 +795,289 @@ impl InputState {
                 }
                 Ok(Vec::new())
             }
+            InputAction::Hotkey(key) => {
+                // 键盘与命令卡点击都归一化到此：查当前卡键表得既有命令面
+                // 动作，未绑定字母显式不生成命令（不静默降级）。
+                let command = self.key_actions.get(&key).copied();
+                match command {
+                    Some(command) => self.apply_card_command(command, view),
+                    None => Ok(Vec::new()),
+                }
+            }
+            InputAction::MoveAim => self.apply_card_command(CardCommand::MoveAim, view),
+            InputAction::AttackAim => self.apply_card_command(CardCommand::AttackAim, view),
+            InputAction::AimPoint(point) => self.aim_point(point, view, mapper, movability),
+            InputAction::CancelMenu => {
+                self.cancel_menu();
+                Ok(Vec::new())
+            }
+            InputAction::CycleSubgroup => {
+                self.cycle_subgroup();
+                Ok(Vec::new())
+            }
+            InputAction::SetQueue(append) => {
+                self.queue_append = append;
+                Ok(Vec::new())
+            }
         }
+    }
+
+    // ---- 以下为表现层只读派生辅助方法：命令仍只经既有命令面产出 ----
+
+    /// 右键地面 / 敌方目标与键盘 `M` / `A` 瞄准定点共用的唯一命令生成处。
+    ///
+    /// `require_enemy` 为 true 时（`A` 瞄准态）只认指定敌方目标入口，点地面
+    /// 不生成命令——MUST NOT 化为 attack-move 点地面途中交战语义（R13.2）。
+    /// 地面 `Move` 经 `effective_movability` 分层判据 + `filter_movable`
+    /// 过滤，建筑 / 金矿 / 树木 / 运行时建筑 MUST NOT 生成 `Move`（R1.4 / C3）。
+    fn context_commands(
+        &mut self,
+        point: [f64; 2],
+        view: &WorldView,
+        mapper: &ScreenMapper,
+        movability: &MovabilityMap,
+        require_enemy: bool,
+    ) -> Result<Vec<ClientCommand>, InputError> {
+        if self.selection.is_empty() {
+            return Err(InputError::NoSelection);
+        }
+        let selected: Vec<EntityId> = self
+            .selection
+            .iter()
+            .copied()
+            .filter_map(EntityId::new)
+            .collect();
+        if let Some(target) = self.pick_enemy(view, mapper, point) {
+            Ok(selected
+                .into_iter()
+                .map(|attacker| self.simulation(view, CommandKind::Attack { attacker, target }))
+                .collect())
+        } else if require_enemy {
+            // 指定目标攻击入口点地面：不是 attack-move，不生成任何命令。
+            Ok(Vec::new())
+        } else {
+            let (x, y) = mapper.freeze_point(point)?;
+            // 群体 Move 用分层判据产出的有效映射过滤（design D2 / D3）：
+            // frame-0 已登记项原样保留，运行时动态实体由只读视图 speed
+            // 补齐；建筑 / 金矿 / 树木 / 运行时建筑在此被筛除，落点按
+            // 筛后集合的稳定 EntityId 顺序分配，不因过滤改变。有效映射
+            // 每次从当前只读视图现算，不持久化、不进权威状态。
+            let effective = effective_movability(movability, view);
+            let movers: Vec<EntityId> = filter_movable(&self.selection, &effective)
+                .into_iter()
+                .filter_map(EntityId::new)
+                .collect();
+            if movers.is_empty() {
+                // 全为不可移动实体：不生成空命令、不改权威状态 / 哈希，
+                // 以英文结构化日志明确报告并置反馈位（表现层只读）。
+                log::warn!(
+                    target: "w3_client",
+                    "no movable target in selection: reason=all_immovable selected={}",
+                    self.selection.len()
+                );
+                self.no_movable_target = true;
+                return Ok(Vec::new());
+            }
+            // 多选时共用一个非 0 分组号，由内核按稳定实体 ID 分配落点。
+            let group = if movers.len() > 1 {
+                self.take_group()
+            } else {
+                0
+            };
+            // `append` 只来自表现层 `Shift` 队列开关；既有命令面 /
+            // 排序键 / golden hash 不变（R13.4 / ADR 0002）。
+            let append = self.queue_append;
+            Ok(movers
+                .into_iter()
+                .map(|entity| {
+                    self.simulation(
+                        view,
+                        CommandKind::Move {
+                            entity,
+                            x,
+                            y,
+                            group,
+                            append,
+                        },
+                    )
+                })
+                .collect())
+        }
+    }
+
+    /// 既有 `Gather` 命令生成（键盘 `G` / 命令卡点击与既有夹具共用）。
+    fn gather_commands(&mut self, view: &WorldView) -> Result<Vec<ClientCommand>, InputError> {
+        if self.selection.is_empty() {
+            return Err(InputError::NoSelection);
+        }
+        let selected: Vec<EntityId> = self
+            .selection
+            .iter()
+            .copied()
+            .filter_map(EntityId::new)
+            .collect();
+        Ok(selected
+            .into_iter()
+            .map(|unit| self.gameplay(view, GameplayCommandKind::Gather { unit }))
+            .collect())
+    }
+
+    /// 既有 `Stop` 命令生成（`S` 只做 Stop，MUST NOT 合并 Hold，R13.2）。
+    fn stop_commands(&mut self, view: &WorldView) -> Result<Vec<ClientCommand>, InputError> {
+        if self.selection.is_empty() {
+            return Err(InputError::NoSelection);
+        }
+        let selected: Vec<EntityId> = self
+            .selection
+            .iter()
+            .copied()
+            .filter_map(EntityId::new)
+            .collect();
+        Ok(selected
+            .into_iter()
+            .map(|entity| self.simulation(view, CommandKind::Stop { entity }))
+            .collect())
+    }
+
+    /// 执行一个定义表动作（由 `Hotkey` 翻译或显式经典键到达）。
+    ///
+    /// 只映射到既有命令面：`Move` / `Attack` / `Stop` 与
+    /// `Gather` / `Train` / `CancelTrain`；子菜单 / 放置态只改表现层局部
+    /// 状态、不生成权威命令（D1 / D3 / R13.6）。
+    fn apply_card_command(
+        &mut self,
+        command: CardCommand,
+        view: &WorldView,
+    ) -> Result<Vec<ClientCommand>, InputError> {
+        match command {
+            CardCommand::MoveAim => {
+                self.aim = AimState::Move;
+                Ok(Vec::new())
+            }
+            CardCommand::AttackAim => {
+                self.aim = AimState::Attack;
+                Ok(Vec::new())
+            }
+            CardCommand::Stop => self.stop_commands(view),
+            CardCommand::Gather => self.gather_commands(view),
+            CardCommand::OpenBuildMenu => {
+                self.push_submenu(CardId::Build);
+                Ok(Vec::new())
+            }
+            CardCommand::OpenTrainMenu => {
+                self.push_submenu(CardId::Train);
+                Ok(Vec::new())
+            }
+            CardCommand::TrainUnit {
+                unit_def,
+                is_building,
+            } => {
+                if is_building {
+                    // 建造项转放置态，左键定点才产出既有 `Train`（R13.3）。
+                    self.placement = Some(PendingPlacement {
+                        unit_def,
+                        is_building,
+                    });
+                    Ok(Vec::new())
+                } else {
+                    // 生产建筑训练键直接产出既有 `Train`。
+                    let producer = self.first_selected().ok_or(InputError::NoSelection)?;
+                    Ok(vec![self.gameplay(
+                        view,
+                        GameplayCommandKind::Train {
+                            producer,
+                            unit_def,
+                            is_building: false,
+                        },
+                    )])
+                }
+            }
+            CardCommand::CancelTrain => {
+                let producer = self.first_selected().ok_or(InputError::NoSelection)?;
+                Ok(vec![self.gameplay(
+                    view,
+                    GameplayCommandKind::CancelTrain { producer, index: 0 },
+                )])
+            }
+        }
+    }
+
+    /// 子菜单入口入栈，并立即按栈顶重建键表（下一次 `apply` 的
+    /// `refresh_card` 也会重建、结果一致）：使同一字母随卡切换、旧卡
+    /// 绑定失效，且 getter 能即时反映当前卡（R13.2 / R13.3）。
+    fn push_submenu(&mut self, card: CardId) {
+        self.submenu_stack.push(card);
+        self.current_card = card;
+        self.key_actions.clear();
+        self.key_actions = self.catalog.key_actions(card);
+    }
+
+    /// 瞄准 / 放置态下的左键定点。
+    ///
+    /// 放置态 → 产出既有 `Train { is_building: true }`；移动瞄准 → 复用
+    /// `context_commands`（R1.4 过滤）；攻击瞄准 → 仅既有 `Attack` 指定
+    /// 目标入口。定点后清空一次性瞄准 / 放置态，不生成新命令变体。
+    fn aim_point(
+        &mut self,
+        point: [f64; 2],
+        view: &WorldView,
+        mapper: &ScreenMapper,
+        movability: &MovabilityMap,
+    ) -> Result<Vec<ClientCommand>, InputError> {
+        if let Some(placement) = self.placement.take() {
+            self.aim = AimState::None;
+            let producer = self.first_selected().ok_or(InputError::NoSelection)?;
+            // 既有 `Train` 命令面不携带放置坐标，定点只作表现层触发；
+            // 坐标不进权威状态、不改哈希 / 快照（R13.3 / ADR 0002）。
+            return Ok(vec![self.gameplay(
+                view,
+                GameplayCommandKind::Train {
+                    producer,
+                    unit_def: placement.unit_def,
+                    is_building: placement.is_building,
+                },
+            )]);
+        }
+        match self.aim {
+            AimState::Move => {
+                self.aim = AimState::None;
+                self.context_commands(point, view, mapper, movability, false)
+            }
+            AimState::Attack => {
+                self.aim = AimState::None;
+                self.context_commands(point, view, mapper, movability, true)
+            }
+            AimState::None => Ok(Vec::new()),
+        }
+    }
+
+    /// `Esc` 取消：清空子菜单栈 / 放置态 / 瞄准态 / 队列，不生成命令，
+    /// 并立即回主卡重建键表（R13.3）。
+    fn cancel_menu(&mut self) {
+        self.submenu_stack.clear();
+        self.placement = None;
+        self.aim = AimState::None;
+        self.queue_append = false;
+        self.refresh_card();
+    }
+
+    /// `Tab` 混编同类型子组切换：按装配层 `DefId` 把选中集合分子组，
+    /// 游标循环后把表现层 `selection` 收窄到当前子组。命令分发仍按
+    /// R1.4 过滤（建筑进入子组也不响应 `Move`）。不改权威状态 / 哈希。
+    fn cycle_subgroup(&mut self) {
+        if self.selection.is_empty() {
+            return;
+        }
+        let mut groups: BTreeMap<u32, BTreeSet<u64>> = BTreeMap::new();
+        for &id in &self.selection {
+            let key = self.entity_defs.get(&id).copied().unwrap_or(0);
+            groups.entry(key).or_default().insert(id);
+        }
+        let subgroups: Vec<&BTreeSet<u64>> = groups.values().collect();
+        if subgroups.len() <= 1 {
+            return;
+        }
+        self.subgroup_cursor = (self.subgroup_cursor + 1) % subgroups.len();
+        self.selection = subgroups[self.subgroup_cursor].clone();
     }
 }

@@ -16,12 +16,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_content::RgbaImage;
-use w3_core::{Event, SCALE, Snapshot, WorldView};
+use w3_core::{DefId, Event, SCALE, Snapshot, WorldView};
 use w3_render::{display_hints, team_color};
 
 use crate::i18n::Texts;
 use crate::input::ScreenMapper;
 use crate::melee::EntityKind;
+use crate::melee::command_card::{
+    CardCommand, CardId, CardKind, CommandCard, CommandCatalog, GRID_HEIGHT, GRID_WIDTH, slot,
+};
 
 /// HUD 字体 / 资源；`text_enabled` 为 false 时降级为不绘制文字元素。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,8 +229,18 @@ pub struct HudModel {
     pub local_player: u8,
     /// 装配层注入的表现层类型标签（不进权威状态 / 哈希 / 快照）。
     pub kinds: BTreeMap<u64, EntityKind>,
-    /// 命令卡动作（只读派生）。
+    /// 命令卡动作（只读派生，既有兼容字段）。
     pub command_actions: Vec<CommandAction>,
+    /// 12 格命令卡（由定义表按选中集合类型派生，含空格位）；
+    /// `None` 表示空选中、不显示命令卡（R13.1）。纯表现层只读派生，
+    /// MUST NOT 进权威状态 / 状态哈希 / 快照（ADR 0002）。
+    pub command_card: Option<CommandCard>,
+    /// 装配层注入的 `EntityId → DefId` 只读关联，供命令卡按定义表派生
+    /// 当前卡（Risks / tasks 1.4）。表现层只读，不进权威状态。
+    pub entity_defs: BTreeMap<u64, DefId>,
+    /// 当前卡 ID（子菜单栈顶或按选中类型定的主卡），由输入层注入，
+    /// 供子菜单切换时命令卡重建（R13.3）。表现层只读。
+    pub active_card: CardId,
     /// 主选择面板（只读派生）。
     pub selection_panel: Option<SelectionPanel>,
     /// 小地图（只读派生）。
@@ -291,6 +304,58 @@ fn derive_commands(units: &[HudUnit], kinds: &BTreeMap<u64, EntityKind>) -> Vec<
         actions.push(CommandAction::Cancel);
     }
     actions
+}
+
+/// 由「选中集合类型 + 装配层 `EntityId → DefId` 关联」查定义表产出当前
+/// 12 格命令卡（含空格位）。判据来自定义表，MUST NOT 用 `EntityKind`
+/// match 或建筑名字符串白名单（R13.1 / R1.2 / D2 / tasks 1.2）。
+/// 空选中返回 `None`（不显示命令卡）；运行时动态实体缺关联时按定义表
+/// 回退通用类型，仍能按只读查表派生（Risks / tasks 1.4）。
+fn derive_command_card(
+    units: &[HudUnit],
+    entity_defs: &BTreeMap<u64, DefId>,
+    active_card: CardId,
+) -> Option<CommandCard> {
+    let selected: Vec<&HudUnit> = units
+        .iter()
+        .filter(|unit| unit.selected && unit.alive)
+        .collect();
+    if selected.is_empty() {
+        return None;
+    }
+    let catalog = CommandCatalog::standard();
+    let card_id = match active_card {
+        // 子卡来自输入层注入的子菜单栈顶（建造 / 训练 / 商店）。
+        CardId::Build | CardId::Train | CardId::Shop => active_card,
+        // 主卡按选中集合类型重算：查定义表 `DefId → CardKind`。
+        _ => {
+            let kinds: Vec<CardKind> = selected
+                .iter()
+                .map(|unit| {
+                    entity_defs
+                        .get(&unit.id)
+                        .map(|&def| catalog.kind_of(def))
+                        .unwrap_or(CardKind::Combat)
+                })
+                .collect();
+            catalog.primary_card(&kinds)
+        }
+    };
+    Some(catalog.card(card_id))
+}
+
+/// 把定义表动作投射成既有 [`CommandAction`]（兼容字段，信息有损；
+/// 真实命令以 `command_hotkey` 经同一 `apply` 产出，D1）。
+fn compat_action(command: CardCommand) -> CommandAction {
+    match command {
+        CardCommand::MoveAim => CommandAction::Move,
+        CardCommand::AttackAim => CommandAction::Attack,
+        CardCommand::Stop => CommandAction::Stop,
+        CardCommand::Gather => CommandAction::Gather,
+        CardCommand::OpenBuildMenu => CommandAction::Build,
+        CardCommand::OpenTrainMenu | CardCommand::TrainUnit { .. } => CommandAction::Train,
+        CardCommand::CancelTrain => CommandAction::Cancel,
+    }
 }
 
 /// 由选中集合派生主选择面板。
@@ -384,6 +449,9 @@ impl HudModel {
             event_count: events.len(),
             local_player,
             command_actions: Vec::new(),
+            command_card: None,
+            entity_defs: BTreeMap::new(),
+            active_card: CardId::Main,
             selection_panel: None,
             minimap: derive_minimap(view, selection, extent),
             winner: snapshot.gameplay.victory.winner,
@@ -397,7 +465,30 @@ impl HudModel {
         self.command_actions = derive_commands(&self.units, &kinds);
         self.selection_panel = derive_selection_panel(&self.units, &kinds);
         self.kinds = kinds;
+        self.refresh_command_card();
         self
+    }
+
+    /// 注入装配层 `EntityId → DefId` 只读关联并重派生 12 格命令卡（tasks 1.4）。
+    /// 表现层只读，MUST NOT 进权威状态 / 状态哈希 / 快照。
+    pub fn with_entity_defs(mut self, defs: BTreeMap<u64, DefId>) -> Self {
+        self.entity_defs = defs;
+        self.refresh_command_card();
+        self
+    }
+
+    /// 注入当前卡 ID（子菜单栈顶或按选中类型定的主卡）并重派生命令卡
+    /// （R13.3 子菜单换卡）。表现层只读。
+    pub fn with_active_card(mut self, card: CardId) -> Self {
+        self.active_card = card;
+        self.refresh_command_card();
+        self
+    }
+
+    /// 由当前 `entity_defs` / `active_card` / 选中集合按定义表重派生 12 格。
+    /// 纯只读派生，不触碰任何权威状态。
+    fn refresh_command_card(&mut self) {
+        self.command_card = derive_command_card(&self.units, &self.entity_defs, self.active_card);
     }
 
     /// 注入真实小地图底图（纯表现层 CPU 降采样数据）；不改变任何权威状态。
@@ -422,8 +513,13 @@ fn to_color(color: [f32; 4]) -> egui::Color32 {
 pub struct HudInteraction {
     /// 小地图点击的归一化坐标（仅平移相机）。
     pub minimap_click: Option<[f32; 2]>,
-    /// 命令卡被点击的动作。
+    /// 命令卡被点击的动作（既有兼容字段，投射成 [`CommandAction`]）。
     pub command_action: Option<CommandAction>,
+    /// 12 格命令卡被点击格绑定的经典键字母（`[待核]` 合成键位）。
+    ///
+    /// 键盘与命令卡点击都归一化成同一个 `InputAction::Hotkey`、汇入
+    /// 同一 `InputState::apply`（D1 / R13.6）；不携带「命令来源标记」。
+    pub command_hotkey: Option<char>,
 }
 
 /// 绘制一帧 HUD：只读 `HudModel` + i18n 文案，MUST NOT 触碰权威状态。
@@ -514,18 +610,39 @@ pub fn draw_with_minimap(
         }
         ui.separator();
 
-        // 命令卡：动作按选中集合与实体类型只读派生。
+        // 命令卡：4 列 × 3 行 = 12 格，由定义表按选中集合类型只读派生
+        // （含空格位）。点击格与按该格绑定的经典键等效，二者都归一化成
+        // 同一个 `InputAction::Hotkey` 汇入同一 `apply`（R13.1 / R13.6）。
         ui.label(texts.commands);
-        if model.command_actions.is_empty() {
-            ui.label(texts.no_selection);
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                for action in &model.command_actions {
-                    if ui.button(action.label()).clicked() {
-                        interaction.command_action = Some(*action);
-                    }
+        match &model.command_card {
+            None => {
+                ui.label(texts.no_selection);
+            }
+            Some(card) => {
+                for y in 0..GRID_HEIGHT {
+                    ui.horizontal(|ui| {
+                        for x in 0..GRID_WIDTH {
+                            let position = slot(x, y);
+                            match card.at(position) {
+                                Some(button) => {
+                                    // 标签走 i18n 边界：静态 ASCII 文案，
+                                    // MUST NOT 进日志 / 权威状态 / 哈希。
+                                    let text = format!("[{}] {}", button.hotkey, button.label);
+                                    if ui.button(text).clicked() {
+                                        interaction.command_hotkey = Some(button.hotkey);
+                                        interaction.command_action =
+                                            Some(compat_action(button.command));
+                                    }
+                                }
+                                None => {
+                                    // 空格位：占位，不响应点击（12 格含空格）。
+                                    ui.add_enabled(false, egui::Button::new(" - "));
+                                }
+                            }
+                        }
+                    });
                 }
-            });
+            }
         }
         ui.separator();
 

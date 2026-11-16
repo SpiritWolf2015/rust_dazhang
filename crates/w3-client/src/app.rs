@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use egui_wgpu::ScreenDescriptor;
 use w3_content::RgbaImage;
-use w3_core::{CommandError, Event, GameplayCommandError, Snapshot, WorldView};
+use w3_core::{CommandError, DefId, Event, GameplayCommandError, Snapshot, WorldView};
 use w3_render::{
     BakedModel, Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene,
     SceneVertex, StaticMarker, TerrainMesh, TerrainTextureLayers,
@@ -41,7 +41,7 @@ use crate::client::FixedStepClient;
 use crate::hud::{self, HudAssets, HudModel, MinimapBackdrop, minimap_backdrop};
 use crate::i18n::{Texts, ZH};
 use crate::input::{
-    ClientCommand, InputAction, InputError, InputState, MovabilityMap, ScreenMapper,
+    AimState, ClientCommand, InputAction, InputError, InputState, MovabilityMap, ScreenMapper,
 };
 use crate::melee::EntityKind;
 
@@ -203,6 +203,9 @@ pub struct ClientApp<P: StepDriver> {
     /// 派生，design D1）。表现层专属，MUST NOT 进权威状态 / 哈希 / 快照。
     /// 未注入时为空映射，沿用既有「未登记实体视为可移动」行为。
     movability: MovabilityMap,
+    /// 装配层注入的 `EntityId → DefId` 只读关联（表现层专属，供 HUD
+    /// 命令卡按定义表派生；MUST NOT 进权威状态 / 状态哈希 / 快照，tasks 1.4）。
+    entity_defs: BTreeMap<u64, DefId>,
     /// 命令卡点击待翻译的输入动作（表现层，在 GPU 借用结束后提交）。
     pending_input_action: Option<InputAction>,
     /// 真实模型贴图数组（上传 GPU `texture_2d_array`，纯表现层）。
@@ -245,6 +248,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             // 空映射不再等价「全部可移动」缺陷态（design D5 / R1.4）。
             // 装配期定义可经 `with_movability` 注入，未注入时由兜底覆盖。
             movability: MovabilityMap::new(),
+            entity_defs: BTreeMap::new(),
             pending_input_action: None,
             textures: None,
             window: None,
@@ -275,6 +279,19 @@ impl<P: StepDriver + 'static> ClientApp<P> {
     /// 不改动既有 `new` 签名，未注入时沿用既有行为。
     pub fn with_movability(mut self, movability: MovabilityMap) -> Self {
         self.movability = movability;
+        self
+    }
+
+    /// 注入装配层 `EntityId → DefId` 只读关联（表现层数据，tasks 1.4）。
+    /// HUD 命令卡与 `InputState` 命令翻译键表据此按定义表派生，二者**同源**
+    /// （B1 接线）：既写 HUD 显示侧的 `self.entity_defs`，也经
+    /// `set_entity_defs` 注入输入翻译侧并立即重建当前卡 / 键表，消除
+    /// 「显示卡已切 Worker / 翻译键表恒 Main」的两个真值源分叉。运行时
+    /// 动态实体缺关联时按定义表回退通用卡；不进权威状态 / 哈希 / 快照。
+    /// 不改动既有 `new` 签名，既有入口不受影响。
+    pub fn with_entity_defs(mut self, defs: BTreeMap<u64, DefId>) -> Self {
+        self.input.set_entity_defs(defs.clone());
+        self.entity_defs = defs;
         self
     }
 
@@ -357,6 +374,12 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         &mut self.driver
     }
 
+    /// 只读输入翻译状态（验收用；纯表现层只读，不改权威状态）。
+    /// 供 CPU 回归核对当前卡 / 键表 / 瞄准态 / 放置态与 HUD 显示同源。
+    pub fn input(&self) -> &InputState {
+        &self.input
+    }
+
     /// 只读当前 HUD 展示数据；不改变任何权威状态。
     pub fn hud_model(&self) -> HudModel {
         let view = self.driver.view();
@@ -372,6 +395,8 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             self.input.local_player(),
         )
         .with_kinds(self.entity_kinds.clone())
+        .with_entity_defs(self.entity_defs.clone())
+        .with_active_card(self.input.current_card())
         .with_minimap_backdrop(self.minimap_backdrop.clone())
     }
 
@@ -406,6 +431,35 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             self.driver.enqueue(command.clone())?;
         }
         Ok(commands)
+    }
+
+    /// 左键手势归一化决策（纯表现层只读，B1 收口）：瞄准 / 放置态下左键
+    /// 为「定点」，产出 `AimPoint` 复用右键同一命令生成处；否则按下为框选
+    /// `SelectStart`。释放仅在框选拖拽中提交 `SelectEnd`，定点手势的释放
+    /// 无动作（其按下已提交 `AimPoint`，MUST NOT 再覆盖选中集合）。
+    ///
+    /// `dragging` 为宿主当前框选拖拽标志（表现层）：定点手势置 false、
+    /// `SelectStart` 手势置 true，供 `CursorMoved` 判定是否发 `SelectDrag`，
+    /// 不破坏既有框选 drag 状态。键盘 M/A 瞄准与 chords 放置态因此在真窗口
+    /// 有生产 `AimPoint` 的路径。供 `route_game_event` 与 CPU 回归共用，
+    /// 保持「事件层 / 回归」同一决策真值源。
+    pub fn left_click_action(
+        &self,
+        pressed: bool,
+        dragging: bool,
+        point: [f64; 2],
+    ) -> Option<InputAction> {
+        if pressed {
+            if self.input.aim() != AimState::None || self.input.placement().is_some() {
+                Some(InputAction::AimPoint(point))
+            } else {
+                Some(InputAction::SelectStart(point))
+            }
+        } else if dragging {
+            Some(InputAction::SelectEnd(point))
+        } else {
+            None
+        }
     }
 
     /// 应用一个归一化相机动作（纯表现层状态）。
@@ -518,6 +572,8 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             self.input.local_player(),
         )
         .with_kinds(self.entity_kinds.clone())
+        .with_entity_defs(self.entity_defs.clone())
+        .with_active_card(self.input.current_card())
         .with_minimap_backdrop(self.minimap_backdrop.clone());
         self.last_events = events.clone();
 
@@ -542,9 +598,14 @@ impl<P: StepDriver + 'static> ClientApp<P> {
                 target[1] - current[1],
             ]));
         }
-        // 命令卡点击：翻译为归一化输入动作，只经既有公开提交入口入队。
-        if let Some(action) = interaction.command_action {
-            let input_action = match action {
+        // 命令卡点击：键盘与点击都归一化为同一个 `InputAction`、汇入同一
+        // `InputState::apply`，不携带「命令来源标记」（D1 / C2 / R13.6）。
+        // 12 格网格点击优先回传该格绑定的经典键字母（`command_hotkey`）；
+        // 既有 `command_action` 映射保留为兼容回退（BREAKING 无）。
+        let pending = if let Some(key) = interaction.command_hotkey {
+            Some(InputAction::Hotkey(key))
+        } else {
+            interaction.command_action.map(|action| match action {
                 hud::CommandAction::Gather => InputAction::Gather,
                 hud::CommandAction::Build => InputAction::Build,
                 hud::CommandAction::Train => InputAction::Train,
@@ -553,10 +614,12 @@ impl<P: StepDriver + 'static> ClientApp<P> {
                 hud::CommandAction::Move | hud::CommandAction::Attack => {
                     InputAction::ContextAction(self.cursor)
                 }
-            };
-            // `gpu` 的不可变借用仍在，故只记录待处理动作；由
-            // `RedrawRequested` 分支在借用结束后统一提交。
-            self.pending_input_action = Some(input_action);
+            })
+        };
+        // `gpu` 的不可变借用仍在，故只记录待处理动作；由
+        // `RedrawRequested` 分支在借用结束后统一提交。
+        if pending.is_some() {
+            self.pending_input_action = pending;
         }
         let egui::FullOutput {
             platform_output,
@@ -642,12 +705,21 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             }
             WindowEvent::MouseInput { state, button, .. } => match (state, button) {
                 (ElementState::Pressed, MouseButton::Left) => {
-                    self.dragging = true;
-                    self.report_input(InputAction::SelectStart(self.cursor));
+                    // 瞄准 / 放置态下左键是定点（AimPoint），否则是框选起点；
+                    // 与 CPU 回归共用 `left_click_action` 同一决策真值源（B1）。
+                    if let Some(action) = self.left_click_action(true, self.dragging, self.cursor) {
+                        self.dragging = matches!(action, InputAction::SelectStart(_));
+                        self.report_input(action);
+                    }
                 }
                 (ElementState::Released, MouseButton::Left) => {
+                    // 仅框选拖拽提交 SelectEnd；定点手势的释放无动作（其按下
+                    // 已提交 AimPoint），MUST NOT 覆盖瞄准 / 放置态已定的命令。
+                    if let Some(action) = self.left_click_action(false, self.dragging, self.cursor)
+                    {
+                        self.report_input(action);
+                    }
                     self.dragging = false;
-                    self.report_input(InputAction::SelectEnd(self.cursor));
                 }
                 (ElementState::Released, MouseButton::Right) => {
                     self.report_input(InputAction::ContextAction(self.cursor));
@@ -698,6 +770,28 @@ impl<P: StepDriver + 'static> ClientApp<P> {
                     }
                     PhysicalKey::Code(KeyCode::KeyX) => {
                         self.camera.apply(CameraAction::Rotate(YAW_STEP));
+                    }
+                    // 经典键里与既有相机 / 夹具键位不冲突的字母：直接
+                    // 归一化为 `InputAction::Hotkey`，由当前卡键表在
+                    // `InputState::apply` 内翻译（D1 / R13.2）。
+                    //
+                    // D6（不静默改相机键位）：经典 `A` / `S` / `H` 与现状
+                    // `WASD` 相机平移、`H`=Stop 冲突，其物理绑定一律
+                    // `[待核 / 待用户拍板]`，MUST NOT 在此把 `KeyA` /
+                    // `KeyS` 从相机平移悄悄改成攻击 / 停止。这些经典动作
+                    // 经「命令卡 12 格点击 + `Hotkey` 归一化」落地，冲突
+                    // 字母的最终绑定（相机改绑方向键 / 修饰键 / 经典键加
+                    // 修饰键 / `F1`–`F9` 是否保留为可配置别名）留待人拍板，
+                    // 详见 `decision-memo.md` 待确认项。既有相机键位一个
+                    // 不删、一个不改。
+                    PhysicalKey::Code(KeyCode::KeyM) => {
+                        self.report_input(InputAction::Hotkey('m'));
+                    }
+                    PhysicalKey::Code(KeyCode::Escape) => {
+                        self.report_input(InputAction::CancelMenu);
+                    }
+                    PhysicalKey::Code(KeyCode::Tab) => {
+                        self.report_input(InputAction::CycleSubgroup);
                     }
                     PhysicalKey::Code(key) => {
                         if let Some(group) = assign_group_number(key) {

@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use w3_client::melee::defs::{
     HUMAN_ALTAR, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT, HUMAN_RANGED, HUMAN_SIEGE, HUMAN_SMITHY,
-    HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE, NEUTRAL_TREE, ORC_PEASANT, ORC_TOWN_HALL,
+    HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE, NEUTRAL_TREE, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO,
+    ORC_PEASANT, ORC_RANGED, ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER, ORC_TOWN_HALL,
 };
 use w3_client::melee::synthetic_definitions;
 use w3_client::{
@@ -1635,4 +1636,584 @@ fn playable_default_empty_map_keeps_all_spawn_units_movable() {
     let mut expected: Vec<u64> = view.entities.iter().map(|e| e.id).collect();
     expected.sort_unstable();
     assert_eq!(move_targets(&commands), expected, "reason=all_units_move");
+}
+
+// ---------------------------------------------------------------------------
+// P8.2 兽族新增实体 R1.4 / R13.6 分层可移动性回归（C4 / D7 / tasks 3.5 / 6.x）
+//
+// 与 P8.1 人族新增实体回归对称：兽族远程 / 反重甲 / 英雄 / 苦工可移动，
+// 人口地洞 / 祭坛 / 战争磨坊 / 主城 / 金矿 / 树木不可移动。判据由装配期
+// `UnitDef.speed_raw` 派生的只读映射提供（权威），运行时动态实体由只读
+// `EntityView.speed == 0` 补齐，两条来源 MUST NOT 互替、MUST NOT 回退白名单、
+// MUST NOT 扩视图。本 change 不擅自闭合 P8.0 已知限制 B1。
+// ---------------------------------------------------------------------------
+
+/// 兽族混合 frame-0 静态装配夹具：兽族六类新实体 + 主城 / 金矿 / 树木，
+/// 判据来自 `synthetic_definitions()` 的 `UnitDef.speed_raw`；视图 speed
+/// 一律给 3*SCALE（模拟 `Spawn` 的 `max(1)` 抬升），证明 frame-0 判据
+/// 不来自运行时视图 `speed`。
+fn orc_fixture() -> (WorldView, ScreenMapper, MovabilityMap, BTreeMap<u64, DefId>) {
+    let view = WorldView {
+        tick: 4,
+        rng: 0,
+        entities: vec![
+            human_entity(H_PEASANT, 0, 60),
+            human_entity(H_RANGED, 10, 110),
+            human_entity(H_SIEGE, 20, 210),
+            human_entity(H_HERO, 30, 460),
+            human_entity(H_FARM, 40, 240),
+            human_entity(H_ALTAR, 50, 340),
+            human_entity(H_SMITHY, 60, 320),
+            human_entity(H_HALL, 70, 120),
+            human_entity(H_MINE, 80, 500),
+            human_entity(H_TREE, 90, 200),
+        ],
+    };
+    let mut boxes = BTreeMap::new();
+    let row_one = [H_PEASANT, H_RANGED, H_SIEGE, H_HERO, H_FARM];
+    let row_two = [H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE];
+    for (index, &id) in row_one.iter().enumerate() {
+        let x0 = 100.0 + 180.0 * index as f64;
+        boxes.insert(id, ([x0, 100.0], [x0 + 40.0, 140.0]));
+    }
+    for (index, &id) in row_two.iter().enumerate() {
+        let x0 = 100.0 + 180.0 * index as f64;
+        boxes.insert(id, ([x0, 300.0], [x0 + 40.0, 340.0]));
+    }
+    let mapper = ScreenMapper::new(1280.0, 720.0, 256.0, [0.0, 0.0], 1.0).with_entity_boxes(boxes);
+    let def_ids: BTreeMap<u64, DefId> = [
+        (H_PEASANT, ORC_PEASANT),
+        (H_RANGED, ORC_RANGED),
+        (H_SIEGE, ORC_SIEGE),
+        (H_HERO, ORC_HERO),
+        (H_FARM, ORC_FARM),
+        (H_ALTAR, ORC_ALTAR),
+        (H_SMITHY, ORC_SMITHY),
+        (H_HALL, ORC_TOWN_HALL),
+        (H_MINE, NEUTRAL_GOLD_MINE),
+        (H_TREE, NEUTRAL_TREE),
+    ]
+    .into_iter()
+    .collect();
+    let movability = derive_movability(&synthetic_definitions(), &def_ids);
+    (view, mapper, movability, def_ids)
+}
+
+/// 被反向验证的断言：混合集合只为兽族可移动单位（苦工 / 远程 / 反重甲 /
+/// 英雄）生成 `Move`，新增建筑 / 主城 / 金矿 / 树木 MUST NOT 生成 `Move`。
+fn only_movable_orc_units_move(commands: &[ClientCommand]) -> bool {
+    !commands.is_empty() && move_targets(commands) == vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO]
+}
+
+/// 退化定义（缺陷态）：把三类兽族新增建筑的 `speed_raw` 改成非 0，模拟
+/// 「新定义未遵循 `speed_raw == 0`」的缺陷实现。经真实
+/// `FrozenDefinitions::new` 重建、`derive_movability` 派生，不是旁路模拟。
+fn degenerate_defs_with_movable_orc_buildings() -> FrozenDefinitions {
+    let defs = synthetic_definitions();
+    let units: Vec<(DefId, UnitDef)> = defs
+        .units()
+        .iter()
+        .map(|(&id, &def)| {
+            let mut def = def;
+            if matches!(id, ORC_FARM | ORC_ALTAR | ORC_SMITHY) {
+                def.speed_raw = 3 * SCALE;
+            }
+            (id, def)
+        })
+        .collect();
+    let abilities = defs
+        .abilities()
+        .iter()
+        .map(|(&id, d)| (id, d.clone()))
+        .collect();
+    let items = defs.items().iter().map(|(&id, &d)| (id, d)).collect();
+    let upgrades = defs.upgrades().iter().map(|(&id, &d)| (id, d)).collect();
+    FrozenDefinitions::new(units, abilities, items, upgrades)
+        .expect("movability: reason=degenerate_orc_defs_rebuild_failed")
+}
+
+/// 兽族新增实体可移动性由定义层 `speed_raw` 派生（design D7 / R1.4）：远程 /
+/// 反重甲 / 英雄 / 苦工可移动；人口地洞 / 祭坛 / 战争磨坊 / 主城 / 金矿 /
+/// 树木不可移动；MUST NOT 用运行时 `speed`（视图里它们也都是 3*SCALE）。
+#[test]
+fn orc_new_defs_movability_is_derived_from_speed_raw() {
+    let (_, _, map, _) = orc_fixture();
+    assert_eq!(map.len(), 10, "reason=one_entry_per_orc_registered_entity");
+    for id in [H_PEASANT, H_RANGED, H_SIEGE, H_HERO] {
+        assert_eq!(map.get(&id), Some(&true), "reason=movable_orc id={id}");
+    }
+    for id in [H_FARM, H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE] {
+        assert_eq!(map.get(&id), Some(&false), "reason=immovable_orc id={id}");
+    }
+    let defs = synthetic_definitions();
+    for def_id in [ORC_FARM, ORC_ALTAR, ORC_SMITHY] {
+        assert_eq!(
+            defs.units().get(&def_id).unwrap().speed_raw,
+            0,
+            "reason=orc_new_building_speed_raw_zero def={def_id}"
+        );
+    }
+    // 既有兽族地基单位也遵循同一 `speed_raw` 判据（不回退类型名 / 白名单）：
+    // 士兵可移动、兵营不可移动。
+    let legacy = derive_movability(
+        &defs,
+        &[(90u64, ORC_SOLDIER), (91u64, ORC_BARRACKS)]
+            .into_iter()
+            .collect(),
+    );
+    assert_eq!(
+        legacy.get(&90),
+        Some(&true),
+        "reason=orc_soldier_derived_movable"
+    );
+    assert_eq!(
+        legacy.get(&91),
+        Some(&false),
+        "reason=orc_barracks_derived_immovable"
+    );
+}
+
+/// 混合框选集合（兽族苦工 / 远程 / 反重甲 / 英雄 + 新增人口地洞 / 祭坛 /
+/// 战争磨坊 + 主城 / 金矿 / 树木）右键与键盘 `M`：只为可移动单位生成
+/// `Move`，建筑 / 资源点 / 主城 MUST NOT 收到 `Move`、位置不变，落点按
+/// 稳定 `EntityId` 顺序，且与「只选中可移动单位」等效脚本逐条一致。
+#[test]
+fn orc_mixed_selection_only_moves_movable_units() {
+    let (view, mapper, map, _) = orc_fixture();
+
+    // 右键 `ContextAction` 路径。
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &map);
+    assert_eq!(input.selection().len(), 10, "reason=all_ten_orc_selected");
+    let commands = input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    let targets = move_targets(&commands);
+    assert_eq!(
+        targets,
+        vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO],
+        "reason=orc_stable_entity_id_order"
+    );
+    assert!(
+        !input.no_movable_target(),
+        "reason=orc_movable_targets_exist"
+    );
+    for id in [H_FARM, H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE] {
+        assert!(
+            !commands.iter().any(|command| matches!(
+                command,
+                ClientCommand::Simulation(Command {
+                    kind: CommandKind::Move { entity, .. },
+                    ..
+                }) if entity.value() == id
+            )),
+            "reason=orc_immovable_must_not_move id={id}"
+        );
+    }
+    assert_eq!(view.entities[4].x, 40 * SCALE, "reason=orc_farm_position");
+    assert_eq!(view.entities[7].x, 70 * SCALE, "reason=orc_hall_position");
+
+    // 键盘 `M` 路径（`MoveAim` 进入瞄准态 + `AimPoint` 复用同一命令生成处），
+    // R13.6 要求键盘 M 与右键共用 R1.4 分层过滤。
+    let mut keyboard = InputState::new(1);
+    select_all(&mut keyboard, &view, &mapper, &map);
+    let aim = keyboard
+        .apply(InputAction::MoveAim, &view, &mapper, &[], &map)
+        .unwrap();
+    assert!(aim.is_empty(), "reason=orc_move_aim_is_presentation_only");
+    assert_eq!(
+        keyboard.aim(),
+        w3_client::AimState::Move,
+        "reason=orc_keyboard_m_sets_move_aim"
+    );
+    let keyboard_commands = keyboard
+        .apply(
+            InputAction::AimPoint([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert_eq!(
+        move_targets(&keyboard_commands),
+        vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO],
+        "reason=orc_keyboard_m_matches_right_click"
+    );
+
+    // 等效脚本：只含四个可移动单位，右键命令字节逐条相同（落点不受过滤影响）。
+    let movers_view = WorldView {
+        tick: view.tick,
+        rng: view.rng,
+        entities: view
+            .entities
+            .iter()
+            .filter(|entity| targets.contains(&entity.id))
+            .cloned()
+            .collect(),
+    };
+    let mut only = InputState::new(1);
+    select_all(&mut only, &movers_view, &mapper, &map);
+    let only_commands = only
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &movers_view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert_eq!(
+        commands, only_commands,
+        "reason=orc_landing_slots_unchanged_by_filter"
+    );
+}
+
+/// 全为兽族新增建筑 / 主城 / 资源点时右键与键盘 `M` 都不生成任何 `Move`，
+/// 有明确无可执行目标反馈，权威状态哈希与快照不变（R1.4 / R13.6）。
+#[test]
+fn orc_all_immovable_selection_emits_no_move_with_feedback() {
+    let (view, mapper, map, _) = orc_fixture();
+    let immovable_view = WorldView {
+        tick: view.tick,
+        rng: view.rng,
+        entities: view
+            .entities
+            .iter()
+            .filter(|entity| {
+                [H_FARM, H_ALTAR, H_SMITHY, H_HALL, H_MINE, H_TREE].contains(&entity.id)
+            })
+            .cloned()
+            .collect(),
+    };
+    // 右键路径。
+    let mut input = InputState::new(1);
+    select_all(&mut input, &immovable_view, &mapper, &map);
+    assert_eq!(
+        input.selection().len(),
+        6,
+        "reason=only_orc_immovable_selected"
+    );
+    let commands = input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &immovable_view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert!(commands.is_empty(), "reason=orc_no_move_commands");
+    assert!(
+        input.no_movable_target(),
+        "reason=orc_explicit_feedback_flag"
+    );
+
+    // 键盘 `M` 路径：同样是全不可移动集合，无 `Move`、有反馈。
+    let mut keyboard = InputState::new(1);
+    select_all(&mut keyboard, &immovable_view, &mapper, &map);
+    keyboard
+        .apply(InputAction::MoveAim, &immovable_view, &mapper, &[], &map)
+        .unwrap();
+    let keyboard_commands = keyboard
+        .apply(
+            InputAction::AimPoint([900.0, 600.0]),
+            &immovable_view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert!(
+        keyboard_commands.is_empty(),
+        "reason=orc_keyboard_m_no_move_commands"
+    );
+    assert!(
+        keyboard.no_movable_target(),
+        "reason=orc_keyboard_m_explicit_feedback_flag"
+    );
+}
+
+/// 全为兽族新增建筑时 `ClientApp` 权威状态哈希 / 快照不变：判据来自冻结
+/// 定义 `speed_raw`，而非运行时 `speed`（R1.4 / ADR 0002）。
+#[test]
+fn orc_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
+    let defs = synthetic_definitions();
+    let entity_defs: BTreeMap<u64, DefId> =
+        [(1u64, ORC_FARM), (2u64, ORC_ALTAR), (3u64, ORC_SMITHY)]
+            .into_iter()
+            .collect();
+    let movability = derive_movability(&defs, &entity_defs);
+    for id in [1u64, 2, 3] {
+        assert_eq!(movability.get(&id), Some(&false));
+    }
+    assert_eq!(SNAPSHOT_VERSION, 3, "reason=snapshot_version_unchanged");
+
+    let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
+    driver.submit_command(spawn(1, 0, 240)).unwrap();
+    driver.submit_command(spawn(2, 4, 340)).unwrap();
+    driver.submit_command(spawn(3, 8, 320)).unwrap();
+    let mut app = ClientApp::new(driver, synthetic_terrain(), ModelLibrary::default(), 0)
+        .with_movability(movability);
+    app.advance_with_ticks(TICKS_PER_LOGIC_FRAME);
+
+    let hash_before = app.driver().sim().compute_state_hash();
+    let snapshot_before = app.driver().sim().capture_snapshot();
+    let mapper = app.screen_mapper();
+    let center = mapper.world_to_screen([0.0, 0.0]);
+    let target = [center[0] + 320.0, center[1] + 220.0];
+    app.apply_input(InputAction::SelectStart([0.0, 0.0]))
+        .unwrap();
+    app.apply_input(InputAction::SelectEnd([1280.0, 720.0]))
+        .unwrap();
+    assert!(!app.selection().is_empty());
+    let commands = app.apply_input(InputAction::ContextAction(target)).unwrap();
+    assert!(commands.is_empty(), "reason=orc_no_commands_generated");
+    assert!(app.no_movable_target(), "reason=orc_explicit_feedback");
+    assert_eq!(
+        app.driver().sim().compute_state_hash(),
+        hash_before,
+        "reason=orc_all_immovable_must_not_change_state_hash"
+    );
+    assert_eq!(
+        app.driver().sim().capture_snapshot(),
+        snapshot_before,
+        "reason=orc_all_immovable_must_not_change_snapshot"
+    );
+    assert!(app.last_error().is_none(), "reason=orc_no_input_error");
+}
+
+/// 反向验证·修复态（D9 / tasks 6.2）：正式定义（`speed_raw == 0`）派生的
+/// 映射经真实 `InputState::apply` 右键路径通过「只移动可移动单位」断言。
+#[test]
+fn orc_reverse_validation_formal_defs_pass_the_assertion() {
+    let (view, mapper, map, _) = orc_fixture();
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &map);
+    assert_eq!(input.selection().len(), 10, "reason=all_ten_orc_selected");
+    let commands = input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &map,
+        )
+        .unwrap();
+    assert!(
+        only_movable_orc_units_move(&commands),
+        "reason=formal_orc_defs_must_pass_the_assertion"
+    );
+    assert_eq!(
+        filter_movable(input.selection(), &map),
+        vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO]
+    );
+}
+
+/// 反向验证·缺陷态（D9 / tasks 6.2）：把兽族新增建筑 `speed_raw` 改为非 0
+/// 后，真实 `derive_movability` 把它们判为可移动，同一「只移动可移动单位」
+/// 断言经真实 `InputState::apply` 必然失败；正式定义仍通过（元断言防退化）。
+#[test]
+fn orc_reverse_validation_degenerate_defs_fail_the_same_assertion() {
+    let (view, mapper, _, def_ids) = orc_fixture();
+    let degenerate_map = derive_movability(&degenerate_defs_with_movable_orc_buildings(), &def_ids);
+    for id in [H_FARM, H_ALTAR, H_SMITHY] {
+        assert_eq!(
+            degenerate_map.get(&id),
+            Some(&true),
+            "reason=degenerate_orc_building_movable id={id}"
+        );
+    }
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &degenerate_map);
+    let broken_commands = input
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &degenerate_map,
+        )
+        .unwrap();
+    assert_eq!(
+        move_targets(&broken_commands),
+        vec![
+            H_PEASANT, H_RANGED, H_SIEGE, H_HERO, H_FARM, H_ALTAR, H_SMITHY
+        ],
+        "reason=degenerate_orc_defs_move_new_buildings"
+    );
+    assert!(
+        !only_movable_orc_units_move(&broken_commands),
+        "reason=degenerate_orc_defs_must_fail_the_same_assertion"
+    );
+    // 正式定义仍能通过同一断言（修复态），两条证据成对。
+    let formal = derive_movability(&synthetic_definitions(), &def_ids);
+    let mut fixed = InputState::new(1);
+    select_all(&mut fixed, &view, &mapper, &formal);
+    let fixed_commands = fixed
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &formal,
+        )
+        .unwrap();
+    assert!(only_movable_orc_units_move(&fixed_commands));
+}
+
+/// 反向验证·缺陷态（D9 / tasks 6.5）：退化过滤器（不过滤 / 把新增建筑当
+/// 可移动）与「用运行时视图 `speed` 替代 frame-0 装配映射」都经真实
+/// `filter_movable` / `InputState::apply` 路径注入，混合集合断言必然失败；
+/// 正式实现仍通过。两条来源分层、不互替（R1.4 / R13.6）。
+#[test]
+fn orc_reverse_validation_degenerate_filter_fails_the_same_assertion() {
+    let (view, mapper, map, _) = orc_fixture();
+    let mut input = InputState::new(1);
+    select_all(&mut input, &view, &mapper, &map);
+    let selection = input.selection().clone();
+
+    let formal = filter_movable(&selection, &map);
+    let degenerate = degenerate_filter(&selection, &map);
+    assert_eq!(formal, vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO]);
+    assert_eq!(
+        degenerate.len(),
+        10,
+        "reason=degenerate_filter_moves_orc_buildings_and_resources"
+    );
+
+    // 退化 = 空映射 `unwrap_or(true)` 全放行（等价于不过滤），且不会覆盖
+    // frame-0 已登记判据；证明退化实现真经 `filter_movable` 注入。
+    let degenerate_map = MovabilityMap::new();
+    assert_eq!(
+        filter_movable(&selection, &degenerate_map),
+        degenerate,
+        "reason=degenerate_filter_equals_degenerate_map_on_same_selection"
+    );
+    let mut broken = InputState::new(1);
+    select_all(&mut broken, &view, &mapper, &degenerate_map);
+    let broken_commands = broken
+        .apply(
+            InputAction::ContextAction([900.0, 600.0]),
+            &view,
+            &mapper,
+            &[],
+            &degenerate_map,
+        )
+        .unwrap();
+    assert_eq!(
+        move_targets(&broken_commands).len(),
+        10,
+        "reason=degenerate_impl_generates_move_for_all_orc"
+    );
+    assert!(
+        !only_movable_orc_units_move(&broken_commands),
+        "reason=degenerate_orc_filter_must_fail_the_same_assertion"
+    );
+    // 正式实现 `effective_movability` 合并后的分层判据仍通过同一断言。
+    assert_eq!(
+        filter_movable(&selection, &effective_movability(&map, &view)),
+        vec![H_PEASANT, H_RANGED, H_SIEGE, H_HERO]
+    );
+}
+
+/// 运行时 `Train` / `Build` 产出的兽族建筑（`speed_raw == 0`、运行时视图
+/// `EntityView.speed == 0`、不在装配期 `def_ids` 关联中）经
+/// `effective_movability` 判为不可移动；产出的兽族战斗单位正常响应 `Move`。
+/// 本 change 沿用 `runtime-entity-movability` 承接、不擅自改 `unwrap_or`
+/// 语义 / 不扩视图（P8.0 已知限制 B1）。
+#[test]
+fn orc_runtime_building_does_not_move_but_unit_does() {
+    let defs = synthetic_definitions();
+    let config = MatchConfig {
+        seed: SEED,
+        logic_fps: LOGIC_FPS,
+        content_hash: defs.content_hash(),
+    };
+    let mut sim = RtsMatch::create_with_definitions(config, StaticWorld::default(), defs.clone());
+    sim.submit_command(spawn(1, 0, 100))
+        .expect("movability: reason=orc_producer_spawn_rejected");
+    let producer = EntityId::new(1).expect("movability: reason=invalid_orc_producer_id");
+    sim.submit_gameplay_command(GameplayCommand::new(
+        Frame::new(1),
+        1,
+        1,
+        GameplayCommandKind::Train {
+            producer,
+            unit_def: ORC_FARM,
+            is_building: true,
+        },
+    ))
+    .expect("movability: reason=orc_building_train_rejected");
+    sim.submit_gameplay_command(GameplayCommand::new(
+        Frame::new(1),
+        1,
+        2,
+        GameplayCommandKind::Train {
+            producer,
+            unit_def: ORC_RANGED,
+            is_building: false,
+        },
+    ))
+    .expect("movability: reason=orc_unit_train_rejected");
+    // ORC_FARM train_frames=20、ORC_RANGED=24，推进到完成帧后视图含
+    // 生产者 + 建筑 + 战斗单位三个实体。
+    for _ in 0..28 {
+        sim.step();
+    }
+    let view = sim.read_view();
+    assert_eq!(
+        view.entities.len(),
+        3,
+        "reason=orc_producer_plus_two_runtime"
+    );
+    let runtime: Vec<&EntityView> = view.entities.iter().filter(|e| e.id != 1).collect();
+    let building = runtime
+        .iter()
+        .find(|e| e.speed == 0)
+        .expect("movability: reason=orc_runtime_building_missing")
+        .id;
+    let unit = runtime
+        .iter()
+        .find(|e| e.speed > 0)
+        .expect("movability: reason=orc_runtime_unit_missing")
+        .id;
+    // 装配期映射只登记 frame-0 生产者（ORC_PEASANT 可移动），运行时实体
+    // 刻意不在关联中——精确复现 B1 场景。
+    let assembly = derive_movability(&defs, &[(1u64, ORC_PEASANT)].into_iter().collect());
+    let effective = effective_movability(&assembly, &view);
+    assert_eq!(effective.get(&building), Some(&false));
+    assert_eq!(effective.get(&unit), Some(&true));
+    let commands = runtime_group_move(&view, &runtime_mapper(&view), &assembly);
+    let targets = move_targets(&commands);
+    assert!(
+        !targets.contains(&building),
+        "reason=orc_runtime_building_not_moved"
+    );
+    assert!(targets.contains(&unit), "reason=orc_runtime_unit_moved");
+    assert!(
+        runtime_building_does_not_move(&commands, building),
+        "reason=orc_runtime_formal_assertion_passes"
+    );
+    // 退化实现（合并函数缺席、退回 `unwrap_or(true)` 默认放行）必然失败。
+    let degenerate = filter_movable(
+        &view.entities.iter().map(|e| e.id).collect(),
+        &degenerate_effective_movability(&assembly, &view),
+    );
+    assert!(
+        degenerate.contains(&building),
+        "reason=degenerate_orc_merger_releases_runtime_building"
+    );
+    let degenerate_map: MovabilityMap = view.entities.iter().map(|e| (e.id, true)).collect();
+    let broken = runtime_group_move(&view, &runtime_mapper(&view), &degenerate_map);
+    assert!(
+        !runtime_building_does_not_move(&broken, building),
+        "reason=degenerate_orc_impl_fails_the_same_assertion"
+    );
 }

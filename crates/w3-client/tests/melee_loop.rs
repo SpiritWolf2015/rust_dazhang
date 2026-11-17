@@ -8,13 +8,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use w3_client::melee::defs::{
     BARRACKS, CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE,
     CATEGORY_SMITHY, HERO_ABILITY, HUMAN_ALTAR, HUMAN_FARM, HUMAN_HERO, HUMAN_RANGED, HUMAN_SIEGE,
-    HUMAN_SMITHY, SOLDIER, UPGRADE_ARMOR, UPGRADE_WEAPONS,
+    HUMAN_SMITHY, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_HERO_ABILITY, ORC_RANGED,
+    ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER, ORC_UPGRADE_ARMOR, ORC_UPGRADE_WEAPONS, SOLDIER,
+    UPGRADE_ARMOR, UPGRADE_WEAPONS,
 };
 use w3_client::melee::{
-    AI_PLAYER, LOCAL_PLAYER, MeleeDriver, MeleeSetup, Race, synthetic_definitions, synthetic_world,
+    AI_PLAYER, AiScript, LOCAL_PLAYER, MeleeDriver, MeleeSetup, Race, synthetic_definitions,
+    synthetic_world,
 };
 use w3_client::{
     ClientCommand, FixedStepClient, LOGIC_FPS, MovabilityMap, StepDriver, TICKS_PER_LOGIC_FRAME,
+    TICKS_PER_SECOND,
 };
 use w3_core::{
     Command, CommandKind, DefId, EffectKind, EntityId, Frame, FrozenDefinitions, GameplayCommand,
@@ -33,13 +37,23 @@ fn legacy_movability() -> MovabilityMap {
 
 /// 按开局脚本装配一局；`horizon = 0` 时不注入 AI 脚本，便于隔离玩家操作。
 fn build_driver(setup: &MeleeSetup, horizon: u64) -> MeleeDriver {
+    build_driver_with_defs(setup, horizon, synthetic_definitions())
+}
+
+/// 以指定冻结定义装配一局（反向验证注入退化定义用，D9 / tasks 6.3）。
+/// 全部命令仍只经既有 `submit_command` / `submit_gameplay_command` 提交，
+/// `step()` 全程由整数累加器驱动（ADR 0002），退化只发生在冻结定义内容。
+fn build_driver_with_defs(
+    setup: &MeleeSetup,
+    horizon: u64,
+    defs: FrozenDefinitions,
+) -> MeleeDriver {
     let config = MatchConfig {
         seed: SEED,
         logic_fps: LOGIC_FPS,
         content_hash: CONTENT_HASH,
     };
-    let mut sim =
-        RtsMatch::create_with_definitions(config, synthetic_world(), synthetic_definitions());
+    let mut sim = RtsMatch::create_with_definitions(config, synthetic_world(), defs);
     for command in &setup.commands {
         sim.submit_command(*command)
             .expect("melee: reason=spawn_command_rejected");
@@ -679,6 +693,33 @@ fn human_catalog(setup: &MeleeSetup) -> BTreeMap<u64, DefId> {
     catalog
 }
 
+/// P8.2 兽族新类别装配绑定；显式核对六类槽位仍指向 `2xx` 真实新常量
+/// （P8.2 已替换 `ORC_SOLDIER` / `ORC_BARRACKS` 占位）。
+fn orc_catalog(setup: &MeleeSetup) -> BTreeMap<u64, DefId> {
+    assert_eq!(
+        setup.race,
+        Race::Orc,
+        "reason=orc_full_match_requires_orc_setup"
+    );
+    let catalog = setup.category_def_ids().clone();
+    let expected = [
+        (CATEGORY_RANGED, ORC_RANGED),
+        (CATEGORY_SIEGE, ORC_SIEGE),
+        (CATEGORY_FARM, ORC_FARM),
+        (CATEGORY_ALTAR, ORC_ALTAR),
+        (CATEGORY_SMITHY, ORC_SMITHY),
+        (CATEGORY_HERO, ORC_HERO),
+    ];
+    for (slot, def_id) in expected {
+        assert_eq!(
+            catalog.get(&slot),
+            Some(&def_id),
+            "reason=orc_category_binding slot={slot}"
+        );
+    }
+    catalog
+}
+
 /// P8.1 人族完整一局：采集 → 建造 → 训练 → 英雄施法 → 研发 → 战斗 →
 /// 摧毁敌方主城结算 → 重开。AI 外部脚本按 300 帧窗口注入，其窗口末尾的
 /// `Leave` 在 302 帧，本闭环在 216 帧内不会借 AI 离席提前结算；胜负仍由
@@ -1119,5 +1160,712 @@ fn human_full_match_matches_baseline_and_restart_is_clean() {
     assert_eq!(
         replay.victory_frame, baseline.victory_frame,
         "reason=victory_frame_matches_human_baseline"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P8.2 兽族完整一局（design D1–D10 / tasks 3.3 / 3.4 / 6.x）
+//
+// 与 P8.1 人族全阶段一局对称：兽族段 `2xx` 六类真实新定义 + 兽族英雄主动
+// 技能 + 兽族攻 / 防升级，`Race` 分派替换占位、技能 / 升级 ID 按族查表。
+// `defs_hash` 因新增定义改变，故这里断言「同一兽族脚本两实例逐帧一致」，
+// MUST NOT 与改动前旧基线的哈希数值相等（design D6 / 参考对照 G5）。
+// ---------------------------------------------------------------------------
+
+/// P8.2 兽族完整一局：采集 → 建造（地洞 / 祭坛 / 战争磨坊）→ 训练（远程 /
+/// 反重甲 / 英雄）→ 英雄施法（兽族主动技能）→ 研发（兽族攻 / 防升级）→
+/// 战斗 → 摧毁全部建筑结算 → 重开。AI 外部脚本按 300 帧窗口注入，胜负仍由
+/// `MeleeDriver` 检测敌方主城消失后提交 `Leave` 触发既有 `resolve_victory`。
+/// 技能 / 升级 ID 经 `setup.race` 只读分派取用（design D3 / D5）。
+fn play_orc_full_match(setup: &MeleeSetup) -> FullMatchTrace {
+    let defs = synthetic_definitions();
+    let catalog = orc_catalog(setup);
+    // 按族只读分派取技能 / 升级 ID，同时核对其确为兽族新增 ID。
+    let hero_ability = setup.race.hero_ability();
+    let weapons_upgrade = setup.race.weapons_upgrade();
+    let armor_upgrade = setup.race.armor_upgrade();
+    assert_eq!(hero_ability, ORC_HERO_ABILITY);
+    assert_eq!(weapons_upgrade, ORC_UPGRADE_WEAPONS);
+    assert_eq!(armor_upgrade, ORC_UPGRADE_ARMOR);
+    let mut driver = build_driver(setup, 300);
+    let mut trace = FullMatchTrace {
+        hashes: Vec::new(),
+        snapshots: Vec::new(),
+        final_snapshot: driver.snapshot(),
+        victory_frame: 0,
+    };
+    let mut sequence = 100u32;
+    record_steps(&mut driver, &mut trace, 1);
+
+    // 1) 采集：多条 `Gather` 让本地黄金确定增长（R3.1 / R1.5）。
+    let mut frame = driver.view().tick + 1;
+    for _ in 0..5 {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame,
+            GameplayCommandKind::Gather {
+                unit: setup.local_peasants[0],
+            },
+        );
+        sequence += 1;
+        frame += 1;
+    }
+    record_steps(&mut driver, &mut trace, 6);
+    assert!(
+        driver.snapshot().gameplay.players[&LOCAL_PLAYER].gold > 1,
+        "reason=orc_gather_grows_local_gold"
+    );
+
+    // 2) 建造：兵营 + 人口地洞 + 英雄祭坛 + 战争磨坊，队列可见后完成。
+    // 三类新增建筑 `speed_raw == 0`，生产出的运行时实体 speed 也必须为 0
+    // （R1.4 / R13.6 / design D7）。
+    let before_build: BTreeSet<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .collect();
+    let build_defs = [
+        ORC_BARRACKS,
+        catalog[&CATEGORY_FARM],
+        catalog[&CATEGORY_ALTAR],
+        catalog[&CATEGORY_SMITHY],
+    ];
+    frame = driver.view().tick + 1;
+    for (offset, &unit_def) in build_defs.iter().enumerate() {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame + offset as u64,
+            GameplayCommandKind::Train {
+                producer: setup.local_hall,
+                unit_def,
+                is_building: true,
+            },
+        );
+        sequence += 1;
+    }
+    record_steps(&mut driver, &mut trace, 5);
+    {
+        let snapshot = driver.snapshot();
+        let queue = &snapshot_position(&snapshot, setup.local_hall)
+            .gameplay
+            .production;
+        assert_eq!(
+            queue
+                .iter()
+                .map(|item| item.unit_def)
+                .collect::<Vec<DefId>>(),
+            build_defs.to_vec(),
+            "reason=orc_building_queue_visible"
+        );
+        assert!(
+            queue.iter().all(|item| item.remaining_frames > 0),
+            "reason=orc_building_queue_remaining_frames_positive"
+        );
+    }
+    record_steps(&mut driver, &mut trace, 55);
+    let snapshot = driver.snapshot();
+    assert_eq!(
+        production_defs(&snapshot, setup.local_hall),
+        Vec::<DefId>::new(),
+        "reason=orc_building_queue_empty"
+    );
+    assert!(
+        snapshot.gameplay.players[&LOCAL_PLAYER].produced >= 4,
+        "reason=orc_building_produced_count"
+    );
+    assert!(
+        driver.view().entities.len() >= before_build.len() + 4,
+        "reason=four_orc_buildings_spawned"
+    );
+    let built_entities: Vec<EntityId> = build_defs
+        .iter()
+        .map(|&def_id| produced_entity(&snapshot, &before_build, LOCAL_PLAYER, def_id, &defs))
+        .collect();
+    for entity in &built_entities {
+        assert_eq!(
+            snapshot_position(&snapshot, *entity).speed,
+            0,
+            "reason=orc_new_building_runtime_speed_zero"
+        );
+    }
+
+    // 3) 训练：远程 / 反重甲 / 英雄，逐帧推进至队列清空；英雄带 mana。
+    let before_train: BTreeSet<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .collect();
+    let train_defs = [
+        catalog[&CATEGORY_RANGED],
+        catalog[&CATEGORY_SIEGE],
+        catalog[&CATEGORY_HERO],
+    ];
+    frame = driver.view().tick + 1;
+    for (offset, &unit_def) in train_defs.iter().enumerate() {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame + offset as u64,
+            GameplayCommandKind::Train {
+                producer: setup.local_hall,
+                unit_def,
+                is_building: false,
+            },
+        );
+        sequence += 1;
+    }
+    record_steps(&mut driver, &mut trace, 4);
+    {
+        let snapshot = driver.snapshot();
+        assert_eq!(
+            production_defs(&snapshot, setup.local_hall),
+            train_defs.to_vec(),
+            "reason=orc_unit_training_queue_visible"
+        );
+    }
+    record_steps(&mut driver, &mut trace, 61);
+    let snapshot = driver.snapshot();
+    assert_eq!(
+        production_defs(&snapshot, setup.local_hall),
+        Vec::<DefId>::new(),
+        "reason=orc_training_queue_empty"
+    );
+    assert!(
+        snapshot.gameplay.players[&LOCAL_PLAYER].produced >= 7,
+        "reason=orc_units_and_buildings_produced"
+    );
+    let ranged_id = produced_entity(&snapshot, &before_train, LOCAL_PLAYER, train_defs[0], &defs);
+    let siege_id = produced_entity(&snapshot, &before_train, LOCAL_PLAYER, train_defs[1], &defs);
+    let hero_id = produced_entity(&snapshot, &before_train, LOCAL_PLAYER, train_defs[2], &defs);
+    let hero_def = defs
+        .units()
+        .get(&train_defs[2])
+        .expect("melee: reason=missing_orc_hero_unit_def");
+    assert!(hero_def.mana > 0, "reason=orc_hero_definition_has_mana");
+    assert_eq!(
+        snapshot_position(&snapshot, hero_id).gameplay.max_mana,
+        hero_def.mana,
+        "reason=trained_orc_hero_has_frozen_mana"
+    );
+
+    // 4) 英雄施法：兽族 `AbilityDef` 经既有 `Cast` 结算，法力 / 冷却 / 效果链可见。
+    let hero_mana_before = snapshot_position(&snapshot, hero_id).gameplay.mana;
+    let target_hp_before = snapshot_position(&snapshot, setup.ai_hall).hp;
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Cast {
+            caster: hero_id,
+            ability: hero_ability,
+            target: setup.ai_hall,
+        },
+    );
+    sequence += 1;
+    record_steps(&mut driver, &mut trace, 4);
+    let ability = defs
+        .abilities()
+        .get(&hero_ability)
+        .expect("melee: reason=missing_orc_hero_ability");
+    let expected_damage: i64 = ability
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect.kind, EffectKind::Damage))
+        .map(|effect| effect.amount)
+        .sum();
+    assert!(
+        expected_damage > 0,
+        "reason=orc_hero_ability_has_damage_effect"
+    );
+    let snapshot = driver.snapshot();
+    let hero = snapshot_position(&snapshot, hero_id);
+    let target = snapshot_position(&snapshot, setup.ai_hall);
+    assert_eq!(
+        hero.gameplay.mana,
+        hero_mana_before - ability.mana_cost,
+        "reason=orc_hero_mana_cost_committed"
+    );
+    assert!(
+        hero.gameplay.cooldowns.contains_key(&hero_ability),
+        "reason=orc_hero_ability_cooldown_registered"
+    );
+    assert_eq!(
+        target.hp,
+        target_hp_before - expected_damage,
+        "reason=orc_hero_ability_damage_resolved"
+    );
+    assert!(
+        target
+            .gameplay
+            .buffs
+            .iter()
+            .any(|buff| matches!(buff.kind, EffectKind::Stun)),
+        "reason=orc_hero_ability_stun_buff_resolved"
+    );
+    assert!(
+        target
+            .gameplay
+            .buffs
+            .iter()
+            .any(|buff| matches!(buff.kind, EffectKind::BuffStat)),
+        "reason=orc_hero_ability_stat_buff_resolved"
+    );
+
+    // 5) 研发：兽族攻击升级与护甲升级分别经既有 `Research` 完成并作用到单位。
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Research {
+            upgrade: weapons_upgrade,
+        },
+    );
+    sequence += 1;
+    record_steps(&mut driver, &mut trace, 25);
+    let weapons = defs
+        .upgrades()
+        .get(&weapons_upgrade)
+        .expect("melee: reason=missing_orc_weapons_upgrade");
+    assert!(
+        weapons.damage_mod > 0,
+        "reason=orc_weapons_upgrade_has_damage_mod"
+    );
+    let snapshot = driver.snapshot();
+    let local = &snapshot.gameplay.players[&LOCAL_PLAYER];
+    assert_eq!(
+        local.research, None,
+        "reason=orc_weapons_research_completed"
+    );
+    assert_eq!(
+        local.upgrades.get(&weapons_upgrade),
+        Some(&true),
+        "reason=orc_weapons_upgrade_recorded"
+    );
+    assert!(
+        snapshot_position(&snapshot, siege_id)
+            .gameplay
+            .stat_mods
+            .damage
+            >= weapons.damage_mod,
+        "reason=orc_weapons_upgrade_damage_mod_applied"
+    );
+
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Research {
+            upgrade: armor_upgrade,
+        },
+    );
+    sequence += 1;
+    record_steps(&mut driver, &mut trace, 25);
+    let armor = defs
+        .upgrades()
+        .get(&armor_upgrade)
+        .expect("melee: reason=missing_orc_armor_upgrade");
+    assert!(armor.hp_mod > 0, "reason=orc_armor_upgrade_has_hp_mod");
+    let snapshot = driver.snapshot();
+    let local = &snapshot.gameplay.players[&LOCAL_PLAYER];
+    assert_eq!(local.research, None, "reason=orc_armor_research_completed");
+    assert_eq!(
+        local.upgrades.get(&armor_upgrade),
+        Some(&true),
+        "reason=orc_armor_upgrade_recorded"
+    );
+    let siege = snapshot_position(&snapshot, siege_id);
+    assert!(
+        siege.gameplay.stat_mods.max_hp >= armor.hp_mod,
+        "reason=orc_armor_upgrade_hp_mod_applied"
+    );
+    assert!(
+        siege.gameplay.stat_mods.damage >= weapons.damage_mod,
+        "reason=orc_weapons_upgrade_persists_after_armor"
+    );
+
+    // 6) 战斗：三名兽族新单位轮转攻击敌方主城；合成开局 AI 侧 frame-0
+    // 唯一建筑就是主城，摧毁它即满足本一局「摧毁全部建筑」判据。
+    let attackers = [siege_id, ranged_id, hero_id];
+    frame = driver.view().tick + 1;
+    for offset in 0..8u64 {
+        let attacker = attackers[(offset as usize) % attackers.len()];
+        submit_simulation(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame + offset,
+            CommandKind::Attack {
+                attacker,
+                target: setup.ai_hall,
+            },
+        );
+        sequence += 1;
+    }
+    record_steps(&mut driver, &mut trace, 20);
+    let view = driver.view();
+    assert!(
+        !view
+            .entities
+            .iter()
+            .any(|entity| entity.id == setup.ai_hall.value() && entity.alive),
+        "reason=orc_ai_hall_destroyed"
+    );
+    let victory = driver.snapshot().gameplay.victory;
+    assert!(victory.resolved, "reason=orc_match_victory_resolved");
+    assert_eq!(
+        victory.winner,
+        Some(LOCAL_PLAYER),
+        "reason=orc_local_player_wins"
+    );
+    assert!(
+        victory.resolved_frame > 0,
+        "reason=orc_victory_frame_recorded"
+    );
+    record_steps(&mut driver, &mut trace, 10);
+    let final_snapshot = driver.snapshot();
+    assert_eq!(
+        final_snapshot.gameplay.victory, victory,
+        "reason=orc_victory_must_resolve_once"
+    );
+
+    // 7) 重开：相同冻结定义与开局脚本构造新一局，不残留上一局权威状态。
+    let fresh = build_driver(setup, 300);
+    assert!(
+        !fresh.snapshot().gameplay.victory.resolved,
+        "reason=orc_restart_victory_unresolved"
+    );
+    assert!(
+        fresh.view().entities.is_empty(),
+        "reason=orc_restart_view_empty"
+    );
+    let fresh_snapshot = fresh.snapshot();
+    assert!(
+        fresh_snapshot.positions.is_empty(),
+        "reason=orc_restart_positions_empty"
+    );
+    assert!(
+        fresh_snapshot.gameplay.players.is_empty(),
+        "reason=orc_restart_players_empty"
+    );
+    assert_eq!(
+        fresh_snapshot.gameplay.victory.resolved_frame, 0,
+        "reason=orc_restart_victory_frame_clear"
+    );
+    assert_eq!(
+        fresh_snapshot.version, SNAPSHOT_VERSION,
+        "reason=orc_restart_snapshot_version_unchanged"
+    );
+
+    trace.final_snapshot = final_snapshot;
+    trace.victory_frame = victory.resolved_frame;
+    trace
+}
+
+/// P8.2 兽族完整一局与基线一致：同一兽族脚本两实例逐帧状态哈希与
+/// `capture_snapshot()` 快照逐条相等，快照仍 v3、冻结定义内容哈希仍由
+/// `defs_hash` 承载（不依赖改动前的旧哈希数值）。胜负只结算一次、重开干净。
+#[test]
+fn orc_full_match_matches_baseline_and_restart_is_clean() {
+    let baseline = play_orc_full_match(&MeleeSetup::with_race(Race::Orc));
+    assert!(
+        !baseline.hashes.is_empty(),
+        "reason=orc_baseline_trace_not_empty"
+    );
+    assert_eq!(
+        baseline.hashes.len(),
+        baseline.snapshots.len(),
+        "reason=orc_hash_and_snapshot_counts_match"
+    );
+    assert!(
+        baseline
+            .snapshots
+            .iter()
+            .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
+        "reason=all_orc_snapshots_are_v3"
+    );
+    assert_eq!(SNAPSHOT_VERSION, 3, "reason=orc_snapshot_version_unchanged");
+    assert!(
+        baseline.victory_frame > 0,
+        "reason=orc_baseline_victory_frame_recorded"
+    );
+    assert_eq!(
+        baseline.final_snapshot.gameplay.victory.resolved_frame, baseline.victory_frame,
+        "reason=orc_final_snapshot_uses_recorded_victory_frame"
+    );
+    // 新增定义是冻结定义内容变化：`defs_hash` 由 `synthetic_definitions()`
+    // 的 `content_hash()` 承载，进入 v3 快照头部（C2 / D2）。
+    let defs = synthetic_definitions();
+    assert_eq!(
+        baseline.final_snapshot.defs_hash,
+        defs.content_hash(),
+        "reason=orc_defs_hash_uses_new_frozen_definitions"
+    );
+    assert_eq!(
+        baseline.final_snapshot.defs, defs,
+        "reason=orc_snapshot_defs_match_synthetic_definitions"
+    );
+
+    // 两实例注入同一兽族脚本，逐帧字节一致（非与改动前旧基线数值相等）。
+    let replay = play_orc_full_match(&MeleeSetup::with_race(Race::Orc));
+    assert_eq!(
+        replay.hashes, baseline.hashes,
+        "reason=orc_frame_hashes_match_baseline"
+    );
+    assert_eq!(
+        replay.snapshots, baseline.snapshots,
+        "reason=orc_snapshot_bytes_match_baseline"
+    );
+    assert_eq!(
+        replay.final_snapshot, baseline.final_snapshot,
+        "reason=orc_final_snapshot_matches_baseline"
+    );
+    assert_eq!(
+        replay.victory_frame, baseline.victory_frame,
+        "reason=orc_victory_frame_matches_baseline"
+    );
+}
+
+/// 退化冻结定义（缺陷态，D9 / tasks 6.3）：把兽族英雄 `mana` 退化为 0，
+/// 模拟「漏用 `unit_with_mana`」。经真实 `FrozenDefinitions::new` 重建后
+/// 喂给 `build_driver_with_defs`，退化注入走真实 `Cast` / `apply` 路径，
+/// 不是旁路模拟。
+fn degenerate_defs_with_mana_less_orc_hero() -> FrozenDefinitions {
+    let full = synthetic_definitions();
+    let units: Vec<(DefId, UnitDef)> = full
+        .units()
+        .iter()
+        .map(|(&id, &def)| {
+            let mut def = def;
+            if id == ORC_HERO {
+                def.mana = 0;
+            }
+            (id, def)
+        })
+        .collect();
+    FrozenDefinitions::new(
+        units,
+        full.abilities()
+            .iter()
+            .map(|(&id, d)| (id, d.clone()))
+            .collect(),
+        full.items().iter().map(|(&id, &d)| (id, d)).collect(),
+        full.upgrades().iter().map(|(&id, &d)| (id, d)).collect(),
+    )
+    .expect("melee: reason=degenerate_mana_defs_invalid")
+}
+
+/// 经真实 `Train` → `Cast` 路径跑一次兽族英雄施法，返回「施法确实结算」
+/// （法力扣减 + 冷却登记 + 目标按 `EffectDef` 扣血）是否成立。英雄 mana=0
+/// 时 `commit_mana_cost` 失败、施法被内核既有入口拒绝，三项断言不成立。
+fn orc_hero_cast_resolves(defs: &FrozenDefinitions) -> bool {
+    let setup = MeleeSetup::with_race(Race::Orc);
+    let mut driver = build_driver_with_defs(&setup, 0, defs.clone());
+    advance(&mut driver, 1);
+    let before: BTreeSet<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .collect();
+    let train_frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        100,
+        train_frame,
+        GameplayCommandKind::Train {
+            producer: setup.local_hall,
+            unit_def: ORC_HERO,
+            is_building: false,
+        },
+    );
+    // ORC_HERO `train_frames = 60`，推进到完成帧之后。
+    advance(&mut driver, 62);
+    let snapshot = driver.snapshot();
+    let hero = produced_entity(&snapshot, &before, LOCAL_PLAYER, ORC_HERO, defs);
+    let hero_mana_before = snapshot_position(&snapshot, hero).gameplay.mana;
+    let target_hp_before = snapshot_position(&snapshot, setup.ai_hall).hp;
+    let cast_frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        101,
+        cast_frame,
+        GameplayCommandKind::Cast {
+            caster: hero,
+            ability: ORC_HERO_ABILITY,
+            target: setup.ai_hall,
+        },
+    );
+    // `cast_frames = 3`，推进到效果链结算之后。
+    advance(&mut driver, 4);
+    let ability = defs
+        .abilities()
+        .get(&ORC_HERO_ABILITY)
+        .expect("melee: reason=missing_orc_hero_ability");
+    let expected_damage: i64 = ability
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect.kind, EffectKind::Damage))
+        .map(|effect| effect.amount)
+        .sum();
+    let after = driver.snapshot();
+    let hero_after = snapshot_position(&after, hero);
+    let target_after = snapshot_position(&after, setup.ai_hall);
+    hero_after.gameplay.mana == hero_mana_before - ability.mana_cost
+        && hero_after
+            .gameplay
+            .cooldowns
+            .contains_key(&ORC_HERO_ABILITY)
+        && target_after.hp == target_hp_before - expected_damage
+}
+
+/// 反向验证·修复态（D9 / tasks 6.3）：正式定义（英雄 `mana > 0`）经真实
+/// `Cast` / `apply` 路径，施法确实结算（法力 / 冷却 / 伤害三项成立）。
+#[test]
+fn reverse_validation_orc_hero_mana_formal_cast_resolves() {
+    assert!(
+        orc_hero_cast_resolves(&synthetic_definitions()),
+        "reason=formal_orc_hero_cast_must_resolve"
+    );
+}
+
+/// 反向验证·缺陷态（D9 / tasks 6.3）：英雄 `mana == 0` 的退化定义经同一
+/// 真实 `Cast` / `apply` 路径必然被拒，三项施法断言失败；同时证明正式
+/// `content_hash()` 能抓出该缺陷（元断言防退化）。
+#[test]
+fn reverse_validation_orc_hero_mana_degenerate_cast_fails_the_same_assertion() {
+    let degenerate = degenerate_defs_with_mana_less_orc_hero();
+    assert_eq!(degenerate.units().get(&ORC_HERO).unwrap().mana, 0);
+    assert!(
+        !orc_hero_cast_resolves(&degenerate),
+        "reason=degenerate_mana_defs_must_fail_the_same_cast_assertion"
+    );
+    // 正式定义仍能通过同一断言，且正式 `content_hash()` 与退化定义不同。
+    let formal = synthetic_definitions();
+    assert_ne!(formal.content_hash(), degenerate.content_hash());
+    assert!(orc_hero_cast_resolves(&formal));
+}
+
+/// ④ 端到端断言反向验证（D9 / tasks 6.4）：`play_orc_full_match` 使用的
+/// `orc_catalog` 断言在「兽族六个新类别仍回落 `ORC_SOLDIER` /
+/// `ORC_BARRACKS` 占位」的退化装配绑定下必然失败，正式绑定通过。
+/// 退化绑定经真实 `MeleeSetup` 字段注入、喂给同一断言函数（元断言）。
+#[test]
+fn reverse_validation_orc_catalog_placeholders_fail_end_to_end_assertion() {
+    let formal = MeleeSetup::with_race(Race::Orc);
+    assert!(
+        orc_catalog_holds(&formal),
+        "reason=formal_orc_catalog_passes"
+    );
+
+    let mut degenerate = MeleeSetup::with_race(Race::Orc);
+    degenerate.category_def_ids = [
+        (CATEGORY_RANGED, ORC_SOLDIER),
+        (CATEGORY_SIEGE, ORC_SOLDIER),
+        (CATEGORY_FARM, ORC_BARRACKS),
+        (CATEGORY_ALTAR, ORC_BARRACKS),
+        (CATEGORY_SMITHY, ORC_BARRACKS),
+        (CATEGORY_HERO, ORC_SOLDIER),
+    ]
+    .into_iter()
+    .collect();
+    assert!(
+        !orc_catalog_holds(&degenerate),
+        "reason=degenerate_placeholder_catalog_must_fail"
+    );
+    assert!(orc_catalog_holds(&formal), "reason=formal_still_passes");
+}
+
+/// 被反向验证的端到端断言：兽族六类槽位绑定到真实 `2xx` 新常量
+/// （`orc_catalog` 内断言的布尔化版本，供缺陷态 / 修复态成对取证）。
+fn orc_catalog_holds(setup: &MeleeSetup) -> bool {
+    let catalog = setup.category_def_ids();
+    let expected = [
+        (CATEGORY_RANGED, ORC_RANGED),
+        (CATEGORY_SIEGE, ORC_SIEGE),
+        (CATEGORY_FARM, ORC_FARM),
+        (CATEGORY_ALTAR, ORC_ALTAR),
+        (CATEGORY_SMITHY, ORC_SMITHY),
+        (CATEGORY_HERO, ORC_HERO),
+    ];
+    expected
+        .iter()
+        .all(|(slot, def_id)| catalog.get(slot) == Some(def_id))
+}
+
+/// 双刷新率逐帧验收（ADR 0002 §2 / 验收）：兽族开局 + 兽族 AI 脚本一次性
+/// 帧冻结入队后，60 Hz / 144 Hz 呈现节奏喂入同一整数节拍序列，逐帧帧号与
+/// `compute_state_hash()` 完全一致；累加器只数整数帧，`step()` 不接呈现帧率。
+fn orc_replay_trace(refresh_hz: u64, seconds: u64) -> Vec<(u64, u64)> {
+    let ticks_per_redraw = TICKS_PER_SECOND / refresh_hz;
+    assert_eq!(ticks_per_redraw * refresh_hz, TICKS_PER_SECOND);
+    let setup = MeleeSetup::with_race(Race::Orc);
+    let config = MatchConfig {
+        seed: SEED,
+        logic_fps: LOGIC_FPS,
+        content_hash: CONTENT_HASH,
+    };
+    let mut sim =
+        RtsMatch::create_with_definitions(config, synthetic_world(), synthetic_definitions());
+    for command in &setup.commands {
+        sim.submit_command(*command)
+            .expect("melee: reason=replay_spawn_rejected");
+    }
+    for command in &setup.gameplay_commands {
+        sim.submit_gameplay_command(*command)
+            .expect("melee: reason=replay_opening_gameplay_rejected");
+    }
+    for command in AiScript::new(&setup, 300).commands {
+        sim.submit_gameplay_command(command)
+            .expect("melee: reason=replay_ai_command_rejected");
+    }
+    let mut client = FixedStepClient::from_match(sim);
+    let mut trace = Vec::new();
+    for _ in 0..(refresh_hz * seconds) {
+        client.advance_with_observer(ticks_per_redraw, |s| {
+            trace.push((s.read_view().tick, s.compute_state_hash()));
+        });
+    }
+    trace
+}
+
+#[test]
+fn orc_replay_is_refresh_rate_independent_frame_by_frame() {
+    let seconds = 2;
+    let at_60 = orc_replay_trace(60, seconds);
+    let at_144 = orc_replay_trace(144, seconds);
+    let expected_frames = u64::from(LOGIC_FPS) * seconds;
+    assert_eq!(
+        at_60.len() as u64,
+        expected_frames,
+        "reason=60hz_frame_count"
+    );
+    assert_eq!(
+        at_144.len() as u64,
+        expected_frames,
+        "reason=144hz_frame_count"
+    );
+    assert_eq!(at_60, at_144, "reason=60hz_144hz_frame_hash_identical");
+    // 逐帧帧号连续递增，防止「状态从未变化」造成的空泛通过。
+    for (index, (tick, _)) in at_60.iter().enumerate() {
+        assert_eq!(*tick, index as u64 + 1, "reason=orc_frame_number_monotonic");
+    }
+    assert!(
+        at_60.windows(2).any(|pair| pair[0].1 != pair[1].1),
+        "reason=orc_simulation_actually_advanced"
     );
 }

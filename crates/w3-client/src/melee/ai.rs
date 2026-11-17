@@ -9,13 +9,18 @@
 //! 施放英雄主动技能、研发攻防升级三类命令，全部是 `GameplayCommandKind`
 //! 既有变体；新类别 `DefId` 经装配层 [`MeleeSetup::category_def_ids`]
 //! 查表得到，MUST NOT 写入 `w3-core` 的 `Player` / `RtsMatch`。
+//!
+//! P8.2（design D5 / D3）：技能 / 升级 ID 不再硬编码，改由
+//! `defs.rs::Race` 的只读分派方法（`hero_ability` / `harass_ability` /
+//! `weapons_upgrade` / `armor_upgrade`）按 `setup.race` 取用。默认
+//! [`MeleeSetup::new`] 回落人族段、命令字节与 P8.1 完全一致；以
+//! `MeleeSetup::with_race(Race::Orc)` 构造兽族开局时，脚本会训练兽族
+//! 新单位、施放兽族英雄技能、研发兽族升级。仍是帧冻结外部命令、不新增
+//! 权威状态 / 命令变体。
 
 use w3_core::{Frame, GameplayCommand, GameplayCommandKind};
 
-use crate::melee::defs::{
-    ABILITY, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE, HERO_ABILITY, SOLDIER, UPGRADE_ARMOR,
-    UPGRADE_WEAPONS,
-};
+use crate::melee::defs::{CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE, SOLDIER};
 use crate::melee::setup::{AI_PLAYER, MeleeSetup};
 
 /// AI 决策周期（整数逻辑帧）。
@@ -43,6 +48,11 @@ impl AiScript {
     /// 保持 design D5 的单一外部命令源）；`Leave` 落在规划窗口末尾作为确定性
     /// 结算命令（R11.3 / R12.7）。全部 ID 来自开局布置或装配层新类别绑定，
     /// 均为固定值；`horizon_frames < DECISION_PERIOD` 时脚本为空，便于隔离。
+    ///
+    /// P8.2：训练目标 `DefId` 经 [`MeleeSetup::category_def_ids`] 查表（已随
+    /// `Race` 分派替换占位而自动跟随种族）；技能 / 升级 ID 经 `setup.race` 的
+    /// 只读分派方法取用，默认人族段与 P8.1 字节一致、兽族开局产出兽族内容，
+    /// 不再硬编码任何技能 / 升级 ID（design D5）。
     pub fn new(setup: &MeleeSetup, horizon_frames: u64) -> Self {
         let mut commands = Vec::new();
         // 序列 1 已由开局 `Gather` 占用。
@@ -51,6 +61,13 @@ impl AiScript {
         let mut period_index = 0u64;
         // 新类别装配绑定（槽位 → DefId）：定义层 / 装配层查表，不进权威状态。
         let catalog = setup.category_def_ids();
+        // 技能 / 升级 ID 按族只读分派：默认人族段与 P8.1 完全一致，兽族
+        // 开局指向 P8.2 新增的 `AbilityDef` / `UpgradeDef`（design D3 / D5）。
+        let race = setup.race;
+        let hero_ability = race.hero_ability();
+        let harass_ability = race.harass_ability();
+        let weapons_upgrade = race.weapons_upgrade();
+        let armor_upgrade = race.armor_upgrade();
 
         while frame <= horizon_frames {
             // 既有：AI 农民采集。
@@ -96,11 +113,13 @@ impl AiScript {
             sequence += 1;
 
             // 新增：研发攻 / 防升级（交替），走既有 `Research` 路径（R4.4）。
+            // `upgrade` 经 `Race::weapons_upgrade` / `armor_upgrade` 按族查表：
+            // 人族段与 P8.1 一致，兽族开局指向 P8.2 新增 `UpgradeDef`。
             if period_index % RESEARCH_PERIOD == 0 {
                 let upgrade = if (period_index / RESEARCH_PERIOD) % 2 == 0 {
-                    UPGRADE_WEAPONS
+                    weapons_upgrade
                 } else {
-                    UPGRADE_ARMOR
+                    armor_upgrade
                 };
                 commands.push(GameplayCommand::new(
                     Frame::new(frame + 1),
@@ -111,7 +130,8 @@ impl AiScript {
                 sequence += 1;
             }
 
-            // 既有：周期性以既有技能骚扰玩家主城。
+            // 既有：周期性以既有技能骚扰玩家主城。`ABILITY`（10）两族共用、
+            // 不占种族段，经 `harass_ability` 查表返回（design D5）。
             if period_index > 0 && period_index % HARASS_PERIOD == 0 {
                 commands.push(GameplayCommand::new(
                     Frame::new(frame + 2),
@@ -119,7 +139,7 @@ impl AiScript {
                     sequence,
                     GameplayCommandKind::Cast {
                         caster: setup.ai_hall,
-                        ability: ABILITY,
+                        ability: harass_ability,
                         target: setup.local_hall,
                     },
                 ));
@@ -129,6 +149,7 @@ impl AiScript {
             // 新增：周期性施放英雄主动技能（`ability` 指向新增 `AbilityDef`），
             // 走既有 `Cast` 命令面（R6 / R7.6）；施法者用 frame-0 固定实体 ID，
             // 运行时训练出的英雄实体在端到端一局中另行施放（design D5）。
+            // `hero_ability` 按族查表：兽族开局施放 P8.2 新增主动技能。
             if period_index > 0 && period_index % HERO_CAST_PERIOD == 0 {
                 commands.push(GameplayCommand::new(
                     Frame::new(frame + 2),
@@ -136,7 +157,7 @@ impl AiScript {
                     sequence,
                     GameplayCommandKind::Cast {
                         caster: setup.ai_hall,
-                        ability: HERO_ABILITY,
+                        ability: hero_ability,
                         target: setup.local_hall,
                     },
                 ));
@@ -182,7 +203,16 @@ impl AiScript {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use w3_core::DefId;
+
     use super::*;
+    use crate::melee::defs::{
+        CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_SMITHY, HERO_ABILITY, ORC_ALTAR, ORC_BARRACKS,
+        ORC_FARM, ORC_HERO, ORC_HERO_ABILITY, ORC_RANGED, ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER,
+        ORC_UPGRADE_ARMOR, ORC_UPGRADE_WEAPONS, Race, UPGRADE_ARMOR, UPGRADE_WEAPONS,
+    };
 
     #[test]
     fn script_is_deterministic_and_ordered() {
@@ -308,5 +338,152 @@ mod tests {
                 "reason=sort_key_must_be_unique"
             );
         }
+    }
+
+    /// P8.2（design D5 / tasks 3.2）：兽族开局脚本会训练兽族新单位 / 施放
+    /// 兽族英雄技能 / 研发兽族升级，全部由 `setup.race` 的只读分派与装配层
+    /// 新类别绑定查表产出，MUST NOT 出现人族段的技能 / 升级 ID。
+    #[test]
+    fn script_contains_orc_new_category_commands() {
+        let setup = MeleeSetup::with_race(Race::Orc);
+        let script = AiScript::new(&setup, 1200);
+        let catalog = setup.category_def_ids();
+        let orc_new_units = [ORC_RANGED, ORC_SIEGE, ORC_HERO];
+
+        // 训练目标来自装配层绑定、且已替换占位（不再是 ORC_SOLDIER / ORC_BARRACKS）。
+        assert_eq!(catalog[&CATEGORY_RANGED], ORC_RANGED);
+        assert_eq!(catalog[&CATEGORY_SIEGE], ORC_SIEGE);
+        assert_eq!(catalog[&CATEGORY_FARM], ORC_FARM);
+        assert_eq!(catalog[&CATEGORY_ALTAR], ORC_ALTAR);
+        assert_eq!(catalog[&CATEGORY_SMITHY], ORC_SMITHY);
+        assert_eq!(catalog[&CATEGORY_HERO], ORC_HERO);
+        assert!(
+            script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Train { unit_def, .. } if orc_new_units.contains(&unit_def)
+            )),
+            "reason=missing_train_pointing_to_orc_new_unit_def"
+        );
+        // 施放兽族英雄技能、研发兽族升级。
+        assert!(
+            script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Cast { ability, .. } if ability == ORC_HERO_ABILITY
+            )),
+            "reason=missing_cast_pointing_to_orc_ability_def"
+        );
+        assert!(
+            script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Research { upgrade }
+                    if upgrade == ORC_UPGRADE_WEAPONS || upgrade == ORC_UPGRADE_ARMOR
+            )),
+            "reason=missing_research_pointing_to_orc_upgrade_def"
+        );
+        // 兽族脚本 MUST NOT 泄漏人族段的技能 / 升级 ID（按族分派生效）。
+        assert!(
+            !script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Cast { ability, .. } if ability == HERO_ABILITY
+            )),
+            "reason=human_ability_leaked_into_orc_script"
+        );
+        assert!(
+            !script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Research { upgrade }
+                    if upgrade == UPGRADE_WEAPONS || upgrade == UPGRADE_ARMOR
+            )),
+            "reason=human_upgrade_leaked_into_orc_script"
+        );
+        assert!(
+            script.commands.iter().all(|c| c.player_id == AI_PLAYER),
+            "reason=all_commands_belong_to_ai_player"
+        );
+    }
+
+    /// 默认人族回落（design D5 / tasks 3.2）：`MeleeSetup::new` 的脚本技能 /
+    /// 升级 ID 与 P8.1 完全一致，不因兽族分派而改变既有入口行为。
+    #[test]
+    fn default_script_keeps_human_ability_and_upgrade_ids() {
+        let setup = MeleeSetup::new();
+        let script = AiScript::new(&setup, 1200);
+        assert_eq!(setup.race, Race::Human);
+        assert!(
+            script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Cast { ability, .. } if ability == HERO_ABILITY
+            )),
+            "reason=default_hero_ability_unchanged"
+        );
+        assert!(
+            script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Research { upgrade }
+                    if upgrade == UPGRADE_WEAPONS || upgrade == UPGRADE_ARMOR
+            )),
+            "reason=default_upgrade_ids_unchanged"
+        );
+        assert!(
+            !script.commands.iter().any(|c| matches!(
+                c.kind,
+                GameplayCommandKind::Cast { ability, .. } if ability == ORC_HERO_ABILITY
+            )),
+            "reason=orc_ability_must_not_leak_into_default_script"
+        );
+    }
+
+    /// 反向验证（D9 / tasks 6.4）：退化装配层绑定（兽族六个新类别仍回落
+    /// ORC_SOLDIER / ORC_BARRACKS 占位）会让「脚本训练兽族新单位」断言失败，
+    /// 正式实现 `Race::Orc.category_def_ids()` 通过同一断言。退化实现经真实
+    /// `AiScript::new` 查表路径注入，不是旁路模拟。
+    #[test]
+    fn reverse_validation_orc_dispatch_formal_passes_the_assertion() {
+        let setup = MeleeSetup::with_race(Race::Orc);
+        assert!(
+            script_trains_orc_new_units(&setup),
+            "reason=formal_dispatch_must_pass_the_assertion"
+        );
+    }
+
+    #[test]
+    fn reverse_validation_orc_dispatch_degenerate_fails_the_same_assertion() {
+        // 退化实现：把装配层绑定替换回 P8.1 时代的占位表，喂给真实
+        // `AiScript::new`，其 `unit_def` 全部落到 ORC_SOLDIER / ORC_BARRACKS。
+        let mut degenerate = MeleeSetup::with_race(Race::Orc);
+        degenerate.category_def_ids = placeholder_catalog();
+        assert!(
+            !script_trains_orc_new_units(&degenerate),
+            "reason=degenerate_dispatch_must_fail_the_same_assertion"
+        );
+        // 元断言：正式实现仍能通过，证明缺陷被抓出而非断言失效。
+        let formal = MeleeSetup::with_race(Race::Orc);
+        assert!(script_trains_orc_new_units(&formal));
+    }
+
+    /// 被反向验证的断言：脚本含指向兽族新增 `UnitDef` 的 `Train`。
+    fn script_trains_orc_new_units(setup: &MeleeSetup) -> bool {
+        let orc_new_units = [ORC_RANGED, ORC_SIEGE, ORC_HERO];
+        AiScript::new(setup, 1200).commands.iter().any(|c| {
+            matches!(
+                c.kind,
+                GameplayCommandKind::Train { unit_def, .. }
+                    if orc_new_units.contains(&unit_def)
+            )
+        })
+    }
+
+    /// P8.1 时代的兽族占位绑定（缺陷态，仅为反向验证注入用）。
+    fn placeholder_catalog() -> BTreeMap<u64, DefId> {
+        [
+            (CATEGORY_RANGED, ORC_SOLDIER),
+            (CATEGORY_SIEGE, ORC_SOLDIER),
+            (CATEGORY_FARM, ORC_BARRACKS),
+            (CATEGORY_ALTAR, ORC_BARRACKS),
+            (CATEGORY_SMITHY, ORC_BARRACKS),
+            (CATEGORY_HERO, ORC_SOLDIER),
+        ]
+        .into_iter()
+        .collect()
     }
 }

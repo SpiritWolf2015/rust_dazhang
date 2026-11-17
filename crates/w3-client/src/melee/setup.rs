@@ -154,12 +154,14 @@ pub struct MeleeSetup {
     /// 不携带 `DefId`，故种族维度只停在这一层，MUST NOT 进入权威状态 /
     /// 状态哈希 / 快照；两族装配的开局命令字节完全一致。
     pub def_ids: BTreeMap<u64, DefId>,
-    /// P8.1 新类别的装配期绑定（槽位 → 分段 `DefId`，design D4）。
+    /// 新类别的装配期绑定（槽位 → 分段 `DefId`，P8.1 / P8.2 design D4）。
     ///
     /// `CommandKind::Spawn` 不含 `DefId`，frame-0 静态集合只有
     /// 主城 / 农民 / 资源点，故新增六类不进 `def_ids`、不改任何 `Spawn`
     /// 命令字节；它们只在装配层按 [`Race::category_def_ids`] 记录为
     /// 只读查表，供 AI 脚本选训练 / 施法 / 研发目标与可移动性派生。
+    /// P8.2 把兽族六类从占位替换为真实 `2xx` 常量后，本绑定随
+    /// `Race::category_def_ids()` 自动跟随，无需改动装配逻辑。
     /// 这是表现层专属数据，MUST NOT 进入权威状态 / 哈希 / 快照；
     /// 运行时 `Train` / `Build` 产生的新实体不在此表（P8.0 已知限制 B1，
     /// 本 change 不擅自闭合、不改 `unwrap_or` 语义、不扩展视图）。
@@ -724,13 +726,16 @@ mod tests {
         );
     }
 
-    /// P8.1 新类别装配绑定（design D4）：人族 `1xx`、兽族 `2xx`，
-    /// 六类各占独立槽位；`Spawn` / `gameplay_commands` 字节不受影响。
+    /// 新类别装配绑定（P8.1 design D4 / P8.2 design D4）：人族 `1xx`、
+    /// 兽族 `2xx` 真实新常量（不再是 `ORC_SOLDIER` / `ORC_BARRACKS` 占位），
+    /// 六类各占独立槽位、两族不重名不相同；`Spawn` / `gameplay_commands`
+    /// 字节逐字节不受影响（C2 / design D4）。
     #[test]
     fn category_bindings_are_segmented_without_touching_spawn_bytes() {
         use crate::melee::defs::{
             CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE,
-            CATEGORY_SMITHY,
+            CATEGORY_SMITHY, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_RANGED, ORC_SIEGE,
+            ORC_SMITHY, ORC_SOLDIER,
         };
 
         let human = MeleeSetup::with_race(Race::Human);
@@ -760,6 +765,27 @@ mod tests {
                 );
             }
         }
+        // P8.2：兽族六类已替换占位、指向真实 `2xx` 新常量，且互不相同。
+        let orc_expected = [
+            (CATEGORY_RANGED, ORC_RANGED),
+            (CATEGORY_SIEGE, ORC_SIEGE),
+            (CATEGORY_FARM, ORC_FARM),
+            (CATEGORY_ALTAR, ORC_ALTAR),
+            (CATEGORY_SMITHY, ORC_SMITHY),
+            (CATEGORY_HERO, ORC_HERO),
+        ];
+        for (slot, def_id) in orc_expected {
+            assert_eq!(
+                orc.category_def_ids.get(&slot),
+                Some(&def_id),
+                "reason=orc_category_binding_must_be_real_2xx slot={slot}"
+            );
+            assert_ne!(def_id, ORC_SOLDIER, "reason=not_soldier_placeholder");
+            assert_ne!(def_id, ORC_BARRACKS, "reason=not_barracks_placeholder");
+        }
+        let orc_values: Vec<_> = orc.category_def_ids.values().copied().collect();
+        let distinct: std::collections::BTreeSet<_> = orc_values.iter().copied().collect();
+        assert_eq!(distinct.len(), 6, "reason=orc_bindings_not_duplicated");
         // 新类别绑定与 frame-0 `def_ids` 命名空间隔离，不新增实体。
         for slot in slots {
             assert!(
@@ -767,6 +793,15 @@ mod tests {
                 "reason=category_slot_must_not_be_an_entity_id"
             );
         }
+        // 两族绑定都落在各自段、不重名（互不相交）、不相同。
+        let human_values: std::collections::BTreeSet<_> =
+            human.category_def_ids.values().copied().collect();
+        let orc_values_set: std::collections::BTreeSet<_> =
+            orc.category_def_ids.values().copied().collect();
+        assert!(
+            human_values.is_disjoint(&orc_values_set),
+            "reason=human_orc_categories_do_not_overlap"
+        );
         assert_ne!(
             human.category_def_ids, orc.category_def_ids,
             "reason=category_binding_is_race_specific"
@@ -798,6 +833,43 @@ mod tests {
         for slot in [CATEGORY_FARM, CATEGORY_ALTAR, CATEGORY_SMITHY] {
             assert_eq!(map.get(&slot), Some(&false), "reason=immovable slot={slot}");
         }
+    }
+
+    /// P8.2 兽族新类别可移动性（design D7 / tasks 3.5）：远程 / 反重甲 /
+    /// 英雄可移动，人口地洞 / 祭坛 / 战争磨坊不可移动；判据来自冻结定义
+    /// `speed_raw`（`Race::Orc.category_def_ids()` 已替换占位到真实常量），
+    /// 不来自运行时 `speed` 或类型白名单。`Spawn` 字节不变（C2 / D4）。
+    #[test]
+    fn orc_category_movability_is_derived_from_speed_raw() {
+        use crate::melee::defs::{
+            CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE,
+            CATEGORY_SMITHY,
+        };
+
+        let defs = crate::melee::defs::synthetic_definitions();
+        let setup = MeleeSetup::with_race(Race::Orc);
+        let map = setup.category_movability(&defs);
+        assert_eq!(map.len(), 6, "reason=one_entry_per_orc_new_category");
+        for slot in [CATEGORY_RANGED, CATEGORY_SIEGE, CATEGORY_HERO] {
+            assert_eq!(
+                map.get(&slot),
+                Some(&true),
+                "reason=movable_orc_slot slot={slot}"
+            );
+        }
+        for slot in [CATEGORY_FARM, CATEGORY_ALTAR, CATEGORY_SMITHY] {
+            assert_eq!(
+                map.get(&slot),
+                Some(&false),
+                "reason=immovable_orc_building slot={slot}"
+            );
+        }
+        // 装配层种族差异只停在只读绑定，不改变任何 `Spawn` 命令字节。
+        let human = MeleeSetup::with_race(Race::Human);
+        assert_eq!(
+            setup.commands, human.commands,
+            "reason=orc_spawn_bytes_unchanged"
+        );
     }
 
     /// 可移动性判据由冻结定义 `speed_raw` 派生：农民可移动、建筑 / 资源点

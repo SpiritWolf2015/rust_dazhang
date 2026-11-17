@@ -75,6 +75,7 @@
 
 - 绝大多数建筑**不可移动**。[已核]
 - **暗夜精灵古树类建筑**可「拔根 / 扎根」，拔根后成为可移动单位（护甲类型也随之从城甲变重甲），可移动、可攻击；这是种族特色，不是通用建筑行为。[已核]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - 因此「建筑是否可移动」MUST 由**定义层数据**（`UnitDef` 的种族 / 建筑类别 / 可移动性字段）决定，**MUST NOT** 用「名字含 hall / mine / tree 的字符串」或硬编码白名单判断。[取舍]
 
 ### R1.3 右键「智能指令」分发 `[已核]`
@@ -89,6 +90,8 @@
 | **树木 / 金矿** | **可采集单位 → 采集该资源（`Gather`）；非采集单位 → 仅移动到其附近** |
 | 地上宝物 | 英雄走过去拾起 |
 | 正在指定法术目标时 | 取消命令 |
+
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 
 ### R1.4 框选 / 编队与命令过滤 `[已核]` + `[取舍]`
 
@@ -126,6 +129,7 @@
 
 - **R3.1** 三种资源：黄金（Gold）、木材（Lumber）、人口 / 食物（Food / Supply）。前两者用于建造、训练、研究；人口限制同时存在的单位上限。[已核]
 - **R3.2 维护费（Upkeep）**：单位人口超过阈值后，采金收益按比例下降（公开资料常见「低维护费 / 高维护费」两档）。阈值与倍率 `[待核]`，以本机导出常量为准；机制 MUST 进权威状态（若纳入 1.0）。[已核机制 / 待核数值]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - **R3.3 采集效率**：单个金矿有并行工人数上限（公开资料常见 5），超过不再提升效率；木材采集工人数因族而异。[待核数值]
 - **R3.4 人口建筑**：各族有供人口建筑（人族农场、兽族地洞、不死族通灵塔、暗夜月亮井），部分有附加功能（地洞防御、月井恢复）。[已核]
 - **R3.5 资源共享**：盟友间可通过联盟菜单共享资源（联机对战相关）。[已核；1.0 是否纳入待拍板]
@@ -135,6 +139,7 @@
 ## 4. 建筑与科技树（`R4`）
 
 - **R4.1 城镇大厅 / 主基地**：可升级两次（T1 → T2 → T3），逐级解锁建筑与科技；是资源送回点；主基地被摧毁影响胜负判定（R11）。[已核]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - **R4.2 祭坛**：召唤与复活英雄。[已核]
 - **R4.3 生产建筑**：普通 / 法术 / 种族特色（人族车间、兽族兽栏、不死族屠宰场、暗夜奇美拉栖木等）。[已核]
 - **R4.4 研发建筑**：每族有攻 / 防升级建筑；其他强化多在该单位的生产建筑研究。[已核]
@@ -148,6 +153,7 @@
 - **R5.1 攻击类型**：普通、穿刺、攻城、魔法（法术）、混乱、英雄。[已核]
 - **R5.2 护甲类型**：无甲、轻甲、中甲、重甲、城甲（建筑）、英雄甲。[已核]
 - **R5.3 克制矩阵**：穿刺克无甲 / 轻甲；攻城克城甲（建筑）；魔法克重甲；英雄攻击对英雄甲无减免；混乱攻击几乎不受减免。具体倍率 `[待核]`，以本机导出为准。[已核框架 / 待核数值]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - **R5.4 攻击方式**：溅射（炮火 / 箭矢，按距离衰减）、弹射（顺延攻击附近敌人，后续伤害递减）。[已核]
 - **R5.5 地形**：高地对低地攻击有加成（3D 地形引入）。[已核；1.0 是否纳入待拍板]
 - **R5.6 空中单位**：可穿越地形障碍、视野不受地形限制。[已核]
@@ -159,8 +165,10 @@
 - **R6.1 等级**：1–10 级；击杀敌方单位 / 野怪获得经验升级；每级学技能，6 级解锁大招。[已核；经验阈值待核]
 - **R6.2 物品栏**：英雄 6 格，可携带 / 使用 / 丢弃 / 移交宝物。[已核]
 - **R6.3 死亡与复活**：英雄阵亡不直接判负；可在本族祭坛复活（费用 / 时间随等级变化），或在酒馆「买活」中立 / 阵亡英雄（费用更高、复活时半血无蓝）。[已核 / 数值待核]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - **R6.4 属性**：力量 / 敏捷 / 智力，影响生命 / 护甲 / 法力。[已核]
 - **R6.5 经验分配**：范围内英雄分摊经验；满级英雄是否参与分摊 `[待核]`。
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 
 ---
 
@@ -182,6 +190,7 @@
 - **R8.3 击杀收益**：经验给附近英雄、金币、掉落物品（R7）。[已核]
 - **R8.4 昼夜行为**：多数野怪夜间睡眠、不主动攻击；部分（石头人等）夜间清醒。[已核]
 - **R8.5 行为**：有警戒 / 追击 / 归巢（leash）边界，MUST NOT 无限追出营地。[已核；AI 细节待核]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - **R8.6 掉落确定性**：掉落 MUST 由冻结随机码（种子随对局快照）决定，重放一致（ADR 0002）。[取舍]
 
 ---
@@ -213,6 +222,7 @@
 - **R10.1 迷雾**：地图初始不可见，探索后地形保留、但离开视野的区域被战争迷雾覆盖（敌方单位 / 建筑变化不可见）。[已核]
 - **R10.2 昼夜循环**：白天 / 夜晚交替（公开资料常见各约 2 分钟）；影响视野范围、部分种族回血、暗夜隐身、野怪睡眠。[已核 / 时长待核]
 - **R10.3 回血**：人族 / 兽族非机械单位昼夜均回血；暗夜单位仅夜间回血；英雄昼夜均自动回血。[已核]
+> 参考项目佐证机制见附录「参考项目佐证锚」表（只读，仅锚机制、不锚数值；数值仍 [待核]）。
 - **R10.4 隐身**：部分暗夜单位夜间静止时隐身。[已核]
 - **R10.5 边界（若纳入 1.0）**：迷雾 / 视野是**表现层只读派生**，MUST NOT 进权威状态 / 状态哈希 / 快照（ADR 0002）。[取舍]
 
@@ -339,6 +349,44 @@
 
 **核实约定**：凡标注 `[待核]` 的数值 / 倍率 / 阈值，实现前 MUST 经 `godot_warcraft3` 导出的本机 SLK / MiscGame 表或原版客户端核对；**不得**把公开攻略数值直接冻结进权威定义（ADR 0001 / ADR 0004）。`[取舍]` 是本项目在确定性 / 零资产约束下的实现决定，不冒充经典规则原样。
 
+### 参考项目佐证锚（2026-11-17 只读调研）
+
+> 本节是 `reference-researcher` 按 `UPSTREAM.md`「按任务类型的强制参考矩阵」中 T3 / T4 / T5 任务产出的**只读对照报告**摘录，下表锚已抽查打开核实。路径相对 `UPSTREAM.md:9-14` 表格中四个参考项目各自的项目根，均写出从项目根起的完整路径。`WarsmashModEngine` 为 AGPLv3，只借设计语义、不复制代码（ADR 0001）。**全部锚只佐证机制，不构成数值 / 键位绑定的核实，不改变本文任何状态标记**；`[待核]` 的权威来源仍是本机导出数据或原版客户端（本文 §11 与「核实约定」段）。
+
+| 规则编号（含文档行号） | 参考项目与 `file:line` 锚（路径相对 `UPSTREAM.md:9-14` 项目根） | 佐证的机制（一句话） | 边界 |
+|---|---|---|---|
+| R1.2 `:77` | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/abilities/nightelf/root/CAbilityRoot.java:246,247,262,263`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/abilities/types/impl/CAbilityTypeRootLevelData.java:13,19,25,43` | rooting / uprooting 是同一状态切换，同时改 `setDefenseType` / `setStructure` / `setMoveBehavior`；`uprootedDefenseType` 由 level data 传入 | 只锚机制；Warsmash `CDefenseType` 枚举名与本文「城甲→重甲」中文表述不逐字对应 |
+| R1.3 `:84-91` | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/orders/OrderIds.java:598-602` | `smartvariant` 注释逐条列出右键目标→动作，含「点地面途中攻击敌人」 | Warsmash 实现语义佐证，非暴雪官方口径 |
+| R1.4 `:98`（附加） | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnitType.java:35,150,263-264`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/abilities/nightelf/root/CAbilityRoot.java:96-98,243-247,259-264` | `speed` 由定义表注入；rooted 时 `setMoveBehavior(null)` + `setStructure(true)` | 佐证 :78 / :97「由定义层可移动性数据驱动、不用建筑名白名单」 |
+| R3.2 `:128`（机制部分） | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/War3MapViewer.java:379-386`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/players/CPlayerState.java:23-26`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/players/CPlayer.java:530-534,578-581`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/players/CPlayerScore.java:17-23`；`WarsmashModEngine/resources/Scripts/melee.jui:66` | 维护费是「分档 + 按资源分别税率」的玩家状态，档位来自 Misc 表字段而非硬编码 | **只锚机制**；`:380-386` 的 `50,80` / `0.00,0.30,0.60` 是带 TODO 的 `if (!hasField)` fallback 猜测值，绝不可当经典阈值 / 倍率 |
+| R4.1 `:137` | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnitType.java:97,130,193,438-441`；`godot_warcraft3/docs/roadmap/NEXT.md:78,120,143` | 解锁需求按 `tier` 分层存于定义层数据（`List<List<CUnitTypeRequirement>>`），非建筑名白名单 | 只锚「定义层 tier 分层解锁」机制；不锚任何升级费用 |
+| R5.3 `:150`（框架部分） | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/combat/CAttackType.java:5-13`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/combat/CDefenseType.java:5-13`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CGameplayConstants.java:16,156-180,323-324` | 克制是「攻击类型 × 护甲类型」二维矩阵，倍率由 Misc 表字段逐项解析 | 只锚框架；Warsmash 枚举名与本文 R5.1 / R5.2 中文分类不逐字对应 |
+| R6.3 `:161`（机制部分） | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CGameplayConstants.java:224-241,430-431,442-443`；`godot_warcraft3/docs/roadmap/CLASSIC_RULES_BASELINE.md:56` | 复活 / 买活是「基数 + 等级系数 + 绝对上限」的表驱动计算，祭坛与买活参数分离 | 只锚机制与数据分层，不锚任何金额 / 秒数 |
+| **R6.5 `:163`** | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnit.java:3041-3113`（`// Award hero experience`、`:3083 xpReceivingHeroes`、`:3106-3109` 分摊计算）；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CGameplayConstants.java:220-222,238,430-431,442-443`（`MaxLevelHeroesDrainExp` 等全为 `miscData.getFieldValue`）；`godot_warcraft3/docs/roadmap/CLASSIC_RULES_BASELINE.md:19` | **本次最强结论**：满级英雄是否参与分摊由 MiscGame 布尔常量控制，且「进入分摊集合」与「经验实际入账 / 等级系数」是两个不同环节；分摊范围、全局回退、建筑击杀是否给经验各自开关化 | 只锚机制；不锚 `HeroExpRange=1200`、野怪经验比例、等级倍率；`godot_warcraft3/docs/roadmap/CLASSIC_RULES_BASELINE.md:17` 自承「击杀经验分配尚未接入」、`:36` 自列未完成清单，不构成经典事实断言 |
+| R8.5 `:184` | `godot_warcraft3/docs/roadmap/NEXT.md:76`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnit.java:214,318,2390,2414,3559,3697`（`acquisitionRange`）；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/players/CPlayerState.java:42`（`NO_CREEP_SLEEP`） | leash 作为可打断的独立行为存在；警戒 / 追击范围由定义层 `acquisitionRange` 决定，非无限追击；野怪睡眠是可开关的玩家状态 | 只锚机制；归巢半径 / 触发阈值仍属参考缺口；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/behaviors/CBehaviorAttackMove.java:37,41` 带 TODO 与硬编码 `distance <= 16f`，不得借鉴 |
+| R9.1 `:205` | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/abilities/item/shop/CAbilityNeutralBuilding.java:52-61,126-140,158,191-201`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnit.java:4328-4331`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnitType.java:112,224,572-573` | 中立建筑 `activationRadius` / `interactionType` 由数据表注入，有专门 `neutralinteract` order，对点地面 / 无目标一律拒单 | 只锚机制与「不用市场 ID 特判」的数据驱动口径 |
+| R10.3 `:215` | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/combat/CRegenType.java:3-4`（`NONE, ALWAYS, BLIGHT, DAY, NIGHT`）；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnitType.java:30-32,145-147,243-252`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CUnit.java:147-152,175-176,992,1015,1522` | 回血条件由单位定义层 `regenType` 枚举区分，回血量是定义层字段 + 逐 tick 计算，不是种族名硬编码 | **只锚「按定义层 regenType 区分」机制**；不佐证各族具体归属，也不佐证回血速率 |
+| R13.2 `:267-269`（附加，机制侧） | `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/behaviors/CBehaviorAttackMove.java:28,37,41,54`；`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/orders/OrderIds.java:128-130,266,311,322,409` | attack-move 是独立 behavior；`holdposition`(`:266`) 与 `stop`(`:409`) 是两个独立 order id | 只佐证「两命令不可合并」的机制；**不能**证明 `S`↔`Stop` / `H`↔`Hold` 的字母绑定，键位口径差异仍 `[待核]` |
+
+### 参考缺口与防误用清单（2026-11-17 只读调研）
+
+**(1) B 类「纯数值 / 具体键位绑定」——四个参考项目不是权威来源。** 统一依据：`WC3-MELEE-RULES.md:340`（凡 `[待核]` 数值 / 倍率 / 阈值 MUST 经 `godot_warcraft3` 导出的本机 SLK / MiscGame 表或原版客户端核对，不得把公开攻略数值冻结进权威定义）、`UPSTREAM.md:77`（T3 = 42 张 SLK 表 schema 与导出管线）、`UPSTREAM.md:32-40`（导出目录留在仓库外）、ADR 0001 / ADR 0004。以下项本次一律保持 `[待核]`、不因参考项目而核实：R1.5 工人上限、R2 各族数值 / 解锁、R3.2 阈值倍率、R3.3 金矿 5 工人、R4.6 建造约束细节数值、R5.3 克制倍率、R6.1 经验阈值、R6.3 复活费用 / 时间、R6.5 的 `HeroExpRange` / 比例、R7.3 商店清单、R7.4 回购价、R8.2 营地分级、R10.2 昼夜时长、R13.1 / R13.3 / R13.5 键位绑定、R13.2 `S` / `H` 口径差异与 `A` attack-move 命令表达。`WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/CGameplayConstants.java` 里这些常量全部经 `miscData.getField*()` 从 Misc 表读取——**代码里没有权威值，值在数据表里**；`godot_warcraft3/docs/roadmap/CLASSIC_RULES_BASELINE.md:3,34` 自承「未锁定具体经典补丁」「不得把网页值与未验证本地表混合后称作原版一致」。按 `UPSTREAM.md:88` 第 5 条如实登记参考缺口，不臆造。
+
+**(2)「不得写入本文的具体值」防误用清单。** 以下值仅出现在参考项目代码 / 文档中，不得当作经典规则事实写入本文：
+
+| 来源 `file:line` | 具体值 | 为什么不能当经典规则 |
+|---|---|---|
+| `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/War3MapViewer.java:378-386` | `50,80,10000,…` / `0.00,0.30,0.60,…` | `// TODO Find the upkeep constants inside the assets files ?????` 的 `if (!hasField)` fallback 猜测值 |
+| `godot_warcraft3/docs/roadmap/CLASSIC_RULES_BASELINE.md:15-19,30,58` | `550/700`、`110/150`、`1200`、`80/70/62/55/0%` vs `80/70/60/50/0%`、`552 金` | 官方网页值与本地 `MiscGame.txt` **本身不一致**的记录 / 项目自有验证值；`:8` 明言网页未注明补丁、不能替代指定客户端对照测试 |
+| `godot_warcraft3/docs/roadmap/CLASSIC_RULES_BASELINE.md:46` | `320→705` 等升级总价 | 该行明言「不能把表中总价直接用作升级扣款」 |
+| `godot_warcraft3/docs/roadmap/ITEMS_AND_MELEE_AI_PLAN.md:122-123` | `ngme` / `nmrk` 货架（`phea/pman/rde1`）、「半价出售」 | godot 自有 `ShopService` 实现值，`:131` 明言完整 SellItems 表驱动货架仍待 |
+| `godot_warcraft3/docs/design/game/FACTION_UNIT_ROSTERS.md:4-5,9` | 原创三族单位名与数值 | 该文件自证「名称、造价和数值是种子、不是最终平衡承诺」「原创三族、不逐项镜像经典 RTS 单位」；`UPSTREAM.md:79` 明令只借结构与批次判据 |
+| `WarsmashModEngine/core/src/com/etheller/warsmash/viewer5/handlers/w3x/simulation/behaviors/CBehaviorAttackMove.java:37,41` | 硬编码 `distance <= 16f` | 带 `// TODO this is not how it was meant to be used`，不得借鉴 |
+
+**(3) C 类「待拍板范围 / 架构」——非证据问题。** §0.3 T5（AI × lockstep 接合）、R3.5 资源共享、R5.5 高地加成、R11.3 认输时限、R12.5 观战 / 断线重连、R13.1 grid 布局支持程度、R13.5 界面键是否全量纳入、R13.7 现状键位别名处置：这些是用户拍板 / 架构决策，参考项目不能「核实」，按 `UPSTREAM.md:88` 第 5 条与本文 §14 第 2 条回到人拍板。
+
+**(4) 状态声明。** 本次调研**不**把任何 `[待核]` 改为 `[已核]`，不改 `[已核]` / `[取舍]` 标记，不改规则文字，不新增 / 重排规则编号；A 类只追加机制佐证锚。按本文 §11 与 :340，`[待核]` 的权威来源仍是本机导出数据或原版客户端。
+
 ---
 
 ## 14. 维护与补充流程（活文档）
@@ -356,3 +404,4 @@
 | 2026-11-14（再澄清） | 用户再澄清 1.0 范围：局域网联机含「真人 VS AI 敌人玩家」，AI 玩家全部功能属 1.0 必做（新增 R12.7 / §0.1 AI 玩家口径 / N1 改写）；「不做单机对战」收敛为仅不做纯本地单机对局形态。T1 / T2 由「待拍板」转「已拍板」：AI 保留、战争迷雾 / 隐身纳入 1.0（§10 去张力标注、§0.3 T2/T3）。新增 T5「AI × lockstep 接合」待确认项。按本文 §14 维护流程修订，规则编号未重排。 |
 | 2026-11-15 | 用户补充「操作快捷键 / 命令卡」缺口：新增 §13 `R13`（R13.1 命令卡 12 格与经典 / grid 布局、R13.2 通用命令键、R13.3 建造 / 训练两级 chords、R13.4 编队 / 子组 / 队列、R13.5 英雄 / 物品 / 商店 / 界面键、R13.6 复用 R1.4 可移动性过滤与 ADR 0002 确定性契约、R13.7 现状键位差距如实登记）；§0.1 补「操作快捷键口径」（属 S1 / S3 / S4 的操作层细化、不新增范围编号）；来源表补 3 行快捷键来源。按 §14 活文档流程：新增规则编号 `R13` 追加、既有 R1–R12 不重排；原 §13「来源与核实状态」改为无编号「附录」以让出 §13 章节号，§14 / §15 的编号、标题、既有行及外部引用（`CODEBUDDY.md` §9、`docs-owner.md`）保持不变，§15 仅追加本行记录。来源登记见来源表（仅名称、未逐锚核验）：通用键位按多源公开资料一致性标 `[已核]`（仅指规则性事实），具体绑定、各族第二键清单、S/H 口径差异与新增命令变体标 `[待核]` / `[取舍]`，一律以本机导出数据核对、不锁定不入库（ADR 0001 / ADR 0004）。 |
 | 2026-11-16 | 按 §14 第 2 条「不静默改规则」同步实现层约束放松：用户 2026-11-16 经 `AskUserQuestion` 明确拍板「只读暴露 speed」方案（change `runtime-entity-movability`，承接已知限制 B1——运行时 `Train` / `Build` 动态实体可移动性判定）。R1.4「实现要求」与 R13.6 第 2 / 3 条原字面禁令「MUST NOT 扩展 `WorldView` / `EntityView`、MUST NOT 用运行时 `speed`、`crates/w3-core/` 零改动」改写为**按实体来源分层的判据口径**：frame-0 装配实体沿用装配期 `UnitDef.speed_raw` 派生只读映射（权威；因 `CommandQueue::submit` 强制 `speed.max(1)`，建筑运行时视图 `speed > 0`、不可用视图 speed 区分），运行时动态实体用只读 `EntityView.speed == 0` 判不可移动、`> 0` 判可移动（内核 `complete_production` 用真实 `def.speed_raw`、建筑为 0），两条来源 MUST NOT 互相替代（frame-0 误用视图 speed 会误判建筑可移动、R1 bug 复发；运行时用装配映射则无条目）。只读 `EntityView.speed` 是投影内核已有权威 `UnitState.speed` 的只读视图字段：不新增权威状态字段 / 命令 / 事件、不进状态哈希 / 快照 / `first_difference()`，`SNAPSHOT_VERSION` 仍 3、命令排序键 / 状态哈希 / 快照口径 / golden hash 不变（ADR 0002）。放松的只是「实现层零改动 / 不扩展视图」这一约束，**不是** R1.4 规则语义、**不是** ADR 0002 确定性门禁；R1.4「不可移动实体 MUST NOT 生成 `Move`、MUST NOT 改变位置」「框选含建筑时 MUST 只为可移动单位生成 `Move`」与 R13.6 第 1 条「键盘 `M` / `A` 命令 MUST 复用 R1.4 过滤」原样保留；`[待核]` 数值口径不变、不冻结冒充原版。按 §14 活文档流程：只在 R1.4 / R13.6 现有条目内改写文字、不新增规则编号 / 章节，`R-x.y` 编号与 §13 / §14 / §15 / 附录章节号、标题及外部引用（`CODEBUDDY.md` §9、`docs-owner` 对「§14」「§15 变更记录」的引用）保持不变，§15 仅追加本行记录。 |
+| 2026-11-17 | 用户 2026-11-17 经 `AskUserQuestion` 拍板「追加锚 + 参考缺口节」：依据 `reference-researcher` 按 `UPSTREAM.md` T3 / T4 / T5 强制参考矩阵的只读对照报告（锚已抽查打开核实），附录「来源与核实状态」新增两个**无编号** `###` 小节「参考项目佐证锚」「参考缺口与防误用清单」（只读、仅锚机制、不锚数值 / 键位绑定，`WarsmashModEngine` AGPLv3 只借设计语义不复制代码，参考项目原创数值列入防误用清单），并在 R1.2 / R1.3 / R3.2 / R4.1 / R5.3 / R6.3 / R6.5 / R8.5 / R10.3 条目末尾各追加一句「参见附录」交叉引用注记。**不改**状态标记（`[待核]` 不改为 `[已核]`，`[已核]` / `[取舍]` / `[已核机制 / 待核数值]` 原样保留）、**不改**规则文字、**不新增 / 不重排** `R-x.y` 编号、不动 §0–§13 章节标题与条文、不动 §14 / §15 编号、标题、既有行及外部引用（`CODEBUDDY.md` §9、`docs-owner` 对「§14」「§15 变更记录」的引用）、不改附录来源表 15 个来源（仍「仅名称、未逐锚核验」）。按 §14 活文档流程，§15 仅追加本行、不改既有行。 |

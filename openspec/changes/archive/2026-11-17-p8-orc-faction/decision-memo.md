@@ -49,6 +49,15 @@
 - **P8.3–P8.5 / P9+ 后续 change** → 双族对抗与 AI 选族 / HUD / 五个深度玩法 / 不死暗夜各自单独 change、串行推进（P8.3 在两族 CPU 闭环都绿之后开）；本 change 不承接、不在此时排期细节。锚 `docs/roadmap/P8-human-orc-melee.md` §3 / §6。
 - **人工边界** → 本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀）；push / fetch / pull / clone 及任何远端同步人工独占（`CODEBUDDY.md §4 / §10`）。本轮成文不写 `crates/` 代码、不 commit、不改 `## 规格门` 以外的批准状态。
 
+## 归档说明（2026-11-17）
+
+- **触发**：用户 2026-11-17 本会话指令「我已执行 git push 完毕。GitHub Action 执行成功（run 44029882988）。现在请你归档并继续开发 P8.3 双族对抗」；证据形态为本会话用户消息（非仓库文件，由人工核对）。按 `CODEBUDDY.md` §9 在 CI 绿后归档。
+- **闭环证据链**：规格门 `status: approved` + fingerprint `836a4e93…`（未失配）；`critic` 规格门复核 blocker 0（3 条 residual 承接）；`critic` 代码门全清单（13 项）复核 blocker 0、可进入本地 commit（集成接线真实性 / 反向验证真 A-B 两处最高风险判为未重演，p9 首轮 B1 与 trivially-green 均未复发）；leader 独立改坏验红（`ORC_FARM speed 0→3` → `movability 23 passed; 8 failed`、恢复 → `31 passed; 0 failed`）；本地 commit `b26c8d1`；人工 push 后 CI `run 44029882988`（head_sha = `b26c8d1`）三 job 全 `success`（`verify (ubuntu-latest)` / `verify (windows-latest)` 的 `Run project gates` + `Source conventions`）。
+- **delta 合并去向**：新建主 spec `orc-faction`（5 requirement）、`unit-orders` 并入 1 条 ADDED Requirement「兽族新增实体沿用分层可移动性过滤并覆盖端到端一局」（→8）。归档前逐锚核验：p8-orc delta 无过时字面禁令，唯一含「MUST NOT 新增 `Player.race`」的 Requirement 是 ADR 0002 常设硬门禁（禁新增权威状态）、与已消解的主 `unit-orders/spec.md` 分层判据一致，归档后不引入矛盾。
+- **tasks 30/30**：全勾（4.5 代码门 / 4.6 本地 commit / 5.1 参考逐锚 / 5.2 许可证边界复核均由 `critic` 清单第 12 项结果与本次 commit 作证据），归档工具无 incomplete warning。
+- **显式豁免 / 承接项（如实保留、不冒充已解决、不扩范围）**：① 真窗口人工验收（真窗口 / GPU / egui overlay）全部「未执行 / 待补验」，沿用 `feedback` GUI 修复先自测再请人工验收与 P8.1 / `p9-command-hotkeys` 显式豁免先例；② 全部数值为合成原创 `[待核]`、以本机导出 SLK 核对不入库，「兽族更肉 / 更快 / 更低远程稳定度」为 `[取舍]` 相对大小、非经典事实；③ 运行时动态实体承接沿用已归档 `runtime-entity-movability`（本 change 未改 `unwrap_or`、未扩视图、未闭合 P8.0 B1）、运行时新实体「模型缺键回退」四面体占位；④ 参考缺口 G1–G5（含兽族特有 G5）仍 `[待核]`；⑤ GPU headless 间歇崩溃本轮未复现、不冒充永久修复；⑥ `design.md` 两条超长行（规格门 R3 residual）与「orc-faction spec 22 / 实测 21 Scenario」计数口径差（代码门 R3）属纯措辞 / 可读性、归档前可择机折行、不阻塞；⑦ P8.3 双族对抗与 AI 选族 / HUD（P8.4）/ P8.5 五个深度玩法 / 不死暗夜（P9+）/ 中文上屏由后续独立 change 承接。
+- **人工边界**：本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀）；push / fetch / pull / clone 及任何远端同步人工独占（`CODEBUDDY.md §4 / §10`）。归档后 active changes 清空，承接下一 change（P8.3 双族对抗）。
+
 ## 停止条件（追加阶段 / 归档前）
 
 1. C1–C8 逐条仍有证据锚、无一条被本轮改动证伪。

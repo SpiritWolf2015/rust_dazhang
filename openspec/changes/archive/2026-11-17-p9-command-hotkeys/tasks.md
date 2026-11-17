@@ -50,7 +50,7 @@
 - [x] 7.2 运行 `git diff -- crates/w3-core/` 确认为空（内核零 diff，C1）；验证：命令无输出；并用 `git status` 确认未改 `crates/w3-core/` / `tools/` / `.github/` / `CODEBUDDY.md` / `openspec/config.yaml` / `.codebuddy/agents/` / 主 `openspec/specs/` / `docs/`
 - [x] 7.3 运行 `cargo fmt --all`（写完自动排版）与 `cargo fmt --all -- --check`（提交前校验）、`python tools/check_encoding.py`、`python tools/check_source_conventions.py`、`git diff --check`（`CODEBUDDY.md` §2 / §3 / §9）；验证：全部通过、源码注释与提交信息描述中文 / 日志英文 / UTF-8 无 BOM / LF
 - [x] 7.4 运行 `openspec validate p9-command-hotkeys --strict` 确认 `is valid`、无新增 WARNING（`CODEBUDDY.md` §8）；验证：命令输出 `is valid`
-- [ ] 7.5 委派只读 `critic` 执行**代码门**全清单复审全部 diff（确定性零冲击 / 所有权 / 许可证 / 编码 / 资产入库 / 第 7·10 项四件套一致性 / 第 11 项③ 反向验证真 A-B / 第 12 项参考对照逐锚 / 第 13 项 `R-x.y`），结论回报前不冒充通过（`CODEBUDDY.md` §9 / `decision-memo.md` 待确认项）；验证：`critic` 报告 blocker 0、`decision-memo.md` 回填代码门结论
+- [x] 7.5 委派只读 `critic` 执行**代码门**全清单复审全部 diff（确定性零冲击 / 所有权 / 许可证 / 编码 / 资产入库 / 第 7·10 项四件套一致性 / 第 11 项③ 反向验证真 A-B / 第 12 项参考对照逐锚 / 第 13 项 `R-x.y`），结论回报前不冒充通过（`CODEBUDDY.md` §9 / `decision-memo.md` 待确认项）；验证：`critic` 报告 blocker 0、`decision-memo.md` 回填代码门结论
 - [x] 7.6 归档相关：确认 `openspec validate p9-command-hotkeys --strict`、`decision_memo_check()` / `spec_gate_check()` 两项机械校验为 True、指纹未失配（规格锁定未解锁）；验证：`python -B -c "import sys; sys.path.insert(0,'tools'); import verify_all as v; print(v.decision_memo_check()); print(v.spec_gate_check())"` 输出两个 True
 
 ## Workflow follow-up

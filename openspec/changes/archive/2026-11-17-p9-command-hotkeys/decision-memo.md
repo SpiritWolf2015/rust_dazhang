@@ -48,6 +48,15 @@
 - **`critic` 代码门待复核** → 规格门已由用户拍板批准，但**代码门（全清单，含第 7 / 10 项四件套一致性、第 11 项③ 反向验证真 A-B、第 12 项参考对照逐锚、第 13 项 `R-x.y`、确定性 / `w3-core` 零 diff）尚未执行**，由 apply 完成后委派只读 `critic` 复审全部 diff；结论（blocker / residual）回报前不冒充通过。锚 `CODEBUDDY.md` §9 / `tasks.md` 7.5。
 - **人工边界 / 归档** → 规格门 `status: approved`（等价批准、非 pending）；本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀），push / fetch / pull / clone 及任何远端同步人工独占（`CODEBUDDY.md` §4 / §10）；归档后须确认主 `openspec/specs/` 新增 `command-hotkeys` capability、`rts-command-hud` / `unit-orders` 各并入 ADDED Requirement。
 
+## 归档说明（2026-11-17）
+
+- **触发**：用户 2026-11-17 本会话指令「我已执行 git push 完毕…… 现在请你归档并继续开发下一步 P8.2 兽族」；证据形态为本会话用户消息（非仓库文件，由人工核对）。按 `CODEBUDDY.md` §9 在 CI 绿后归档。
+- **闭环证据链**：规格门 `status: approved` + fingerprint `f440971a…`（未失配）；`critic` 规格门复核 blocker 0；apply 代码门两轮（首轮真实 blocker B1 集成接线缺口已修：`ClientApp` 同源注入 + `AimPoint` 生产 + 3 条红转绿回归，二轮确认 B1 闭合、无新增 blocker、可 commit）；本地 commit `d507737`；人工 push 后 CI `run 44001768108`（head_sha = `d507737`）三 job 全 `success`（`verify (ubuntu-latest)` / `verify (windows-latest)` 的 `Run project gates` + `Source conventions`）。
+- **delta 合并去向**：新建主 spec `command-hotkeys`（10 requirement）、`rts-command-hud` 并入 1 条 ADDED Requirement（→7）、`unit-orders` 并入 1 条 ADDED Requirement（→7）。归档前逐锚核验：p9 两个 delta 的「MUST NOT 扩展视图 / 用运行时 `speed` 替代装配映射」措辞均带「已是只读视图字段」括注、且明确要求运行时用 `EntityView.speed == 0` 判据、两条来源不互替，与已消解的主 `unit-orders/spec.md` 分层判据一致，**不是** P8.0 阶段的过时全局禁令，归档后不重新引入矛盾（区别于 `runtime-entity-movability` 归档前需先消解主 spec 的那次）。
+- **tasks 30/30**：7.5「委派只读 `critic` 执行代码门」实际已完成（两轮、blocker 0、结论回填本纪要），据实勾上；复选框翻转经 `tools/verify_all.py::spec_artifact_fingerprint` 归一化、不影响指纹。无未完成任务，归档工具无 incomplete warning。
+- **显式豁免 / 承接项（如实保留、不冒充已解决、不扩范围）**：① 真窗口人工验收全部「未执行 / 待补验」（经典键手感、12 格布局、chords 定点、编队 `Tab`、`Shift` 队列），沿用 `feedback` GUI 修复先自测再请人工验收与 `2026-11-14-melee-playable-loop` / `2026-11-16-p8-human-faction` 显式豁免先例；② 物理 `Shift` 修饰键监听未接线、`A/S/H/B` 冲突字母物理绑定 / 相机改绑 / `F1`–`F9` 别名 `[待核 / 待用户拍板]`；③ `P` 巡逻 / `H` 保持位置 / attack-move 点地面途中交战属新增命令变体，由后续独立 change 按 ADR 0002 承接（C4 / D7 / `R13.6`）；④ grid / `CustomKeys` 支持程度待拍板、参考缺口 G1–G5 仍 `[待核]`；⑤ 运行时新实体命令卡随类型变化待 P8.4 承接、`derive_commands` 兼容投影属落点取舍；⑥ 具体经典键位字母 `[待核]` 合成原创、以本机导出 SLK 核对、不入库（C6）；⑦ 本机 GPU headless 间歇崩溃本轮未复现、不冒充永久修复。
+- **人工边界**：本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀）；push / fetch / pull / clone 及任何远端同步人工独占（`CODEBUDDY.md` §4 / §10）。归档后 active changes 清空，承接下一 change `p8-orc-faction`（P8.2 兽族完整化）。
+
 ## 停止条件（追加阶段 / 归档前）
 
 1. C1–C8 逐条仍有证据锚、无一条被本轮改动证伪（尤其 C1 golden hash 逐字节不变须以 `cargo test -p w3-core --test determinism` 命令输出实证、`git diff -- crates/w3-core/` 为空）。
@@ -85,7 +94,7 @@
 - 本 change 只新增**不冲突**物理键：`KeyM`→`Hotkey('m')`（移动瞄准）、`Escape`→`CancelMenu`、`Tab`→`CycleSubgroup`；经典 `A`/`S`/`H` 与 `WASD`/`H` 冲突字母的物理绑定、经典 `B` 开建造子菜单（现状 B 立即建造）、相机改绑方向键 / 边缘滚动 / 修饰键、经典键加修饰键、`F1`–`F9` 是否保留为可配置别名、Shift 修饰键监听，一律 `[待核 / 待用户拍板]`（R13.7 / D6 / §14 第 2 条「不静默改规则」），见代码中文注释，**不静默改键位、不静默改规则**。
 - 这些经典动作经「命令卡 12 格点击 + 新 `InputAction::Hotkey` 归一化」落地；**B1 集成缺口已修复、`ClientApp` 装配路径已接通并经回归验证**。原「输入翻译链与命令生成完整可用（CPU 回归覆盖）」表述被 `critic` 代码门证伪：原 22 项回归全部直接构造裸 `InputState`、绕过 `ClientApp` 装配与 winit 事件层，`entity_defs` 只接进 HUD 显示侧、`AimPoint` 无生产事件，真窗口功能根本不生效（详见「代码门结论」小节的 B1 修复登记）。冲突字母的最终物理绑定仍待人拍板；具体键位字母 `[待核]`、合成原创、不冻结进 `FrozenDefinitions`、不入库（C6 / ADR 0001 / ADR 0004）。
 
-## 代码门结论（待复核，不冒充通过）
+## 代码门结论（已完成：两轮复核、B1 闭合、blocker 0）
 
 - 规格门 `status: approved` 已由用户 2026-11-16 指令 + `AskUserQuestion` 方向拍板。只读 `critic` **代码门已执行**并抓到**真实 blocker B1（集成接线缺口）**，leader 独立核实属实；`client-owner` 已按「先写足针对性 CPU 回归、把游戏做对」修代码闭合（不降级登记、不改四件套正文、不解锁规格门）。代码门关闭仍待 leader 复核，真窗口人工验收未执行前不冒充通过。
 - **B1 根因（两个真值源分叉 + `AimPoint` 无生产事件）**：`ClientApp::with_entity_defs` 原只写 HUD 显示侧 `self.entity_defs`、未注入 `InputState` 命令翻译侧 —— `InputState::refresh_card` 用恒空 `entity_defs` 求 kinds → `primary_card(&[])` → `CardId::Main` 恒定，而 HUD `derive_command_card` 用已注入的 `entity_defs` 正确渲染 Worker/Producer 卡，导致点 `g`/`b`/`t` 静默不产命令、`B→A` chords 打不开、`Tab` 子组 no-op；`InputAction::AimPoint` 只在 `InputState::apply` 消费分支出现、`src`/`examples` 无生产者，键盘 `M`/`A` 瞄准后左键恒 `SelectStart`/`SelectEnd`，真窗口不产 `Move`/`Attack`。原 `tests/command_hotkeys.rs` 22 项全部直接构造裸 `InputState`、绕过 `ClientApp` 装配与 winit 事件层，故「全绿」是假象。

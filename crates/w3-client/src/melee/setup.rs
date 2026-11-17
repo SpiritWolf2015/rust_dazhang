@@ -3,6 +3,12 @@
 //! 全部坐标由 `SimFixed::from_int` 从整数常量冻结；实体 ID 按
 //! `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定顺序分配，因此脚本
 //! 可以在装配期确定每个实体的 `EntityId`，供 AI 命令源与呈现层引用。
+//!
+//! P8.3 双族对抗（design D1）：本地 / AI 两个席位各自带独立的种族参数，
+//! 经 `with_races` 装配；`with_race` 保留为 `with_races(race,
+//! race.opponent())` 兼容别名。种族只停在本层 `EntityId → DefId` 关联与
+//! 新类别绑定，MUST NOT 写入 `w3-core` 的 `Player` / `RtsMatch`
+//! （不新增权威状态字段），也 MUST NOT 改动任何 `Spawn` 命令字节。
 
 use std::collections::BTreeMap;
 
@@ -154,20 +160,38 @@ pub struct MeleeSetup {
     /// 不携带 `DefId`，故种族维度只停在这一层，MUST NOT 进入权威状态 /
     /// 状态哈希 / 快照；两族装配的开局命令字节完全一致。
     pub def_ids: BTreeMap<u64, DefId>,
-    /// 新类别的装配期绑定（槽位 → 分段 `DefId`，P8.1 / P8.2 design D4）。
+    /// **本地席位**的新类别装配绑定（槽位 → 分段 `DefId`）。
     ///
+    /// P8.3 起 `category_def_ids` 字段与 [`MeleeSetup::category_def_ids`]
+    /// 访问器保留为**本地份别名**（兼容既有验收与退化注入点 ≥10 处），
+    /// 由 `local_race.category_def_ids()` 派生；AI 席位另见
+    /// [`MeleeSetup::ai_category_def_ids`]。本表与 AI 份 MUST NOT 串用。
     /// `CommandKind::Spawn` 不含 `DefId`，frame-0 静态集合只有
     /// 主城 / 农民 / 资源点，故新增六类不进 `def_ids`、不改任何 `Spawn`
-    /// 命令字节；它们只在装配层按 [`Race::category_def_ids`] 记录为
-    /// 只读查表，供 AI 脚本选训练 / 施法 / 研发目标与可移动性派生。
-    /// P8.2 把兽族六类从占位替换为真实 `2xx` 常量后，本绑定随
-    /// `Race::category_def_ids()` 自动跟随，无需改动装配逻辑。
+    /// 命令字节；本地验收 / `category_movability` 用本份，AI 脚本用 AI 份。
     /// 这是表现层专属数据，MUST NOT 进入权威状态 / 哈希 / 快照；
     /// 运行时 `Train` / `Build` 产生的新实体不在此表（P8.0 已知限制 B1，
     /// 本 change 不擅自闭合、不改 `unwrap_or` 语义、不扩展视图）。
     pub category_def_ids: BTreeMap<u64, DefId>,
-    /// 本局本地玩家所选种族（定义层参数，回落人族段）。
+    /// **AI 席位**的新类别装配绑定（槽位 → 分段 `DefId`，design D2）。
+    ///
+    /// 由 `ai_race.category_def_ids()` 派生，供 `AiScript::new` 取训练 /
+    /// 施法 / 研发目标，使 AI 命令的 `DefId` 落在 AI 自身种族段（C3）。
+    /// 异族组合两份互不相交、同族组合两份段位一致；同为表现层专属，
+    /// MUST NOT 进入权威状态 / 哈希 / 快照。
+    pub ai_category_def_ids: BTreeMap<u64, DefId>,
+    /// 本局本地玩家所选种族（定义层参数，回落人族段；本地族别名）。
+    ///
+    /// P8.3 保留字段名与含义不变（既有 `.race` 断言不破坏），仍是
+    /// `with_races` 的 `local_race` 入参，MUST NOT 与 AI 族混淆。
     pub race: Race,
+    /// 本局 AI 对手所选种族（**装配层只读**字段，design D1）。
+    ///
+    /// 与 `race`（本地族）解耦为两个独立参数，使 2×2 四组合可装配。
+    /// 只用于选择 AI 席位 `Spawn` 关联的 `DefId` 段与 AI 脚本查表，
+    /// MUST NOT 写入 `w3-core` 的 `Player` / `RtsMatch`、不进状态哈希 /
+    /// 快照（不新增权威状态字段）；`with_race` 别名回落 `race.opponent()`。
+    pub ai_race: Race,
     pub local_hall: EntityId,
     pub ai_hall: EntityId,
     pub local_peasants: Vec<EntityId>,
@@ -240,26 +264,37 @@ impl MeleeSetup {
     /// 构造默认开局：回落人族段（本地人族、AI 兽族），既有入口行为不变。
     ///
     /// 装配层 `def_ids` 的段位差异不影响任何 `Spawn` 命令字节，故权威状态
-    /// 哈希、快照与改动前一致（design D2 / ADR 0002）。
+    /// 哈希、快照与改动前一致（design D2 / ADR 0002）。P8.3 起等价于
+    /// `with_races(Race::Human, Race::Orc)`，逐字节行为不变。
     pub fn new() -> Self {
         Self::with_race(Race::Human)
     }
 
-    /// 按种族参数构造对称开局：双方各一座主城、三名农民、一处金矿与一片
-    /// 树林；本地玩家用 `race` 段、AI 对手用 `race.opponent()` 段，中立
-    /// 资源固定用 `9xx` 段（design D2 定义层种族分段）。
-    ///
-    /// 主城落在真实 Echo Isles 的两个 sloc（见 [`LOCAL_START`] / [`AI_START`]），
-    /// 农民朝地图中心方向聚在主城前方、金矿与树林在侧后方，全部落在各自陆块
-    /// 的地面上。主城相距约 155 世界单位，处于合成士兵经移动后的攻城射程内，
-    /// 使一局可在合理帧数内分出胜负。坐标全为编译期整数常量；种族参数只
-    /// 写入表现层 `def_ids`，MUST NOT 新增权威状态字段或改动 `Spawn` 初值。
+    /// 兼容别名：`with_race(race)` 严格等于 `with_races(race,
+    /// race.opponent())`（design D1）。既有 `MeleeSetup::new()` /
+    /// `with_race` 入口、两族基线 / 回落测试逐字节不变；删除本别名或
+    /// 改写回落语义会令既有回落基线测试失败（tasks 6.3 / C5）。
     pub fn with_race(race: Race) -> Self {
+        Self::with_races(race, race.opponent())
+    }
+
+    /// 双族独立参数装配：双方各一座主城、三名农民、一处金矿与一片树林。
+    /// 本地席位用 `local_race` 段、AI 席位用 `ai_race` 段，中立资源恒
+    /// `9xx` 段（design D1 / D2 定义层种族分段，R2 四族不对称）。
+    ///
+    /// 两个参数彼此独立，故 2×2 四组合（人vs人 / 人vs兽 / 兽vs人 /
+    /// 兽vs兽）都能装配；`race` 字段继续作本地族别名、`ai_race` 字段
+    /// 记录 AI 族。主城落在真实 Echo Isles 的两个 sloc（见
+    /// [`LOCAL_START`] / [`AI_START`]），农民朝地图中心方向聚在主城前方、
+    /// 金矿与树林在侧后方，全部落在各自陆块的地面上。主城相距约 155
+    /// 世界单位，处于合成士兵经移动后的攻城射程内，使一局可在合理帧数
+    /// 内分出胜负。坐标全为编译期整数常量；种族参数只写入装配层
+    /// `def_ids` 与两份新类别绑定，MUST NOT 新增权威状态字段或改动
+    /// `Spawn` 初值（四组合装配的 `Spawn` 字节逐字节一致）。
+    pub fn with_races(local_race: Race, ai_race: Race) -> Self {
         let mut b = Builder::new();
         let local = opening_layout(LOCAL_START, 1, LOCAL_SPREAD);
         let ai = opening_layout(AI_START, -1, AI_SPREAD);
-        let local_race = race;
-        let ai_race = race.opponent();
 
         // 本地玩家（player 1）：ID 1..=6。
         let local_hall = b.spawn(
@@ -429,8 +464,12 @@ impl MeleeSetup {
             gameplay_commands,
             kinds: b.kinds,
             def_ids: b.def_ids,
+            // 本地份：由 local_race 派生，作 `category_def_ids()` 别名。
             category_def_ids: local_race.category_def_ids(),
-            race,
+            // AI 份：由 ai_race 派生，仅供 `AiScript::new` 查表（C3）。
+            ai_category_def_ids: ai_race.category_def_ids(),
+            race: local_race,
+            ai_race,
             local_hall,
             ai_hall,
             local_peasants,
@@ -457,9 +496,35 @@ impl MeleeSetup {
         derive_movability(defs, &self.category_def_ids)
     }
 
-    /// 只读新增类别装配绑定（槽位 → `DefId`），供验收核对段位与唯一性。
+    /// 只读**本地份**新增类别装配绑定（槽位 → `DefId`），作兼容别名。
+    ///
+    /// 供本地验收（段位 / 唯一性 / 退化注入）与 `category_movability`
+    /// 使用；P8.3 起 `AiScript::new` 改用 [`MeleeSetup::ai_category_def_ids`]，
+    /// 两份 MUST NOT 串用。
     pub fn category_def_ids(&self) -> &BTreeMap<u64, DefId> {
         &self.category_def_ids
+    }
+
+    /// 只读**AI 份**新增类别装配绑定（槽位 → `DefId`，design D2）。
+    ///
+    /// `AiScript::new` 经此查表取训练 / 施法 / 研发目标，DefId 落在
+    /// `ai_race` 段；异族组合与本地份互不相交、同族组合段位一致。
+    pub fn ai_category_def_ids(&self) -> &BTreeMap<u64, DefId> {
+        &self.ai_category_def_ids
+    }
+
+    /// 按种族只读查表：返回该种族对应的新类别绑定。
+    ///
+    /// 本地族（`race`）返回本地份、AI 族（`ai_race`）返回 AI 份。同族
+    /// 组合两份内容一致，此时按 `race` 优先返回本地份；异族组合按入参
+    /// 精确命中对应席位。装配层只读数据，MUST NOT 进权威状态 / 哈希 /
+    /// 快照。
+    pub fn category_def_ids_for(&self, race: Race) -> &BTreeMap<u64, DefId> {
+        if race == self.race {
+            &self.category_def_ids
+        } else {
+            &self.ai_category_def_ids
+        }
     }
 
     /// 只读分段定义关联（实体 ID → `DefId`），供验收核对段位。
@@ -894,6 +959,273 @@ mod tests {
             if let CommandKind::Spawn { speed, .. } = command.kind {
                 assert!(speed.raw() > 0, "reason=runtime_speed_is_always_positive");
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // P8.3 双族对抗（design D1 / D2 / tasks 1.x / 2.2 / 6.2 / 6.3）
+    // -----------------------------------------------------------------------
+
+    /// 四组合（本地族, AI 族）：人vs人 / 人vs兽 / 兽vs人 / 兽vs兽。
+    const COMBINATIONS: [(Race, Race); 4] = [
+        (Race::Human, Race::Human),
+        (Race::Human, Race::Orc),
+        (Race::Orc, Race::Human),
+        (Race::Orc, Race::Orc),
+    ];
+
+    /// `DefId` 是否落在给定种族的 `units` 段（人族 1xx / 兽族 2xx）。
+    fn in_race_segment(id: DefId, race: Race) -> bool {
+        match race {
+            Race::Human => (100..200).contains(&id),
+            Race::Orc => (200..300).contains(&id),
+        }
+    }
+
+    /// 逐字段比对两份装配层数据是否逐字节一致（装配层只读，无权威状态）。
+    fn setup_assembly_eq(a: &MeleeSetup, b: &MeleeSetup) -> bool {
+        a.commands == b.commands
+            && a.gameplay_commands == b.gameplay_commands
+            && a.kinds == b.kinds
+            && a.def_ids == b.def_ids
+            && a.category_def_ids == b.category_def_ids
+            && a.ai_category_def_ids == b.ai_category_def_ids
+            && a.race == b.race
+            && a.ai_race == b.ai_race
+            && a.local_hall == b.local_hall
+            && a.ai_hall == b.ai_hall
+            && a.local_peasants == b.local_peasants
+            && a.ai_peasants == b.ai_peasants
+            && a.local_mine == b.local_mine
+            && a.ai_mine == b.ai_mine
+    }
+
+    /// 四组合装配：本地 / AI 席位段位正确、中立资源恒 9xx、同族组合双方
+    /// 段位一致、四组合 `Spawn` / `gameplay_commands` / `kinds` 字节一致
+    /// （design D1 / C2 / `CommandKind::Spawn` 不含 DefId）。
+    #[test]
+    fn with_races_assembles_four_combinations_with_segmented_def_ids() {
+        let baseline = MeleeSetup::new();
+        for (local, ai) in COMBINATIONS {
+            let setup = MeleeSetup::with_races(local, ai);
+            assert_eq!(setup.race, local, "reason=local_race_alias local={local:?}");
+            assert_eq!(setup.ai_race, ai, "reason=ai_race_field ai={ai:?}");
+            assert_eq!(setup.commands.len(), 12, "reason=opening_spawn_count");
+            assert_eq!(setup.def_ids.len(), 12, "reason=all_entities_have_def_id");
+
+            // 本地席位主城（1）与农民（2,3,4）落本地族段。
+            for id in [1u64, 2, 3, 4] {
+                let def_id = *setup.def_ids.get(&id).expect("missing local def id");
+                assert!(
+                    in_race_segment(def_id, local),
+                    "reason=local_seat_in_local_segment id={id} def={def_id} local={local:?}"
+                );
+            }
+            // AI 席位主城（7）与农民（8,9,10）落 AI 族段。
+            for id in [7u64, 8, 9, 10] {
+                let def_id = *setup.def_ids.get(&id).expect("missing ai def id");
+                assert!(
+                    in_race_segment(def_id, ai),
+                    "reason=ai_seat_in_ai_segment id={id} def={def_id} ai={ai:?}"
+                );
+            }
+            // 中立资源（5,6,11,12）恒 9xx，与两族段都不冲突。
+            for id in [5u64, 6, 11, 12] {
+                let def_id = *setup.def_ids.get(&id).expect("missing neutral def id");
+                assert!(
+                    (900..1000).contains(&def_id),
+                    "reason=neutral_resource_in_9xx id={id} def={def_id}"
+                );
+            }
+            // 同族组合双方段位一致（本地 / AI 席位 def_ids 相等）。
+            if local == ai {
+                for (local_id, ai_id) in [(1u64, 7u64), (2, 8), (3, 9), (4, 10)] {
+                    assert_eq!(
+                        setup.def_ids.get(&local_id),
+                        setup.def_ids.get(&ai_id),
+                        "reason=same_race_seats_share_segment local={local:?}"
+                    );
+                }
+            }
+            // 四组合权威命令字节与基线逐字节一致（种族只停装配层）。
+            assert_eq!(
+                setup.commands, baseline.commands,
+                "reason=spawn_bytes_identical"
+            );
+            assert_eq!(
+                setup.gameplay_commands, baseline.gameplay_commands,
+                "reason=opening_gameplay_bytes_identical"
+            );
+            assert_eq!(setup.kinds, baseline.kinds, "reason=kinds_bytes_identical");
+        }
+    }
+
+    /// `with_race(race)` 兼容别名严格等于 `with_races(race,
+    /// race.opponent())`；`new()` 仍为「本地人族 / AI 兽族」（design D1 / C2）。
+    #[test]
+    fn with_race_alias_matches_dual_entry_and_new_keeps_default() {
+        for race in [Race::Human, Race::Orc] {
+            let alias = MeleeSetup::with_race(race);
+            let dual = MeleeSetup::with_races(race, race.opponent());
+            assert!(
+                setup_assembly_eq(&alias, &dual),
+                "reason=with_race_alias_matches_dual race={race:?}"
+            );
+            // 回落基线证据：别名不改动 Spawn 字节 / kinds。
+            assert_eq!(alias.commands, dual.commands, "reason=alias_spawn_bytes");
+            assert_eq!(alias.kinds, dual.kinds, "reason=alias_kinds_bytes");
+        }
+        let default = MeleeSetup::new();
+        assert_eq!(default.race, Race::Human, "reason=default_local_human");
+        assert_eq!(default.ai_race, Race::Orc, "reason=default_ai_orc");
+        assert!(
+            setup_assembly_eq(&default, &MeleeSetup::with_races(Race::Human, Race::Orc)),
+            "reason=new_equals_with_races_human_orc"
+        );
+    }
+
+    /// 本地 / AI 两份 `category_def_ids` 区分：本地份落本地族段、AI 份落
+    /// AI 族段；异族组合互不相交、同族组合两份相等；查表与
+    /// `category_movability` 都取本地份（design D2 / tasks 2.2）。
+    #[test]
+    fn category_bindings_are_split_into_local_and_ai_copies() {
+        let defs = crate::melee::defs::synthetic_definitions();
+        for (local, ai) in COMBINATIONS {
+            let setup = MeleeSetup::with_races(local, ai);
+            let local_copy = setup.category_def_ids();
+            let ai_copy = setup.ai_category_def_ids();
+            assert_eq!(local_copy.len(), 6, "reason=six_local_categories");
+            assert_eq!(ai_copy.len(), 6, "reason=six_ai_categories");
+            assert!(
+                local_copy.values().all(|&id| in_race_segment(id, local)),
+                "reason=local_copy_in_local_segment local={local:?}"
+            );
+            assert!(
+                ai_copy.values().all(|&id| in_race_segment(id, ai)),
+                "reason=ai_copy_in_ai_segment ai={ai:?}"
+            );
+            // 兼容别名：`category_def_ids()` 仍是本地份。
+            assert_eq!(setup.category_def_ids(), local_copy, "reason=local_alias");
+            // 按种族查表：本地族命中本地份、AI 族命中 AI 份（异族时）。
+            assert_eq!(
+                setup.category_def_ids_for(local),
+                local_copy,
+                "reason=for_local_returns_local_copy"
+            );
+            if local != ai {
+                assert_eq!(
+                    setup.category_def_ids_for(ai),
+                    ai_copy,
+                    "reason=for_ai_returns_ai_copy"
+                );
+                let local_set: std::collections::BTreeSet<_> =
+                    local_copy.values().copied().collect();
+                let ai_set: std::collections::BTreeSet<_> = ai_copy.values().copied().collect();
+                assert!(
+                    local_set.is_disjoint(&ai_set),
+                    "reason=distinct_race_copies_disjoint"
+                );
+            } else {
+                assert_eq!(local_copy, ai_copy, "reason=same_race_copies_equal");
+            }
+            // 可移动性派生仍只读本地份（R1.4 / R13.6 分层判据沿用）。
+            let map = setup.category_movability(&defs);
+            assert_eq!(map.len(), 6, "reason=one_entry_per_local_category");
+        }
+    }
+
+    /// 被反向验证的段位断言：AI 席位主城 / 农民的 `def_ids` 全部落在
+    /// `ai_race` 段（四组合装配的正确性判据，design D1 / tasks 6.2）。
+    fn ai_seat_def_ids_in_segment(setup: &MeleeSetup, ai_race: Race) -> bool {
+        [
+            setup.def_ids.get(&7),
+            setup.def_ids.get(&8),
+            setup.def_ids.get(&9),
+            setup.def_ids.get(&10),
+        ]
+        .into_iter()
+        .all(|slot| slot.is_some_and(|&id| in_race_segment(id, ai_race)))
+    }
+
+    /// 退化装配（缺陷态，tasks 6.2）：把 `with_races(local, ai)` 退化为
+    /// 单参数 `opponent()` 语义——忽略 `ai`，恒取 `local.opponent()`。
+    /// 仍经真实 [`MeleeSetup::with_races`] 装配路径，不是旁路模拟。
+    fn degenerate_opponent_assembly(local: Race, _ai: Race) -> MeleeSetup {
+        MeleeSetup::with_races(local, local.opponent())
+    }
+
+    /// 反向验证·修复态（tasks 6.2）：正式双参数装配四组合全通过段位断言。
+    #[test]
+    fn reverse_validation_dual_race_formal_passes_seat_assertion() {
+        for (local, ai) in COMBINATIONS {
+            let setup = MeleeSetup::with_races(local, ai);
+            assert!(
+                ai_seat_def_ids_in_segment(&setup, ai),
+                "reason=formal_dual_race_passes local={local:?} ai={ai:?}"
+            );
+        }
+    }
+
+    /// 反向验证·缺陷态（tasks 6.2）：退化为单参数 `opponent()` 时，
+    /// 「人vs人 / 兽vs兽」两组的 AI 席位段位断言必失败；正式实现仍通过
+    /// （元断言防退化）。异族组合恰好不暴露该缺陷，正是同族组合判据的价值。
+    #[test]
+    fn reverse_validation_opponent_degenerate_fails_same_race_seat_assertion() {
+        for (local, ai) in [(Race::Human, Race::Human), (Race::Orc, Race::Orc)] {
+            let degenerate = degenerate_opponent_assembly(local, ai);
+            assert!(
+                !ai_seat_def_ids_in_segment(&degenerate, ai),
+                "reason=opponent_degenerate_fails local={local:?} ai={ai:?}"
+            );
+            let formal = MeleeSetup::with_races(local, ai);
+            assert!(
+                ai_seat_def_ids_in_segment(&formal, ai),
+                "reason=formal_still_passes local={local:?} ai={ai:?}"
+            );
+        }
+    }
+
+    /// 被反向验证的回落基线断言：`with_race(race)` 候选与
+    /// `with_races(race, race.opponent())` 的装配数据逐字段一致
+    /// （`race_fallback_matches_human_segment_in_full_match` /
+    /// `race_does_not_change_authoritative_spawn_commands` 的装配层等价）。
+    fn alias_is_consistent(candidate: &MeleeSetup, race: Race) -> bool {
+        setup_assembly_eq(candidate, &MeleeSetup::with_races(race, race.opponent()))
+    }
+
+    /// 反向验证·修复态（tasks 6.3）：`with_race` 兼容别名与双参数入口一致，
+    /// 既有回落基线 / Spawn 字节不变测试保持成立。
+    #[test]
+    fn reverse_validation_alias_formal_passes_fallback_assertion() {
+        for race in [Race::Human, Race::Orc] {
+            assert!(
+                alias_is_consistent(&MeleeSetup::with_race(race), race),
+                "reason=formal_alias_consistent race={race:?}"
+            );
+        }
+        // 既有回落基线证据：`new()` 与 `with_race(Human)` 逐字节一致。
+        assert!(
+            setup_assembly_eq(&MeleeSetup::new(), &MeleeSetup::with_race(Race::Human)),
+            "reason=fallback_matches_human_segment"
+        );
+    }
+
+    /// 反向验证·缺陷态（tasks 6.3）：删除别名 / 令别名不再等于
+    /// `with_races(race, race.opponent())`（此处退化为 `with_races(race, race)`）
+    /// 后回落基线断言必失败；正式别名仍通过（元断言）。退化候选经真实
+    /// `with_races` 路径构造，非旁路模拟。
+    #[test]
+    fn reverse_validation_alias_degenerate_fails_fallback_assertion() {
+        for race in [Race::Human, Race::Orc] {
+            let degenerate = MeleeSetup::with_races(race, race);
+            assert!(
+                !alias_is_consistent(&degenerate, race),
+                "reason=alias_degenerate_fails race={race:?}"
+            );
+            assert!(
+                alias_is_consistent(&MeleeSetup::with_race(race), race),
+                "reason=formal_alias_still_passes race={race:?}"
+            );
         }
     }
 }

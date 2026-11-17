@@ -6,11 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_client::melee::defs::{
-    BARRACKS, CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED, CATEGORY_SIEGE,
-    CATEGORY_SMITHY, HERO_ABILITY, HUMAN_ALTAR, HUMAN_FARM, HUMAN_HERO, HUMAN_RANGED, HUMAN_SIEGE,
-    HUMAN_SMITHY, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_HERO_ABILITY, ORC_RANGED,
-    ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER, ORC_UPGRADE_ARMOR, ORC_UPGRADE_WEAPONS, SOLDIER,
-    UPGRADE_ARMOR, UPGRADE_WEAPONS,
+    ABILITY, BARRACKS, CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_HERO, CATEGORY_RANGED,
+    CATEGORY_SIEGE, CATEGORY_SMITHY, HERO_ABILITY, HUMAN_ALTAR, HUMAN_FARM, HUMAN_HERO,
+    HUMAN_RANGED, HUMAN_SIEGE, HUMAN_SMITHY, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO,
+    ORC_HERO_ABILITY, ORC_RANGED, ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER, ORC_UPGRADE_ARMOR,
+    ORC_UPGRADE_WEAPONS, SOLDIER, UPGRADE_ARMOR, UPGRADE_WEAPONS,
 };
 use w3_client::melee::{
     AI_PLAYER, AiScript, LOCAL_PLAYER, MeleeDriver, MeleeSetup, Race, synthetic_definitions,
@@ -18,7 +18,7 @@ use w3_client::melee::{
 };
 use w3_client::{
     ClientCommand, FixedStepClient, LOGIC_FPS, MovabilityMap, StepDriver, TICKS_PER_LOGIC_FRAME,
-    TICKS_PER_SECOND,
+    TICKS_PER_SECOND, filter_movable,
 };
 use w3_core::{
     Command, CommandKind, DefId, EffectKind, EntityId, Frame, FrozenDefinitions, GameplayCommand,
@@ -668,6 +668,8 @@ fn production_defs(snapshot: &Snapshot, producer: EntityId) -> Vec<DefId> {
 }
 
 /// 人族新类别装配绑定；显式核对六类槽位仍指向 `1xx` 新定义。
+/// P8.3：`category_def_ids()` 保留为**本地份别名**，供本地验收取用；
+/// AI 脚本另有 `ai_category_def_ids()`（AI 份），两者 MUST NOT 串用。
 fn human_catalog(setup: &MeleeSetup) -> BTreeMap<u64, DefId> {
     assert_eq!(
         setup.race,
@@ -695,6 +697,8 @@ fn human_catalog(setup: &MeleeSetup) -> BTreeMap<u64, DefId> {
 
 /// P8.2 兽族新类别装配绑定；显式核对六类槽位仍指向 `2xx` 真实新常量
 /// （P8.2 已替换 `ORC_SOLDIER` / `ORC_BARRACKS` 占位）。
+/// P8.3：`category_def_ids()` 保留为**本地份别名**，供本地验收取用；
+/// AI 脚本另有 `ai_category_def_ids()`（AI 份），两者 MUST NOT 串用。
 fn orc_catalog(setup: &MeleeSetup) -> BTreeMap<u64, DefId> {
     assert_eq!(
         setup.race,
@@ -1764,6 +1768,9 @@ fn reverse_validation_orc_hero_mana_degenerate_cast_fails_the_same_assertion() {
 /// `orc_catalog` 断言在「兽族六个新类别仍回落 `ORC_SOLDIER` /
 /// `ORC_BARRACKS` 占位」的退化装配绑定下必然失败，正式绑定通过。
 /// 退化绑定经真实 `MeleeSetup` 字段注入、喂给同一断言函数（元断言）。
+/// P8.3：本注入点显式指向**本地份** `category_def_ids`——`orc_catalog_holds`
+/// 是本地验收断言、读 `setup.category_def_ids()`（本地份别名）；AI 脚本另有
+/// AI 份 `ai_category_def_ids`，两处退化注入点各指向自身断言读取的正确份。
 #[test]
 fn reverse_validation_orc_catalog_placeholders_fail_end_to_end_assertion() {
     let formal = MeleeSetup::with_race(Race::Orc);
@@ -1868,4 +1875,428 @@ fn orc_replay_is_refresh_rate_independent_frame_by_frame() {
         at_60.windows(2).any(|pair| pair[0].1 != pair[1].1),
         "reason=orc_simulation_actually_advanced"
     );
+}
+
+// ---------------------------------------------------------------------------
+// P8.3 双族对抗四组合端到端（design D1 / D2 / D3 / tasks 3.x / 6.1 / C4）
+//
+// 验收口径（关键）：只断言「同一组合两实例逐帧 compute_state_hash() /
+// capture_snapshot() 字节一致」；MUST NOT 断言四组合之间哈希数值相等、
+// 也 MUST NOT 断言与改动前旧基线数值相等（AI 命令落各自 ai_race 段，
+// 跨组合字节本就不同；本 change 不加新定义，旧基线仍由既有测试单独守护）。
+// ---------------------------------------------------------------------------
+
+/// 四组合（本地族, AI 族）：人vs人 / 人vs兽 / 兽vs人 / 兽vs兽。
+const DUAL_COMBINATIONS: [(Race, Race); 4] = [
+    (Race::Human, Race::Human),
+    (Race::Human, Race::Orc),
+    (Race::Orc, Race::Human),
+    (Race::Orc, Race::Orc),
+];
+
+/// 某族 `units` 段位（人族 1xx / 兽族 2xx / 中立资源 9xx）。
+fn dual_race_segment(race: Race) -> std::ops::Range<DefId> {
+    match race {
+        Race::Human => 100..200,
+        Race::Orc => 200..300,
+    }
+}
+
+/// 只读断言：四组合装配的 `def_ids` 按席位落各自族段——本地主城（1）/
+/// 农民（2,3,4）落 `local_race` 段，AI 主城（7）/ 农民（8,9,10）落
+/// `ai_race` 段，中立资源（5,6,11,12）恒 `9xx`；并被 ② 反向验证复用。
+fn seats_land_in_race_segments(setup: &MeleeSetup, local: Race, ai: Race) -> bool {
+    let local_segment = dual_race_segment(local);
+    let ai_segment = dual_race_segment(ai);
+    let neutral: std::ops::Range<DefId> = 900..1000;
+    for id in [1u64, 2, 3, 4] {
+        if !setup
+            .def_ids
+            .get(&id)
+            .is_some_and(|def_id| local_segment.contains(def_id))
+        {
+            return false;
+        }
+    }
+    for id in [7u64, 8, 9, 10] {
+        if !setup
+            .def_ids
+            .get(&id)
+            .is_some_and(|def_id| ai_segment.contains(def_id))
+        {
+            return false;
+        }
+    }
+    for id in [5u64, 6, 11, 12] {
+        if !setup
+            .def_ids
+            .get(&id)
+            .is_some_and(|def_id| neutral.contains(def_id))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// 被四组合正向验收与 ① 反向验证共用的布尔断言：`AiScript::new` 产出的
+/// 训练 / 施法 / 研发目标 `DefId` 落在 `ai_race` 段 / 按族分派集合，
+/// MUST NOT 泄漏本地或对家族段 ID；两族共用的基线 `SOLDIER`（1）与骚扰
+/// 技能 `ABILITY`（10）单独放行，三类命令都须出现以避免平凡通过。
+fn ai_commands_land_in_ai_race(setup: &MeleeSetup, ai_race: Race) -> bool {
+    let catalog = ai_race.category_def_ids();
+    let hero_ability = ai_race.hero_ability();
+    let weapons_upgrade = ai_race.weapons_upgrade();
+    let armor_upgrade = ai_race.armor_upgrade();
+    let segment = dual_race_segment(ai_race);
+    let mut saw_train = false;
+    let mut saw_cast = false;
+    let mut saw_research = false;
+    for command in AiScript::new(setup, 1200).commands {
+        if command.player_id != AI_PLAYER {
+            return false;
+        }
+        match command.kind {
+            GameplayCommandKind::Train { unit_def, .. } => {
+                if unit_def == SOLDIER {
+                    continue;
+                }
+                if !segment.contains(&unit_def) || !catalog.values().any(|&id| id == unit_def) {
+                    return false;
+                }
+                saw_train = true;
+            }
+            GameplayCommandKind::Cast { ability, .. } => {
+                if ability == ABILITY {
+                    continue;
+                }
+                if ability != hero_ability {
+                    return false;
+                }
+                saw_cast = true;
+            }
+            GameplayCommandKind::Research { upgrade } => {
+                if upgrade != weapons_upgrade && upgrade != armor_upgrade {
+                    return false;
+                }
+                saw_research = true;
+            }
+            _ => {}
+        }
+    }
+    saw_train && saw_cast && saw_research
+}
+
+/// 按本地族复用既有完整一局脚本（采集 → 建造 → 训练 → 英雄施法 → 研发 →
+/// 战斗 → 摧毁敌方主城结算 → 重开）：两族函数均以 `setup.race`（本地族
+/// 别名）取本地份绑定与技能 / 升级 ID，AI 外部脚本由 `build_driver` 按
+/// `setup.ai_race` 注入。四组合差别只在装配层与 AI 命令，不进内核。
+fn play_dual_faction_full_match(setup: &MeleeSetup) -> FullMatchTrace {
+    match setup.race {
+        Race::Human => play_human_full_match(setup),
+        Race::Orc => play_orc_full_match(setup),
+    }
+}
+
+/// 四组合 CPU 端到端一局与确定性闭环（design D3 / C4 / tasks 3.x）：
+/// 各组合装配并打完一局，胜负只结算一次、重开无残留、快照仍 v3；
+/// 只断言组内两实例逐帧哈希 / 快照字节一致，不断言跨组合或旧基线相等。
+#[test]
+fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
+    assert_eq!(SNAPSHOT_VERSION, 3, "reason=snapshot_version_unchanged");
+    for (local, ai) in DUAL_COMBINATIONS {
+        let setup = MeleeSetup::with_races(local, ai);
+        assert_eq!(setup.race, local, "reason=local_race_alias local={local:?}");
+        assert_eq!(setup.ai_race, ai, "reason=ai_race_field ai={ai:?}");
+        assert!(
+            seats_land_in_race_segments(&setup, local, ai),
+            "reason=def_ids_segmented_by_seat local={local:?} ai={ai:?}"
+        );
+        assert!(
+            ai_commands_land_in_ai_race(&setup, ai),
+            "reason=ai_commands_in_ai_segment local={local:?} ai={ai:?}"
+        );
+
+        // 同一组合两实例：逐帧 `compute_state_hash()` 与 `capture_snapshot()`
+        // 字节一致（不只比最终 hash）。两实例共用同一装配与同一 AI 脚本。
+        let first = play_dual_faction_full_match(&setup);
+        let second = play_dual_faction_full_match(&setup);
+        assert!(
+            !first.hashes.is_empty(),
+            "reason=per_frame_hashes_not_empty local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            first.hashes.len(),
+            first.snapshots.len(),
+            "reason=hash_snapshot_counts_match local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            first.hashes, second.hashes,
+            "reason=within_combo_frame_hashes_match local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            first.snapshots, second.snapshots,
+            "reason=within_combo_snapshots_match local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            first.final_snapshot, second.final_snapshot,
+            "reason=within_combo_final_snapshot_match local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            first.victory_frame, second.victory_frame,
+            "reason=within_combo_victory_frame_match local={local:?} ai={ai:?}"
+        );
+
+        // 胜负只结算一次（既有脚本已断言）、结算帧进权威状态、快照 v3。
+        assert!(
+            first.final_snapshot.gameplay.victory.resolved,
+            "reason=victory_resolved local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            first.final_snapshot.gameplay.victory.winner,
+            Some(LOCAL_PLAYER),
+            "reason=local_player_wins local={local:?} ai={ai:?}"
+        );
+        assert!(
+            first.victory_frame > 0,
+            "reason=victory_frame_recorded local={local:?} ai={ai:?}"
+        );
+        assert!(
+            first
+                .snapshots
+                .iter()
+                .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
+            "reason=all_snapshots_v3 local={local:?} ai={ai:?}"
+        );
+
+        // 重开无残留：`victory.resolved == false`、entities / positions /
+        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 3`。
+        let fresh = build_driver(&setup, 300);
+        assert!(
+            !fresh.snapshot().gameplay.victory.resolved,
+            "reason=restart_victory_unresolved local={local:?} ai={ai:?}"
+        );
+        assert!(
+            fresh.view().entities.is_empty(),
+            "reason=restart_view_empty local={local:?} ai={ai:?}"
+        );
+        let fresh_snapshot = fresh.snapshot();
+        assert!(
+            fresh_snapshot.positions.is_empty(),
+            "reason=restart_positions_empty local={local:?} ai={ai:?}"
+        );
+        assert!(
+            fresh_snapshot.gameplay.players.is_empty(),
+            "reason=restart_players_empty local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            fresh_snapshot.gameplay.victory.resolved_frame, 0,
+            "reason=restart_victory_frame_clear local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            fresh_snapshot.version, SNAPSHOT_VERSION,
+            "reason=restart_snapshot_v3 local={local:?} ai={ai:?}"
+        );
+    }
+    // MUST NOT 断言「四组合之间哈希数值相等」或「与改动前旧基线数值相等」：
+    // 四组合 AI 命令落在各自 ai_race 段、字节本就不同；既有两族基线 /
+    // 回落测试单独守护旧口径，不在此处跨组合比较。
+}
+
+/// 同一整数节拍序列按不同批次喂入，逐帧采集 `(帧号, compute_state_hash)`。
+/// `step()` 不接呈现帧率 / delta，全部命令开局一次性按冻结帧入队，故
+/// 批次粒度 MUST NOT 改变逐帧哈希（design D2 / R12.2 / ADR 0002）。
+fn dual_faction_replay_trace(
+    setup: &MeleeSetup,
+    ticks_per_batch: u64,
+    batches: u64,
+) -> Vec<(u64, u64)> {
+    let config = MatchConfig {
+        seed: SEED,
+        logic_fps: LOGIC_FPS,
+        content_hash: CONTENT_HASH,
+    };
+    let mut sim =
+        RtsMatch::create_with_definitions(config, synthetic_world(), synthetic_definitions());
+    for command in &setup.commands {
+        sim.submit_command(*command)
+            .expect("melee: reason=dual_replay_spawn_rejected");
+    }
+    for command in &setup.gameplay_commands {
+        sim.submit_gameplay_command(*command)
+            .expect("melee: reason=dual_replay_opening_gameplay_rejected");
+    }
+    for command in AiScript::new(setup, 300).commands {
+        sim.submit_gameplay_command(command)
+            .expect("melee: reason=dual_replay_ai_command_rejected");
+    }
+    let mut client = FixedStepClient::from_match(sim);
+    let mut trace = Vec::new();
+    for _ in 0..batches {
+        client.advance_with_observer(ticks_per_batch, |s| {
+            trace.push((s.read_view().tick, s.compute_state_hash()));
+        });
+    }
+    trace
+}
+
+/// 双刷新率（60 Hz / 144 Hz）与批次推进四组合逐帧验收：同一组合两实例
+/// 脚本逐字节相等，一端逐帧、另一端一次推进多帧，两端逐帧哈希一致；
+/// 帧号连续递增且状态确有变化（防止「状态从未变化」的空泛通过）。
+#[test]
+fn four_race_combinations_replay_is_frame_frozen_and_refresh_rate_independent() {
+    let seconds = 2;
+    let expected_frames = u64::from(LOGIC_FPS) * seconds;
+    for (local, ai) in DUAL_COMBINATIONS {
+        let setup = MeleeSetup::with_races(local, ai);
+        // 同一组合构造两次 AI 外部脚本逐字节相等（帧冻结、可重复）。
+        assert_eq!(
+            AiScript::new(&setup, 300),
+            AiScript::new(&setup, 300),
+            "reason=ai_script_byte_equal local={local:?} ai={ai:?}"
+        );
+
+        // 一端逐帧 / 另一端一次推进 8 帧（`MAX_CATCHUP_STEPS = 8` 上限
+        // 边界），共推进相同整数帧数 `BATched_FRAMES = 64`，两端逐帧
+        // `compute_state_hash()` 一致；批次数整除 8，避免两端帧数不等。
+        const BATCHED_FRAMES: u64 = 64;
+        let per_frame = dual_faction_replay_trace(&setup, TICKS_PER_LOGIC_FRAME, BATCHED_FRAMES);
+        let batched =
+            dual_faction_replay_trace(&setup, TICKS_PER_LOGIC_FRAME * 8, BATCHED_FRAMES / 8);
+        assert_eq!(
+            per_frame.len() as u64,
+            BATCHED_FRAMES,
+            "reason=per_frame_count"
+        );
+        assert_eq!(batched.len() as u64, BATCHED_FRAMES, "reason=batched_count");
+        assert_eq!(
+            per_frame, batched,
+            "reason=per_frame_vs_batched_frame_hashes_match local={local:?} ai={ai:?}"
+        );
+
+        // 60 Hz / 144 Hz 呈现节奏喂入同一整数节拍序列，逐帧帧号与哈希一致。
+        let at_60 = dual_faction_replay_trace(&setup, TICKS_PER_SECOND / 60, 60 * seconds);
+        let at_144 = dual_faction_replay_trace(&setup, TICKS_PER_SECOND / 144, 144 * seconds);
+        assert_eq!(
+            at_60.len() as u64,
+            expected_frames,
+            "reason=60hz_frame_count"
+        );
+        assert_eq!(
+            at_144.len() as u64,
+            expected_frames,
+            "reason=144hz_frame_count"
+        );
+        assert_eq!(
+            at_60, at_144,
+            "reason=60hz_144hz_frame_hash_identical local={local:?} ai={ai:?}"
+        );
+        for (index, (tick, _)) in at_60.iter().enumerate() {
+            assert_eq!(
+                *tick,
+                index as u64 + 1,
+                "reason=frame_number_monotonic local={local:?} ai={ai:?}"
+            );
+        }
+        assert!(
+            at_60.windows(2).any(|pair| pair[0].1 != pair[1].1),
+            "reason=simulation_actually_advanced local={local:?} ai={ai:?}"
+        );
+    }
+}
+
+/// R1 / R13.6 分层判据沿用（tasks 3.5 / design D6）：四组合装配下 frame-0
+/// 混合选中集合（含双方主城 / 农民 / 金矿 / 树木）经装配期
+/// `UnitDef.speed_raw` 只读映射过滤后，MUST 只为农民生成 `Move`；建筑与
+/// 资源点 MUST NOT 生成 `Move`、位置不变。本 change 不碰输入翻译层、不
+/// 回退白名单、不扩权威视图；双族参数只改装配层段位，不改可移动性来源。
+#[test]
+fn four_race_combinations_keep_immovable_entities_out_of_move() {
+    let defs = synthetic_definitions();
+    // 混合选中集合：双方主城（1,7）、农民（2,3,4,8,9,10）、中立资源
+    // （5,6,11,12）——12 个 frame-0 实体全部纳入。
+    let selection: BTreeSet<u64> = (1..=12).collect();
+    let movable_expected: BTreeSet<u64> = [2u64, 3, 4, 8, 9, 10].into_iter().collect();
+    for (local, ai) in DUAL_COMBINATIONS {
+        let setup = MeleeSetup::with_races(local, ai);
+        let map: MovabilityMap = setup.movability(&defs);
+        assert_eq!(
+            map.len(),
+            12,
+            "reason=one_entry_per_frame0_entity local={local:?}"
+        );
+        let filtered: BTreeSet<u64> = filter_movable(&selection, &map).into_iter().collect();
+        assert_eq!(
+            filtered, movable_expected,
+            "reason=only_peasants_movable local={local:?} ai={ai:?}"
+        );
+        // 建筑 / 资源点判据来自冻结定义 speed_raw，不来自运行时视图 speed。
+        for id in [1u64, 5, 6, 7, 11, 12] {
+            assert_eq!(
+                map.get(&id),
+                Some(&false),
+                "reason=immovable_from_speed_raw id={id} local={local:?} ai={ai:?}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ① 反向验证（CODEBUDDY.md §5 / C5 / design D5 / tasks 6.1）：
+// 「AI 命令族退回本地族」退化 → 异族组合的「AI 命令落 AI 族段」断言失败。
+// 退化实现真经 AiScript::new 查表路径注入（替换装配层 ai_race / AI 份
+// 绑定），再喂给真实 AiScript::new，不是旁路模拟命令。
+// ---------------------------------------------------------------------------
+
+/// 退化装配（缺陷态）：把 AI 命令源退回本地族——令 `ai_race` 与 AI 份
+/// 绑定都退回本地族 / 本地份，喂给真实 `AiScript::new`。模拟 P8.3 之前的
+/// 错配实现（`AiScript::new` 误用本地族 `setup.race` 与本地份绑定）。
+fn degenerate_ai_uses_local_race(setup: &MeleeSetup) -> MeleeSetup {
+    let mut degenerate = setup.clone();
+    degenerate.ai_race = degenerate.race;
+    degenerate.ai_category_def_ids = degenerate.category_def_ids.clone();
+    degenerate
+}
+
+/// 反向验证·修复态（tasks 6.1）：正式实现四组合全部通过「AI 命令落
+/// AI 族段」断言（与 ① 退化态共用的同一个布尔判据）。
+#[test]
+fn reverse_validation_ai_race_formal_passes_the_assertion() {
+    for (local, ai) in DUAL_COMBINATIONS {
+        let setup = MeleeSetup::with_races(local, ai);
+        assert!(
+            ai_commands_land_in_ai_race(&setup, ai),
+            "reason=formal_ai_race_passes local={local:?} ai={ai:?}"
+        );
+    }
+}
+
+/// 反向验证·缺陷态（tasks 6.1）：AI 命令族退回本地族后，四组合中 AI 族
+/// ≠ 本地族的组（人vs兽 / 兽vs人）必在同一断言下失败；正式实现仍通过
+/// （元断言防退化）。同族组合退化前后字节一致，不纳入失败断言。
+#[test]
+fn reverse_validation_ai_race_local_fallback_degenerate_fails_the_same_assertion() {
+    for (local, ai) in [(Race::Human, Race::Orc), (Race::Orc, Race::Human)] {
+        let formal = MeleeSetup::with_races(local, ai);
+        let degenerate = degenerate_ai_uses_local_race(&formal);
+        assert!(
+            !ai_commands_land_in_ai_race(&degenerate, ai),
+            "reason=ai_race_local_fallback_degenerate_fails local={local:?} ai={ai:?}"
+        );
+        assert!(
+            ai_commands_land_in_ai_race(&formal, ai),
+            "reason=formal_still_passes local={local:?} ai={ai:?}"
+        );
+    }
+    // 退化实现 MUST 真经 AiScript::new：退化装配仍产出合法 AI 脚本，
+    // 只是目标 ID 落在本地族段（而非空脚本 / 旁路模拟）。
+    for (local, ai) in [(Race::Human, Race::Orc), (Race::Orc, Race::Human)] {
+        let formal = MeleeSetup::with_races(local, ai);
+        let degenerate = degenerate_ai_uses_local_race(&formal);
+        assert_eq!(
+            AiScript::new(&degenerate, 1200).commands.len(),
+            AiScript::new(&formal, 1200).commands.len(),
+            "reason=degenerate_uses_real_ai_script_path local={local:?} ai={ai:?}"
+        );
+    }
 }

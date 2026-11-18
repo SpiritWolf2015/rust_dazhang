@@ -8,12 +8,20 @@
 
 | 项目 | 本地路径 | 固定提交 | 上游 | 许可证 |
 |---|---|---|---|---|
-| `vera20k` | `C:/open_rts/vera20k` | `7942296fb` | https://github.com/YuriPlanet/vera20k | GPLv3 + Section 7 附加条款 |
+| `vera20k` | `C:/open_rts/vera20k` | `305ea3a75` | https://github.com/YuriPlanet/vera20k | GPLv3 + Section 7 附加条款 |
 | `godot_warcraft3` | `C:/open_rts/godot_warcraft3` | `18b7a70` | https://github.com/LiGameAcademy/godot_warcraft3 | MIT |
 | `rts_kernel_cs` | `C:/open_rts/rts_kernel_cs` | `edb8790` | https://github.com/LiGameAcademy/rts_kernel_cs | MIT |
 | `WarsmashModEngine` | `C:/open_rts/WarsmashModEngine` | `f9e0aeed4be372d6016519d0e97b384aa873f374` | https://github.com/Retera/WarsmashModEngine | AGPLv3 |
 
-前三项是 2026-11-07 记录时的本地 HEAD，`WarsmashModEngine` 是 2026-11-08 克隆时的本地 HEAD（提交日期 2025-12-08）。这些提交仅用于定位参考；升级时显式更新本表并重新核对相关文档。
+`godot_warcraft3` 与 `rts_kernel_cs` 是 2026-11-07 记录时的本地 HEAD，`WarsmashModEngine` 是 2026-11-08 克隆时的本地 HEAD（提交日期 2025-12-08），三者均未变动；`vera20k` 已于 2026-11-17 升级复核后更新（见下「2026-11-17 升级复核」小节）。这些提交仅用于定位参考；升级时显式更新本表并重新核对相关文档。
+
+### 2026-11-17 升级复核（vera20k）
+
+- **变更**：`vera20k` 本地 HEAD 由 `7942296fb`（2026-11-07，PR #4035）前进至 `305ea3a75a3a146f1a24cc0d6eeef0f19fa6015f`（2026-11-17，PR #4566）；旧提交是新 HEAD 的**祖先**，属正常前进、非换分支。区间含 531 个 PR、3324 文件变更。另三个参考项目 HEAD 与开头「固定参考版本」表格一致、未变动。
+- **路径复核**：T1 / T6 引用的 `src/net/`（`lockstep.rs` / `reliable.rs` / `command_exchange.rs` / `event_packet.rs` 等）、`services/relay-protocol/`（`src/link/`、`src/envelope.rs`、`src/journal.rs`）、`docs/Networking.md`、`LEGAL.md`、`LICENSE-GPL`、`docs/` 在新 HEAD 下全部仍存在；矩阵 T1 / T6 条目的「具体路径」列与「各自提供什么」段中 `vera20k` 条目的引用继续有效，**无需改动**。
+- **许可证复核**：`LEGAL.md` 新增 `## Code from Ares` / `## Code from Phobos` 两节（对应 `LICENSES/Ares.txt`、`docs/phobos.md`），即上游引入 Ares / Phobos 第三方代码来源；Section 7 附加条款与「只有真的复制其代码时才随之进入」的结论未变。本项目**不复制** `vera20k` 代码，按 ADR 0001 该变化**不影响本项目合规姿态**，「各自提供什么」段的结论不变。若将来按 `ADR 0001:19` 与 `vera20k` 交换代码，MUST 先按 ADR 0001 复核点重新评估新增的 Ares / Phobos 第三方代码许可兼容性；本次不涉及代码交换，仅登记。
+- **相关文档核对结论**：`NOTICE.md:17`（不含提交号、借鉴内容仍成立）、`openspec/config.yaml:21`（只列项目名与许可证）、`docs/decisions/0001` / `0002` / `0003`（历史决策记录、语义结论未变）、`docs/references/WC3-MELEE-RULES.md`（2026-11-17 的 T3 / T4 / T5 只读调研未从 `vera20k` 取证）、`openspec/changes/archive/` 下含 `vera20k` 引用的归档文件（历史快照）——**均无需改动**。
+- **证据锚标注**：`ADR 0001:14` 的 `README.md:142` 行号基于 2026-11-07 提交；新 HEAD `README.md` 为 154 行、行号可能偏移，但引用仍指向 `LEGAL.md` 法律声明、语义未变。按「ADR 记为什么决定、不删改原决策」保留原锚，**不据本次升级改写任何 ADR**。
 
 ## 各自提供什么
 

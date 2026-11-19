@@ -6,7 +6,8 @@
 //! 与 `read_view()`。
 
 use w3_core::{
-    Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,
+    Command, CommandKind, EntityId, Event, EventKind, Frame, MatchConfig, RtsMatch, SimFixed,
+    StaticWorld,
 };
 use w3_render::{FrameInput, Model, ModelLibrary, Scene, TerrainMesh, TerrainVertex};
 
@@ -195,4 +196,81 @@ fn duplicate_event_delivery_does_not_change_state_hash() {
         plain.compute_state_hash(),
         "事件去重改变了状态哈希"
     );
+}
+
+/// P8.5a：英雄阵亡 / 复活完成事实事件是纯表现层副作用。
+///
+/// `HeroDied` 切死亡序列、`Revived` 切站立序列，找不到序列时 no-op；
+/// 连续重绘、重复投递、事件重复消费都 MUST NOT 反写权威状态、不改
+/// `compute_state_hash()` / `capture_snapshot()` 字节（ADR 0002 §5 / tasks 6.1）。
+#[test]
+fn hero_revive_events_do_not_change_state_hash() {
+    let mut rendered = build_match();
+    let mut plain = build_match();
+    submit_move(&mut rendered);
+    submit_move(&mut plain);
+    let mut library = ModelLibrary::default();
+    library.insert("default", Model::from_json(MODEL_DOC).unwrap());
+    let mut scene = Scene::default();
+    let terrain = simple_terrain();
+
+    for _ in 0..16 {
+        rendered.step();
+        plain.step();
+        let view = rendered.read_view();
+        let _events = rendered.drain_events();
+        let _ = plain.drain_events();
+
+        // 只读视图先建实例；随后投递英雄阵亡 / 复活完成事实事件，
+        // 并重复投递同一批次（幂等：按 sequence 去重）。
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        let revive_events = vec![
+            Event {
+                frame: view.tick,
+                sequence: 10_001,
+                entity: 1,
+                kind: EventKind::HeroDied,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 10_002,
+                entity: 1,
+                kind: EventKind::Revived,
+            },
+        ];
+        for _ in 0..3 {
+            scene.consume(
+                FrameInput {
+                    view: &view,
+                    events: &revive_events,
+                },
+                &library,
+            );
+        }
+        scene.interpolate_all(0.5);
+        let _vertices = scene.build_vertices(&terrain);
+
+        assert_eq!(
+            scene.applied_events(),
+            revive_events.len() as u64,
+            "英雄复活事实事件应被 sequence 去重"
+        );
+        assert_eq!(
+            rendered.compute_state_hash(),
+            plain.compute_state_hash(),
+            "英雄复活事件消费改变了状态哈希"
+        );
+        assert_eq!(
+            rendered.capture_snapshot(),
+            plain.capture_snapshot(),
+            "英雄复活事件消费改变了快照字节"
+        );
+        assert_eq!(view, plain.read_view());
+    }
 }

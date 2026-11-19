@@ -203,6 +203,11 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
             // 实例已由视图同步创建，这里保持幂等。
         }
         EventKind::Died => switch_sequence(instance, library, "death"),
+        // P8.5a 英雄阵亡事实事件：与普通死亡同样切到 "death" 序列；
+        // 纯表现层副作用，找不到序列时 `switch_sequence` 本就 no-op，重复投递幂等。
+        EventKind::HeroDied => switch_sequence(instance, library, "death"),
+        // P8.5a 英雄复活完成事实事件：恢复站立待机序列（复活复用同一实体）。
+        EventKind::Revived => switch_sequence(instance, library, "stand"),
         EventKind::AttackHit => switch_sequence(instance, library, "attack"),
         EventKind::Arrived | EventKind::Stopped => {
             switch_sequence(instance, library, "stand");

@@ -48,6 +48,24 @@ pub struct Texts {
     pub faction_confirm: &'static str,
     /// 已选族只读状态提示。
     pub faction_status: &'static str,
+    /// 祭坛复活队列标题（P8.5a / tasks 6.2）。
+    pub revive_queue: &'static str,
+    /// 复活队列条目主体标签。
+    pub revive_hero: &'static str,
+    /// 复活剩余 / 总帧标签。
+    pub revive_remaining: &'static str,
+    /// 复活费用标签。
+    pub revive_cost: &'static str,
+    /// 空复活队列提示。
+    pub revive_empty: &'static str,
+    /// 死亡登记条数标签。
+    pub revive_deaths: &'static str,
+    /// 冻结扣费登记条数标签。
+    pub revive_charges: &'static str,
+    /// 英雄阵亡事实事件标签。
+    pub hero_died: &'static str,
+    /// 英雄复活完成事实事件标签。
+    pub hero_revived: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
@@ -79,4 +97,13 @@ pub const ZH: Texts = Texts {
     faction_orc: "Orc",
     faction_confirm: "Confirm",
     faction_status: "Selected",
+    revive_queue: "Revive Queue",
+    revive_hero: "Hero",
+    revive_remaining: "Frames",
+    revive_cost: "Cost",
+    revive_empty: "queue empty",
+    revive_deaths: "Fallen",
+    revive_charges: "Charges",
+    hero_died: "Hero fell",
+    hero_revived: "Hero revived",
 };

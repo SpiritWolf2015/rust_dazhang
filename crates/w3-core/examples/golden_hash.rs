@@ -8,6 +8,19 @@
 //! - 每帧一行 `frame=<十进制帧号> hash=0x<16 位定宽小写十六进制>`；
 //! - 末尾有且仅有一行汇总 `frames=<N> final_hash=0x<016x> schema=<编译期常量>`；
 //! - 所有行以 LF 结束，不含时间戳、路径、主机名或工具链探测值等平台相关信息。
+//!
+//! P8.5a 基线重取（Q1 / tasks 7.3）：新增英雄复活三组权威状态进入
+//! `compute_state_hash()`、复活冻结常量段进入 `compute_defs_hash()`，逐帧哈希
+//! 布局实质变化，故基线必变。本文件输出格式未变，`GOLDEN_SCHEMA` 仍为
+//! `golden-hash/1`；记录值仅作人工比对留档，不作自动断言。
+//!
+//! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按新实现重取：
+//! - 41 行 / 1371 字节，`final_hash=0xada6506e1da36c11`；
+//! - 整份文本 sha256 `8b48b8f2035bd7dc3df4b37c8e21c9d896cdc6caa2a367c5dc23f3df04fc99a3`。
+//! ADR 0002 复核记录的旧值（`final_hash=0x3d7e4312f63844e5`、
+//! sha256 `c6dc62b4…3775`）已失效，不沿用、不声称逐字节不变。
+//! Debian 12 x86_64 侧离线逐字节比对待人工 / VM 执行；macOS、其它 CPU 架构
+//! 与其它 rustc 版本仍属待验证项，不得据本记录声称跨平台确定性已达成。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

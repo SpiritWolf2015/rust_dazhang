@@ -15,9 +15,10 @@ use crate::fixed::{SimFixed, isqrt};
 use crate::frame::{Frame, FrameClock};
 use crate::gameplay::{
     AuraState, BehaviorSpec, CastRuntime, DefId, EffectDef, EffectKind, EffectOutcome,
-    FrozenDefinitions, GameplayCommand, GameplayCommandError, GameplayCommandKind, ProductionItem,
-    Settlement, UnitGameplayState, VictoryState, Vitals, WaveState, WorldGameplayState,
-    resolve_effects, validate_gameplay_entities,
+    FrozenDefinitions, GameplayCommand, GameplayCommandError, GameplayCommandKind, HeroDeathRecord,
+    HeroReviveState, HeroState, ProductionItem, ReviveCharge, ReviveQueueItem, Settlement,
+    UnitGameplayState, VictoryState, Vitals, WaveState, WorldGameplayState, resolve_effects,
+    restore_by_percent, validate_gameplay_entities,
 };
 use crate::nav::{self, DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 use crate::snapshot::{
@@ -37,6 +38,10 @@ const MAX_PENDING_ORDERS: usize = 64;
 const DEFAULT_UNIT_MANA: i64 = 100;
 /// 默认每帧转向增量（1/16 圈）。
 const DEFAULT_TURN_RATE: i64 = 1 << 12;
+/// 英雄出生等级（合成原创编译期整数常量 `[待核]`）。
+const HERO_SPAWN_LEVEL: u32 = 1;
+/// 英雄出生经验（合成原创编译期整数常量 `[待核]`）。
+const HERO_SPAWN_XP: i64 = 0;
 
 /// 群体落点的稳定偏移表，按 `EntityId` 排序后依次分配。
 const FORMATION_OFFSETS: [(i64, i64); 16] = [
@@ -166,6 +171,10 @@ pub enum EventKind {
     Died,
     AttackHit,
     MoveFailed,
+    /// P8.5a 英雄阵亡事实事件（供只读表现层消费，不进权威状态）。
+    HeroDied,
+    /// P8.5a 英雄复活完成事实事件。
+    Revived,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -215,6 +224,9 @@ pub struct RtsMatch {
     defs: FrozenDefinitions,
     /// 全局玩法运行态（经济 / 胜负 / AI / 光环 / 波次 / 行为注册 / 玩法命令）。
     gameplay: WorldGameplayState,
+    /// P8.5a 英雄复活三组权威状态（死亡登记 / 复活队列 / 费用登记）。
+    /// 字段私有，仅本结构可写；同时进入状态哈希、快照与差异诊断。
+    revive: HeroReviveState,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -403,6 +415,7 @@ impl RtsMatch {
             next_event_seq: 0,
             defs: FrozenDefinitions::empty(),
             gameplay: WorldGameplayState::default(),
+            revive: HeroReviveState::default(),
         }
     }
 
@@ -501,6 +514,10 @@ impl RtsMatch {
 
         // 8. 推进玩法运行态（施法 / 引导、冷却、Buff 到期、光环 / 波次、生产 / 研究）。
         self.advance_gameplay_timers();
+
+        // 8b. 推进祭坛复活队列效果链（费用提交事务在阶段 7 已完成，此处仅执行
+        //     剩余帧递减 / 事务性退款 / 恢复本体，两者分离见主 gameplay-systems/spec.md:19）。
+        self.advance_revive_queue(frame);
 
         // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
         self.resolve_victory(frame);
@@ -954,6 +971,7 @@ impl RtsMatch {
             );
             let died = !self.is_alive(target);
             if died {
+                // 沿用现状语义：只清订单 / 路径、不删实体、不判负。
                 if let Some(unit) = self.units.get_mut(&target) {
                     unit.order = Order::Idle;
                     unit.pending.clear();
@@ -962,6 +980,16 @@ impl RtsMatch {
                     unit.path_index = 0;
                     unit.blocked_frames = 0;
                     unit.group = 0;
+                }
+                // 英雄阵亡登记：整数帧号 + 完整玩法运行态快照（等级 / 经验 /
+                // 背包 / 技能登记 / 法力），不删实体、不判负（R6.3 / R11.2）。
+                let hero_snapshot = self.units.get(&target).and_then(|unit| {
+                    unit.gameplay
+                        .hero
+                        .map(|_| (unit.gameplay.clone(), unit.owner, unit.max_hp))
+                });
+                if let Some((gameplay, owner, max_hp)) = hero_snapshot {
+                    self.register_hero_death(target, frame, gameplay, owner, max_hp);
                 }
             }
             if outcome == EffectOutcome::Applied {
@@ -1202,7 +1230,200 @@ impl RtsMatch {
             GameplayCommandKind::SpawnWave { id, period } => self.spawn_wave(id, period),
             GameplayCommandKind::SetAi { enabled } => self.set_ai(enabled, frame),
             GameplayCommandKind::Leave { player } => self.leave(player),
+            GameplayCommandKind::ReviveHero {
+                hero,
+                altar,
+                altar_def,
+            } => self.submit_revive(hero, altar, altar_def, player),
+            GameplayCommandKind::CancelRevive { hero } => self.cancel_revive(hero, player),
         }
+    }
+
+    /// 事务性退款：把冻结扣费登记精确回退到玩家经济，移除队列项与费用登记，
+    /// 死亡登记保留（恢复到「可再次复活」），不生成半复活实体、不重复扣费。
+    /// refund 与 charge 同样通过 `PlayerEconomy` 与三组状态进入哈希 / 快照。
+    fn refund_revive(&mut self, hero: EntityId) {
+        if let Some(charge) = self.revive.charges.remove(&hero) {
+            let economy = self.gameplay.players.entry(charge.owner).or_default();
+            economy.gold = economy.gold.saturating_add(charge.gold);
+            economy.lumber = economy.lumber.saturating_add(charge.lumber);
+        }
+        self.revive.queue.remove(&hero);
+    }
+
+    /// 英雄阵亡登记：写入整数帧号 + 状态快照，并发事实事件。
+    /// 若该英雄仍在复活队列中（再次死亡），先事务性退款再重新登记。
+    fn register_hero_death(
+        &mut self,
+        hero: EntityId,
+        frame: Frame,
+        gameplay: UnitGameplayState,
+        owner: u8,
+        max_hp: i64,
+    ) {
+        self.refund_revive(hero);
+        self.revive.deaths.insert(
+            hero,
+            HeroDeathRecord {
+                death_frame: frame.value(),
+                owner,
+                gameplay,
+                max_hp,
+            },
+        );
+        self.push_event(frame, hero, EventKind::HeroDied);
+    }
+
+    /// 费用提交事务（与队列效果执行链分离）：校验定义层祭坛类别、实体存活 /
+    /// 归属、死亡登记与资源充足，确定性扣减 gold / lumber，冻结扣费登记并入队。
+    /// 任一校验不通过即显式拒绝（no-op），MUST NOT 静默降级为免费复活。
+    fn submit_revive(&mut self, hero: EntityId, altar: EntityId, altar_def: DefId, player: u8) {
+        // 定义层类别驱动：非建筑名字符串白名单，任何被登记的 DefId 都可复活。
+        if !self.defs.is_altar(altar_def) {
+            return;
+        }
+        // 祭坛实体存活且归属本族。
+        if !self
+            .units
+            .get(&altar)
+            .is_some_and(|unit| unit.alive && unit.owner == player)
+        {
+            return;
+        }
+        // 英雄实体阵亡、归属本族、已登记死亡，且不在复活队列（不重复扣费）。
+        let Some(unit) = self.units.get(&hero) else {
+            return;
+        };
+        if unit.alive || unit.owner != player || unit.gameplay.hero.is_none() {
+            return;
+        }
+        if self.revive.queue.contains_key(&hero) || !self.revive.deaths.contains_key(&hero) {
+            return;
+        }
+        let level = self
+            .revive
+            .deaths
+            .get(&hero)
+            .and_then(|record| record.gameplay.hero.map(|state| state.level))
+            .unwrap_or(1);
+        let cost = self.defs.revive_cost(level);
+        {
+            let economy = self.gameplay.players.entry(player).or_default();
+            // 资源不足显式拒绝：不改变任何权威状态，不免费复活。
+            if economy.gold < cost.gold || economy.lumber < cost.lumber {
+                return;
+            }
+            if economy.supply_used.saturating_add(cost.food) > economy.supply_cap {
+                return;
+            }
+            // 冻结扣费：确定性扣减，退款以 charges 登记为精确逆运算依据。
+            economy.gold -= cost.gold;
+            economy.lumber -= cost.lumber;
+        }
+        self.revive.charges.insert(
+            hero,
+            ReviveCharge {
+                owner: player,
+                gold: cost.gold,
+                lumber: cost.lumber,
+            },
+        );
+        let frames = cost.frames.max(1);
+        self.revive.queue.insert(
+            hero,
+            ReviveQueueItem {
+                hero,
+                altar,
+                altar_def,
+                owner: player,
+                remaining_frames: frames,
+                total_frames: frames,
+                gold: cost.gold,
+                lumber: cost.lumber,
+            },
+        );
+    }
+
+    /// 取消复活队列项并事务性退款（同源归属校验）。
+    fn cancel_revive(&mut self, hero: EntityId, player: u8) {
+        let owner_matches = self
+            .revive
+            .queue
+            .get(&hero)
+            .is_some_and(|item| item.owner == player);
+        if owner_matches {
+            self.refund_revive(hero);
+        }
+    }
+
+    /// 队列效果执行链（与费用提交事务分离）：按稳定 `EntityId` 顺序递减剩余
+    /// 帧数；祭坛被毁 / 对局失败 / 登记丢失则事务性退款；到 0 恢复本体。
+    fn advance_revive_queue(&mut self, frame: Frame) {
+        let ids: Vec<EntityId> = self.revive.queue.keys().copied().collect();
+        for hero in ids {
+            let Some(item) = self.revive.queue.get(&hero).cloned() else {
+                continue;
+            };
+            let altar_ok = self
+                .units
+                .get(&item.altar)
+                .is_some_and(|unit| unit.alive && unit.owner == item.owner);
+            let player_active = self
+                .gameplay
+                .players
+                .get(&item.owner)
+                .map(|economy| economy.active)
+                .unwrap_or(true);
+            let registered = self.revive.deaths.contains_key(&hero)
+                && self.units.get(&hero).is_some_and(|unit| !unit.alive);
+            if !altar_ok || !registered || !player_active || self.gameplay.victory.resolved {
+                self.refund_revive(hero);
+                continue;
+            }
+            let remaining = item.remaining_frames.saturating_sub(1);
+            if remaining == 0 {
+                self.complete_revive(hero, &item, frame);
+            } else if let Some(queue_item) = self.revive.queue.get_mut(&hero) {
+                queue_item.remaining_frames = remaining;
+            }
+        }
+    }
+
+    /// 复活完成：恢复同一个英雄实体（同一 `EntityId`），MUST NOT `spawn()`
+    /// 新实体、MUST NOT 得到 `hero=None` 空背包。等级 / 经验 / 技能登记 /
+    /// 6 格背包逐项来自死亡登记快照，按冻结常量恢复生命 / 法力，改到祭坛位置。
+    fn complete_revive(&mut self, hero: EntityId, item: &ReviveQueueItem, frame: Frame) {
+        let Some(death) = self.revive.deaths.remove(&hero) else {
+            return;
+        };
+        self.revive.queue.remove(&hero);
+        // 费用已消耗：移除扣费登记，不退款、不重复扣费。
+        self.revive.charges.remove(&hero);
+        let Some((altar_x, altar_y)) = self.units.get(&item.altar).map(|unit| (unit.x, unit.y))
+        else {
+            return;
+        };
+        let constants = *self.defs.revive_constants();
+        let Some(unit) = self.units.get_mut(&hero) else {
+            return;
+        };
+        unit.alive = true;
+        unit.hp = restore_by_percent(death.max_hp, constants.hp_restore_percent);
+        // 逐项恢复：hero.level / hero.xp、bag、cooldowns（技能登记）、Buff 等。
+        unit.gameplay = death.gameplay;
+        unit.gameplay.mana =
+            restore_by_percent(unit.gameplay.max_mana, constants.mana_restore_percent);
+        unit.x = altar_x;
+        unit.y = altar_y;
+        // 沿用阵亡时的订单 / 路径清理语义，不删实体、不判负。
+        unit.order = Order::Idle;
+        unit.pending.clear();
+        unit.goal = None;
+        unit.path.clear();
+        unit.path_index = 0;
+        unit.blocked_frames = 0;
+        unit.group = 0;
+        self.push_event(frame, hero, EventKind::Revived);
     }
 
     /// 推进全部可保存运行态；完成项在稳定顺序下统一提交。
@@ -1338,6 +1559,14 @@ impl RtsMatch {
         );
         unit.gameplay.max_mana = def.mana;
         unit.gameplay.mana = def.mana;
+        // 定义层英雄类别驱动：让英雄经既有 `Train` 生产路径诞生，
+        // `HeroState` 不再是死字段。未登记英雄类别的既有定义行为不变。
+        if self.defs.is_hero(unit_def) {
+            unit.gameplay.hero = Some(HeroState {
+                level: HERO_SPAWN_LEVEL,
+                xp: HERO_SPAWN_XP,
+            });
+        }
         self.units.insert(id, unit);
         let economy = self.gameplay.players.entry(owner).or_default();
         economy.produced = economy.produced.saturating_add(1);
@@ -1503,6 +1732,8 @@ impl RtsMatch {
         // P5：冻结定义的内容哈希与全部玩法运行态进入权威状态哈希。
         hasher.write_u64(self.defs.content_hash());
         self.gameplay.hash(&mut hasher);
+        // P8.5a：英雄复活三组权威状态（死亡登记 / 队列 / 费用）必须进入哈希。
+        self.revive.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -1557,6 +1788,10 @@ impl RtsMatch {
             return Some("frozen_definitions");
         }
         if let Some(field) = self.gameplay.first_difference(&other.gameplay) {
+            return Some(field);
+        }
+        // P8.5a：三组复活权威状态按同一稳定顺序定位首个差异字段。
+        if let Some(field) = self.revive.first_difference(&other.revive) {
             return Some(field);
         }
         None
@@ -1640,6 +1875,7 @@ impl RtsMatch {
                 .collect(),
             defs: self.defs.clone(),
             gameplay: self.gameplay.clone(),
+            revive: self.revive.clone(),
         }
     }
 
@@ -1789,6 +2025,7 @@ impl RtsMatch {
             next_event_seq: snapshot.next_event_seq,
             defs: snapshot.defs.clone(),
             gameplay: snapshot.gameplay.clone(),
+            revive: snapshot.revive.clone(),
         })
     }
 }
@@ -2125,11 +2362,11 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本仍为 3，只读视图消费与快照往返均不改变权威状态。
+    /// 快照版本为 4（P8.5a 新增权威状态），只读视图消费与快照往返均不改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 3, "snapshot version must remain 3");
-        assert_eq!(SIM_VERSION, 3, "sim version must remain 3");
+        assert_eq!(SNAPSHOT_VERSION, 4, "snapshot version must be 4");
+        assert_eq!(SIM_VERSION, 4, "sim version must be 4");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -2203,9 +2440,9 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 3"
+            "snapshot version must stay 4"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 3");
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 4");
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

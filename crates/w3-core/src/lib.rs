@@ -37,9 +37,11 @@ pub use frame::{Frame, FrameClock};
 pub use gameplay::{
     AbilityDef, AiState, AuraState, BehaviorSpec, BuffInstance, CONTENT_HASH_SCHEMA, CastRuntime,
     DefId, DefinitionError, EffectDef, EffectKind, EffectOutcome, FrozenDefinitions,
-    GameplayCommand, GameplayCommandError, GameplayCommandKind, GameplayCommandQueue, HeroState,
-    ItemDef, PlayerEconomy, ProductionItem, StatMods, UnitDef, UnitGameplayState, UpgradeDef,
-    VictoryState, WaveState, WorldGameplayState, resolve_effects,
+    GameplayCommand, GameplayCommandError, GameplayCommandKind, GameplayCommandQueue,
+    HeroDeathRecord, HeroReviveState, HeroState, ItemDef, PlayerEconomy, ProductionItem,
+    ReviveCharge, ReviveConstants, ReviveCost, ReviveQueueItem, SYNTHETIC_REVIVE_CONSTANTS,
+    StatMods, UnitDef, UnitGameplayState, UpgradeDef, VictoryState, WaveState, WorldGameplayState,
+    resolve_effects, restore_by_percent,
 };
 pub use nav::{DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 pub use sim_match::{EntityView, Event, EventKind, MatchConfig, RtsMatch, WorldView};

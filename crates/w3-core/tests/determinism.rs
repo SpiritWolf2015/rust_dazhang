@@ -4,7 +4,7 @@
 use w3_core::{
     AbilityDef, Command, CommandKind, EffectDef, EffectKind, EntityId, EventKind, Frame,
     FrozenDefinitions, GameplayCommand, GameplayCommandKind, GroupPlanRecord, ItemDef, MatchConfig,
-    RtsMatch, SimFixed, SnapshotError, StaticWorld, UnitDef, UpgradeDef,
+    RtsMatch, SIM_VERSION, SimFixed, SnapshotError, StaticWorld, UnitDef, UpgradeDef,
 };
 
 fn config() -> MatchConfig {
@@ -1036,7 +1036,7 @@ fn snapshot_rejects_pre_p5_versions() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), config().content_hash),
         Err(SnapshotError::SimVersionMismatch {
             found: 2,
-            expected: 3
+            expected: SIM_VERSION
         })
     ));
 }

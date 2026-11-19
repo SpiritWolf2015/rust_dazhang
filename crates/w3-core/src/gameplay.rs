@@ -11,7 +11,7 @@
 //! - 玩家与 AI 命令共用 [`GameplayCommand`] 的校验与执行入口，AI 每帧确定性重算，
 //!   内部 AI 命令不写回命令队列，重放只注入外部命令。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::entity::EntityId;
@@ -23,6 +23,120 @@ pub const CONTENT_HASH_SCHEMA: u64 = 1;
 
 /// 内容定义 ID。
 pub type DefId = u32;
+
+// ---------------------------------------------------------------------------
+// 英雄复活冻结常量（P8.5a / Q3）
+// ---------------------------------------------------------------------------
+
+/// 祭坛英雄复活的冻结常量集合（全为合成 / 原创编译期整数常量 `[待核]`）。
+///
+/// 所有字段都是编译期整数，不含 `f64`、MPQ 派生数据、真实导出 JSON、
+/// 参考项目单位名或 rawcode。费用按「基数 + 等级系数 → 绝对上限」表驱动
+/// 计算，祭坛复活与酒馆买活的参数 / 命令分离（酒馆按 Q4 不在本期范围）。
+/// 改任一常量即改变 [`FrozenDefinitions::content_hash`]，进而改变快照头部。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ReviveConstants {
+    /// 复活黄金基数。
+    pub gold_base: i64,
+    /// 每英雄等级的黄金系数。
+    pub gold_per_level: i64,
+    /// 黄金绝对上限。
+    pub gold_cap: i64,
+    /// 复活木材基数。
+    pub lumber_base: i64,
+    /// 每英雄等级的木材系数。
+    pub lumber_per_level: i64,
+    /// 木材绝对上限。
+    pub lumber_cap: i64,
+    /// 复活占用的人口（恢复既有实体、不新增实体，合成约定取 0）。
+    pub food_cost: i64,
+    /// 复活时间基数（30 Hz 整数帧）。
+    pub frames_base: u32,
+    /// 每英雄等级的复活时间系数（整数帧）。
+    pub frames_per_level: u32,
+    /// 复活时间绝对上限（整数帧）。
+    pub frames_cap: u32,
+    /// 复活恢复生命的整数百分比（100 表示满生命）。
+    pub hp_restore_percent: i64,
+    /// 复活恢复法力的整数百分比（100 表示满法力）。
+    pub mana_restore_percent: i64,
+}
+
+/// 合成 / 原创的复活冻结常量 `[待核]`；数值不冒充经典规则、不来自任何资产。
+pub const SYNTHETIC_REVIVE_CONSTANTS: ReviveConstants = ReviveConstants {
+    gold_base: 100,
+    gold_per_level: 25,
+    gold_cap: 400,
+    lumber_base: 20,
+    lumber_per_level: 5,
+    lumber_cap: 100,
+    food_cost: 0,
+    frames_base: 60,
+    frames_per_level: 15,
+    frames_cap: 300,
+    hp_restore_percent: 100,
+    mana_restore_percent: 100,
+};
+
+impl Default for ReviveConstants {
+    fn default() -> Self {
+        SYNTHETIC_REVIVE_CONSTANTS
+    }
+}
+
+/// 一次复活按英雄等级确定性结算出的费用与时间（全整数）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ReviveCost {
+    pub gold: i64,
+    pub lumber: i64,
+    pub food: i64,
+    pub frames: u32,
+}
+
+impl ReviveConstants {
+    /// 「基数 + 等级系数 → 绝对上限」表驱动计算；`i128` 中间量防溢出，
+    /// 整数除法向零截断，绝不引入浮点（ADR 0002 §1）。
+    pub fn cost(&self, level: u32) -> ReviveCost {
+        let step = i128::from(level.saturating_sub(1));
+        let clamp_gold = |base: i64, per: i64, cap: i64| -> i64 {
+            let raw = i128::from(base) + i128::from(per) * step;
+            raw.min(i128::from(cap)).max(0) as i64
+        };
+        let clamp_frames = |base: u32, per: u32, cap: u32| -> u32 {
+            let raw = i128::from(base) + i128::from(per) * step;
+            raw.min(i128::from(cap)).max(1) as u32
+        };
+        ReviveCost {
+            gold: clamp_gold(self.gold_base, self.gold_per_level, self.gold_cap),
+            lumber: clamp_gold(self.lumber_base, self.lumber_per_level, self.lumber_cap),
+            food: self.food_cost,
+            frames: clamp_frames(self.frames_base, self.frames_per_level, self.frames_cap),
+        }
+    }
+
+    /// 显式小端编码进定义哈希；任一常量变化都改变结果。
+    pub fn hash(&self, hasher: &mut StateHasher) {
+        hasher.write_i64(self.gold_base);
+        hasher.write_i64(self.gold_per_level);
+        hasher.write_i64(self.gold_cap);
+        hasher.write_i64(self.lumber_base);
+        hasher.write_i64(self.lumber_per_level);
+        hasher.write_i64(self.lumber_cap);
+        hasher.write_i64(self.food_cost);
+        hasher.write_u32(self.frames_base);
+        hasher.write_u32(self.frames_per_level);
+        hasher.write_u32(self.frames_cap);
+        hasher.write_i64(self.hp_restore_percent);
+        hasher.write_i64(self.mana_restore_percent);
+    }
+}
+
+/// 按整数百分比恢复数值（复活生命 / 法力用），`i128` 中间量、全整数。
+pub fn restore_by_percent(max_value: i64, percent: i64) -> i64 {
+    let cap = i128::from(max_value.max(0));
+    let scaled = cap * i128::from(percent) / 100;
+    scaled.clamp(0, cap) as i64
+}
 
 // ---------------------------------------------------------------------------
 // 冻结内容定义
@@ -86,12 +200,22 @@ pub struct UpgradeDef {
 ///
 /// 四类定义字段全部私有，外部只能读取；`hash` 在 [`FrozenDefinitions::new`]
 /// 中按当前内容一次性计算，由于没有可变入口，缓存与内容始终一致。
+///
+/// P8.5a 追加三个私有冻结字段：`revive` 为复活常量段，`altar_defs` /
+/// `hero_defs` 为定义层登记的祭坛 / 英雄类别 DefId 集合。三者都编入
+/// `compute_defs_hash`，改常量或改类别登记即改变 `content_hash()`（Q3）。
+/// 类别判定只查这两份定义层数据（数据驱动），MUST NOT 用建筑名字符串
+/// 白名单或硬编码 DefId；`hero_defs` 让英雄经既有 `Train` 生产路径产生，
+/// 使 `HeroState` 不再是死字段。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenDefinitions {
     units: BTreeMap<DefId, UnitDef>,
     abilities: BTreeMap<DefId, AbilityDef>,
     items: BTreeMap<DefId, ItemDef>,
     upgrades: BTreeMap<DefId, UpgradeDef>,
+    revive: ReviveConstants,
+    altar_defs: BTreeSet<DefId>,
+    hero_defs: BTreeSet<DefId>,
     hash: u64,
 }
 
@@ -177,6 +301,17 @@ fn compute_defs_hash(defs: &FrozenDefinitions) -> u64 {
         hasher.write_i64(def.hp_mod);
         hasher.write_u32(def.research_frames);
     }
+    // P8.5a：复活冻结常量段编入定义哈希，改常量即改变 content_hash()。
+    defs.revive.hash(&mut hasher);
+    // P8.5a：祭坛 / 英雄类别登记按稳定 DefId 顺序编入（定义层数据驱动）。
+    hasher.write_u64(defs.altar_defs.len() as u64);
+    for &id in &defs.altar_defs {
+        hasher.write_u32(id);
+    }
+    hasher.write_u64(defs.hero_defs.len() as u64);
+    for &id in &defs.hero_defs {
+        hasher.write_u32(id);
+    }
     hasher.finish()
 }
 
@@ -193,6 +328,9 @@ impl FrozenDefinitions {
             abilities: BTreeMap::new(),
             items: BTreeMap::new(),
             upgrades: BTreeMap::new(),
+            revive: ReviveConstants::default(),
+            altar_defs: BTreeSet::new(),
+            hero_defs: BTreeSet::new(),
             hash: 0,
         };
         insert_unique(&mut defs.units, units)?;
@@ -207,6 +345,54 @@ impl FrozenDefinitions {
     pub fn empty() -> Self {
         Self::new(Vec::new(), Vec::new(), Vec::new(), Vec::new())
             .expect("empty definitions are always valid")
+    }
+
+    /// 纯新增构造路径：注入复活冻结常量与祭坛 / 英雄类别登记，重算内容哈希。
+    ///
+    /// 不改动 [`FrozenDefinitions::new`] 的四参数签名，既有调用方零改动；
+    /// 需要祭坛复活的装配层可链式调用本方法。类别集合是定义层数据，
+    /// 判定与建筑名 / DefId 数值白名单无关（R1.2 / R13.3 / D2 / Q3）。
+    pub fn with_hero_revive(
+        mut self,
+        revive: ReviveConstants,
+        altar_defs: BTreeSet<DefId>,
+        hero_defs: BTreeSet<DefId>,
+    ) -> Self {
+        self.revive = revive;
+        self.altar_defs = altar_defs;
+        self.hero_defs = hero_defs;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 定义层类别驱动：该 DefId 是否被登记为祭坛，MUST NOT 用名字白名单。
+    pub fn is_altar(&self, def_id: DefId) -> bool {
+        self.altar_defs.contains(&def_id)
+    }
+
+    /// 定义层类别驱动：该 DefId 是否被登记为英雄。
+    pub fn is_hero(&self, def_id: DefId) -> bool {
+        self.hero_defs.contains(&def_id)
+    }
+
+    /// 已登记的祭坛 DefId 集合（只读，稳定顺序）。
+    pub fn altar_defs(&self) -> &BTreeSet<DefId> {
+        &self.altar_defs
+    }
+
+    /// 已登记的英雄 DefId 集合（只读，稳定顺序）。
+    pub fn hero_defs(&self) -> &BTreeSet<DefId> {
+        &self.hero_defs
+    }
+
+    /// 复活冻结常量（只读）。
+    pub fn revive_constants(&self) -> &ReviveConstants {
+        &self.revive
+    }
+
+    /// 按英雄等级确定性计算复活费用（读冻结常量，不含浮点）。
+    pub fn revive_cost(&self, level: u32) -> ReviveCost {
+        self.revive.cost(level)
     }
 
     /// 冻结定义的内容哈希；该值是对局配置的一部分，进入快照头与状态哈希。
@@ -388,6 +574,109 @@ pub struct CastRuntime {
 pub struct HeroState {
     pub level: u32,
     pub xp: i64,
+}
+
+// ---------------------------------------------------------------------------
+// 英雄复活权威状态（P8.5a / D1 / D2 / D4）
+// ---------------------------------------------------------------------------
+
+/// 英雄死亡登记：稳定 `EntityId` 键对应一条，含整数帧号与待恢复状态快照。
+///
+/// `death_frame` 是阵亡发生的整数逻辑帧号（`Frame::value()`），MUST NOT 使用
+/// 墙钟 / 渲染帧率；`gameplay` 是阵亡瞬间完整的 [`UnitGameplayState`] 快照，
+/// 逐项承载 `hero.level` / `hero.xp`、6 格背包、技能等级 / 冷却登记
+/// （`cooldowns`）、法力与 Buff，复活时回填到同一实体。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct HeroDeathRecord {
+    pub death_frame: u64,
+    pub owner: u8,
+    pub gameplay: UnitGameplayState,
+    pub max_hp: i64,
+}
+
+/// 祭坛复活队列项：目标英雄 `EntityId` + 剩余帧数 + 本次费用。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ReviveQueueItem {
+    pub hero: EntityId,
+    pub altar: EntityId,
+    pub altar_def: DefId,
+    pub owner: u8,
+    pub remaining_frames: u32,
+    pub total_frames: u32,
+    pub gold: i64,
+    pub lumber: i64,
+}
+
+/// 冻结扣费登记：事务性退款的精确逆运算依据，与队列效果执行链分离。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ReviveCharge {
+    pub owner: u8,
+    pub gold: i64,
+    pub lumber: i64,
+}
+
+/// 三组英雄复活权威状态的唯一容器，全部按稳定 `EntityId` 顺序的 `BTreeMap`。
+///
+/// 死亡登记、复活队列项、费用登记三组 MUST 同时进入 FNV-1a 状态哈希、
+/// 由 `SNAPSHOT_VERSION` 定义的快照与 `first_difference()` 差异字段集合
+/// （ADR 0002 §6-8 / `CODEBUDDY.md §5`）。
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct HeroReviveState {
+    pub deaths: BTreeMap<EntityId, HeroDeathRecord>,
+    pub queue: BTreeMap<EntityId, ReviveQueueItem>,
+    pub charges: BTreeMap<EntityId, ReviveCharge>,
+}
+
+/// 稳定字节编码 `UnitGameplayState`（委托其既有 `hash`，避免重复定义）。
+fn hash_hero_gameplay(hasher: &mut StateHasher, gameplay: &UnitGameplayState) {
+    gameplay.hash(hasher);
+}
+
+impl HeroReviveState {
+    /// 三组状态显式小端编码进 FNV-1a；按稳定 `EntityId` 顺序遍历。
+    pub fn hash(&self, hasher: &mut StateHasher) {
+        hasher.write_u64(self.deaths.len() as u64);
+        for (&id, record) in &self.deaths {
+            hasher.write_u64(id.value());
+            hasher.write_u64(record.death_frame);
+            hasher.write_u8(record.owner);
+            hasher.write_i64(record.max_hp);
+            hash_hero_gameplay(hasher, &record.gameplay);
+        }
+        hasher.write_u64(self.queue.len() as u64);
+        for (&id, item) in &self.queue {
+            hasher.write_u64(id.value());
+            hasher.write_u64(item.hero.value());
+            hasher.write_u64(item.altar.value());
+            hasher.write_u32(item.altar_def);
+            hasher.write_u8(item.owner);
+            hasher.write_u32(item.remaining_frames);
+            hasher.write_u32(item.total_frames);
+            hasher.write_i64(item.gold);
+            hasher.write_i64(item.lumber);
+        }
+        hasher.write_u64(self.charges.len() as u64);
+        for (&id, charge) in &self.charges {
+            hasher.write_u64(id.value());
+            hasher.write_u8(charge.owner);
+            hasher.write_i64(charge.gold);
+            hasher.write_i64(charge.lumber);
+        }
+    }
+
+    /// 按同一稳定顺序返回首个差异字段，便于 desync 诊断。
+    pub fn first_difference(&self, other: &Self) -> Option<&'static str> {
+        if self.deaths != other.deaths {
+            return Some("revive_deaths");
+        }
+        if self.queue != other.queue {
+            return Some("revive_queue");
+        }
+        if self.charges != other.charges {
+            return Some("revive_charges");
+        }
+        None
+    }
 }
 
 /// 生产 / 建造队列项。
@@ -575,6 +864,16 @@ pub enum GameplayCommandKind {
     Leave {
         player: u8,
     },
+    /// 提交祭坛复活：指定阵亡英雄、本族祭坛实体与祭坛定义 ID。
+    ReviveHero {
+        hero: EntityId,
+        altar: EntityId,
+        altar_def: DefId,
+    },
+    /// 取消某英雄的复活队列项并事务性退款。
+    CancelRevive {
+        hero: EntityId,
+    },
 }
 
 /// 玩法命令。
@@ -694,6 +993,20 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u8(10);
             hasher.write_u8(player);
         }
+        GameplayCommandKind::ReviveHero {
+            hero,
+            altar,
+            altar_def,
+        } => {
+            hasher.write_u8(11);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(altar.value());
+            hasher.write_u32(altar_def);
+        }
+        GameplayCommandKind::CancelRevive { hero } => {
+            hasher.write_u8(12);
+            hasher.write_u64(hero.value());
+        }
     }
 }
 
@@ -709,6 +1022,12 @@ pub(crate) fn validate_gameplay_entities(
         | GameplayCommandKind::CancelTrain { producer, .. }
         | GameplayCommandKind::BuyItem { unit: producer, .. }
         | GameplayCommandKind::Gather { unit: producer } => producer == EntityId::NONE,
+        GameplayCommandKind::ReviveHero {
+            hero,
+            altar,
+            altar_def: _,
+        } => hero == EntityId::NONE || altar == EntityId::NONE,
+        GameplayCommandKind::CancelRevive { hero } => hero == EntityId::NONE,
         _ => false,
     };
     if invalid {

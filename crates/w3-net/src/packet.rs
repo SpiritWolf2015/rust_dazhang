@@ -23,7 +23,11 @@ pub const MAGIC: [u8; 4] = *b"W3N1";
 /// 2 = payload 改用 protobuf（ADR 0005，BREAKING，schema 变更须继续递增）。
 /// 3 = 玩法命令线格式，ADR 0005 §3（顶层 `CommandBatch` 追加玩法命令批）；
 ///     明确拒绝 v2，不保留解码垫片，不按新 schema 解码旧 payload。
-pub const PROTOCOL_VERSION: u8 = 3;
+/// 4 = 新增游戏玩法命令变体 `ReviveHero` / `CancelRevive`（ADR 0005 §3，
+///     `GameplayCommand.oneof` 只追加 tag 33 / 34）；明确拒绝 v3，玩法命令
+///     字段不被静默当作 unknown field，客户端与 relay 同步发布。
+/// 与 `w3-core` 的 `SNAPSHOT_VERSION` / `SIM_VERSION` 是相互独立的版本号。
+pub const PROTOCOL_VERSION: u8 = 4;
 /// 固定包头长度：magic4 + version1 + kind1 + sender1 + seq4 + frame8 + len2 + sum4。
 pub const HEADER_LEN: usize = 25;
 const MAX_PAYLOAD: usize = u16::MAX as usize;
@@ -402,7 +406,7 @@ mod tests {
             bytes[4], PROTOCOL_VERSION,
             "PROTOCOL_VERSION bumped for breaking payload change"
         );
-        assert_eq!(PROTOCOL_VERSION, 3);
+        assert_eq!(PROTOCOL_VERSION, 4);
         assert_eq!(&bytes[7..11], &7u32.to_le_bytes());
         assert_eq!(&bytes[11..19], &4u64.to_le_bytes());
         assert_eq!(&bytes[19..21], &(payload.len() as u16).to_le_bytes());
@@ -413,7 +417,7 @@ mod tests {
     fn version_two_packet_is_rejected_before_payload_decode() {
         use w3_core::{GameplayCommand, GameplayCommandKind};
 
-        // 构造一个携带玩法命令字段的 v3 载荷，再把包头版本字节伪装成 v2。
+        // 构造一个携带玩法命令字段的当前版本载荷，再把包头版本字节伪装成旧 v2。
         let gameplay = GameplayCommand::new(
             Frame::new(3),
             1,
@@ -438,6 +442,40 @@ mod tests {
                 assert_eq!(found, 2);
             }
             other => panic!("version=2 must be rejected decisively: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_three_packet_carrying_new_variant_is_rejected_before_payload_decode() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        // PROTOCOL_VERSION 由 3 bump 到 4（新增 ReviveHero / CancelRevive）。
+        // 构造一个携带新增玩法命令字段的 v4 载荷，再把包头版本字节伪装成旧 v3。
+        let gameplay = GameplayCommand::new(
+            Frame::new(3),
+            1,
+            1,
+            GameplayCommandKind::ReviveHero {
+                hero: entity_from_raw(1),
+                altar: entity_from_raw(2),
+                altar_def: 7,
+            },
+        );
+        let payload = encode_commands(&sample_commands(), &[gameplay]).unwrap();
+        let mut bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload)
+            .encode()
+            .unwrap();
+        bytes[4] = 3;
+
+        // v3 端会把 tag 33 / 34 的新玩法命令字段当 unknown field 静默丢弃，
+        // 两端命令流不等 -> desync 不可见。因此必须在解码 payload 之前
+        // 按 VersionMismatch 明确拒绝，绝不按新 schema 解码旧版本包。
+        match Packet::decode(&bytes) {
+            Err(NetError::VersionMismatch { expected, found }) => {
+                assert_eq!(expected, 4);
+                assert_eq!(found, 3);
+            }
+            other => panic!("version=3 must be rejected decisively: {other:?}"),
         }
     }
 }

@@ -97,7 +97,10 @@ fn static_markers_enter_gpu_vertices() {
     // 确定性：同一装配两次生成完全相同的顶点流（无随机源 / 无墙钟）。
     let again = scene.build_vertices(&map.terrain);
     assert_eq!(vertices, again);
-    assert_eq!(SNAPSHOT_VERSION, 3, "真实地图装配不触碰快照版本");
+    assert_eq!(
+        SNAPSHOT_VERSION, 4,
+        "reason=real_map_assembly_keeps_snapshot_version"
+    );
 }
 
 /// 真实贴图资产存在时返回完整装配产物；否则跳过（CI 无本机资产）。
@@ -337,7 +340,10 @@ fn real_models_enter_scene_vertices_and_are_deterministic() {
     );
     // 确定性：同一真实模型流逐帧可复现（无随机源 / 无墙钟）。
     assert_eq!(with_models, scene.build_vertices(&map.terrain));
-    assert_eq!(SNAPSHOT_VERSION, 3, "真实模型装配不触碰快照版本");
+    assert_eq!(
+        SNAPSHOT_VERSION, 4,
+        "reason=real_model_assembly_keeps_snapshot_version"
+    );
 }
 
 #[test]

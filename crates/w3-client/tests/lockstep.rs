@@ -8,7 +8,7 @@
 //! - 网络包到达不驱动累加器：`advance_ticks(0)` 有大量包也不推进帧；
 //! - 联机玩法命令（施法 / 生产 / 取消生产）走上行广播、与本地同一权威状态，
 //!   上行失败显式返回错误（spec「本地与联机玩法命令一致」Scenario）；
-//! - 联机接入不新增权威状态，快照仍 v3 且头部含 `defs_hash` / `content_hash`；
+//! - 联机接入不新增权威状态，快照仍 v4 且头部含 `defs_hash` / `content_hash`；
 //! - ADR 0005 契约（W3N1 25B 头、protobuf 往返、checksum、first_difference）不变。
 
 use w3_client::{
@@ -519,7 +519,7 @@ fn online_gameplay_uplink_failure_is_explicit() {
 fn wire_format_contract_is_unchanged() {
     assert_eq!(&MAGIC, b"W3N1");
     assert_eq!(HEADER_LEN, 25);
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
 
     let commands = frame_commands(0);
     let encoded = encode_commands(&commands, &[]).expect("encode succeeds");
@@ -580,7 +580,7 @@ fn config() -> w3_core::MatchConfig {
 }
 
 #[test]
-fn online_session_keeps_snapshot_v3_with_defs_hash_header() {
+fn online_session_keeps_snapshot_v4_with_defs_hash_header() {
     let (mut driver, mut relay, _bus) = online();
     for frame in 0..4 {
         inject_frame(&mut relay, frame, frame as u32 + 1, &frame_commands(frame));
@@ -589,7 +589,7 @@ fn online_session_keeps_snapshot_v3_with_defs_hash_header() {
 
     let snapshot = driver.snapshot();
     assert_eq!(snapshot.version, SNAPSHOT_VERSION);
-    assert_eq!(SNAPSHOT_VERSION, 3);
+    assert_eq!(SNAPSHOT_VERSION, 4);
     // 头部身份字段仍在，且联机路径没有新增权威字段（与本地同帧快照逐字段相等）。
     let mut local = FixedStepClient::new(SEED, CONTENT_HASH, world());
     for frame in 0..4 {

@@ -304,7 +304,9 @@ mod tests {
     use w3_net::LoopbackTransport;
     use w3_net::PROTOCOL_VERSION;
     use w3_net::Transport;
-    use w3_net::packet::{parse_resync_replay, parse_welcome, payload_resync_request};
+    use w3_net::packet::{
+        parse_reject, parse_resync_replay, parse_welcome, payload_resync_request,
+    };
 
     fn hello() -> Vec<u8> {
         Packet::new(PacketKind::Hello, 0, 0, 0, vec![])
@@ -358,7 +360,7 @@ mod tests {
 
     #[test]
     fn relay_welcomes_players_and_rejects_bad_version() {
-        assert_eq!(PROTOCOL_VERSION, 3);
+        assert_eq!(PROTOCOL_VERSION, 4);
         let bus = LoopbackBus::shared();
         let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
         let mut client = LoopbackTransport::new(1, &bus);
@@ -386,7 +388,7 @@ mod tests {
         let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
         let mut client = LoopbackTransport::new(1, &bus);
 
-        // 伪装成 v2 的 Input 包，载荷携带玩法命令字段；v3 relay 必须在
+        // 伪装成旧 v2 的 Input 包，载荷携带玩法命令字段；当前版本 relay 必须在
         // 解码 payload 之前按版本回 Reject，玩法字段绝不被静默丢弃后进入命令流。
         let gameplay = GameplayCommand::new(
             w3_core::Frame::new(0),
@@ -405,6 +407,48 @@ mod tests {
         let (_, bytes) = client.recv().unwrap().unwrap();
         let reject = Packet::decode(&bytes).unwrap();
         assert_eq!(reject.kind, PacketKind::Reject);
+        assert!(
+            relay.log().is_empty(),
+            "stale payload must not enter command stream"
+        );
+    }
+
+    #[test]
+    fn relay_rejects_version_three_carrying_new_variant() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        let bus = LoopbackBus::shared();
+        let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+        let mut client = LoopbackTransport::new(1, &bus);
+
+        // 伪装成旧 v3 的 Input 包，载荷携带 PROTOCOL_VERSION 4 新增的
+        // ReviveHero 玩法命令（tag 33）；v4 relay 必须在解码 payload 之前
+        // 回 Reject，新玩法命令字段绝不被静默丢弃后进入权威命令流。
+        let gameplay = GameplayCommand::new(
+            w3_core::Frame::new(0),
+            1,
+            2,
+            GameplayCommandKind::ReviveHero {
+                hero: w3_core::EntityId::new(1).unwrap(),
+                altar: w3_core::EntityId::new(2).unwrap(),
+                altar_def: 7,
+            },
+        );
+        let payload = encode_commands(&[], &[gameplay]).unwrap();
+        let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+            .encode()
+            .unwrap();
+        stale[4] = 3;
+
+        client.send(&Endpoint::Loopback(0), &stale).unwrap();
+        relay.poll().unwrap();
+        let (_, bytes) = client.recv().unwrap().unwrap();
+        let reject = Packet::decode(&bytes).unwrap();
+        assert_eq!(reject.kind, PacketKind::Reject);
+        assert_eq!(
+            parse_reject(&reject.payload).unwrap(),
+            "protocol version mismatch"
+        );
         assert!(
             relay.log().is_empty(),
             "stale payload must not enter command stream"

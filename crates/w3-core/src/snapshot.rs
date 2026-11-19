@@ -8,12 +8,17 @@
 //! v3 由 P5 引入：在 v2 基础上追加冻结内容定义、内容哈希头与全部玩法
 //! 运行态。未发布过其它 v3 快照，恢复时 `world_identity` / `defs_hash` /
 //! `content_hash` 校验会拒绝编码不一致或被篡改的状态，不提供跨版本迁移。
+//!
+//! v4 由 P8.5a 引入：追加英雄复活三组权威状态（死亡登记 / 复活队列 /
+//! 费用登记），并同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 4。旧 v3
+//! 快照因版本不匹配被明确拒绝（`SnapshotError::UnsupportedVersion`），
+//! 不提供跨版本迁移（ADR 0002 §7）。
 
 use crate::command::Command;
-use crate::gameplay::{FrozenDefinitions, UnitGameplayState, WorldGameplayState};
+use crate::gameplay::{FrozenDefinitions, HeroReviveState, UnitGameplayState, WorldGameplayState};
 
-pub const SNAPSHOT_VERSION: u32 = 3;
-pub const SIM_VERSION: u32 = 3;
+pub const SNAPSHOT_VERSION: u32 = 4;
+pub const SIM_VERSION: u32 = 4;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -96,6 +101,10 @@ pub struct Snapshot {
     pub defs: FrozenDefinitions,
     /// 全局玩法运行态（经济 / 胜负 / AI / 光环 / 波次 / 行为注册 / 玩法命令）。
     pub gameplay: WorldGameplayState,
+    /// 英雄复活三组权威状态（死亡登记 / 复活队列 / 费用登记，v4 新增）。
+    /// 帧 N 提交后的完整状态必须包含它们，恢复后从 N+1 继续不重复复活
+    /// （ADR 0002 §7 / R12.4）。
+    pub revive: HeroReviveState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

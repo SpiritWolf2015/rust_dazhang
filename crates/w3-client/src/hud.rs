@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_content::RgbaImage;
-use w3_core::{DefId, Event, SCALE, Snapshot, WorldView};
+use w3_core::{DefId, Event, EventKind, SCALE, Snapshot, WorldView};
 use w3_render::{display_hints, team_color};
 
 use crate::faction::FactionSelection;
@@ -102,6 +102,83 @@ pub struct HudUnit {
 pub struct HudQueueItem {
     pub unit_def: u32,
     pub remaining_frames: u32,
+}
+
+/// 单个祭坛复活队列项的只读 HUD 投影（P8.5a / tasks 6.1）。
+///
+/// 全部字段来自只读 `Snapshot.revive.queue` 的值拷贝，owned、纯表现层，
+/// MUST NOT 反写 `RtsMatch` 权威状态、进状态哈希 / 快照 / `first_difference()`。
+/// 进度 / 费用 / 剩余帧均由冻结权威状态只读派生，不引入墙钟、全局静态字典
+/// 或建筑名白名单（ADR 0002 §5 / D7 / R10.5）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudReviveItem {
+    pub hero: u64,
+    pub altar: u64,
+    pub altar_def: DefId,
+    pub owner: u8,
+    pub remaining_frames: u32,
+    pub total_frames: u32,
+    pub gold: i64,
+    pub lumber: i64,
+}
+
+/// 祭坛复活 HUD 的只读投影模型（一帧）。
+///
+/// 只从只读 `Snapshot.revive.{queue,deaths,charges}` 与 `drain_events()` 的
+/// `HeroDied` / `Revived` 事实事件拷贝派生；本结构不持有 `RtsMatch`，结构上
+/// 无法反写模拟状态，也不进入 FNV-1a 状态哈希 / 快照 / `first_difference()`。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReviveHudModel {
+    /// 复活队列项（按 `BTreeMap` 稳定 `EntityId` 顺序）。
+    pub queue: Vec<HudReviveItem>,
+    /// 死亡登记条数（只读派生，仅用于 HUD 展示）。
+    pub deaths: usize,
+    /// 冻结扣费登记条数（只读派生，仅用于 HUD 展示）。
+    pub charges: usize,
+    /// 本批次事实事件中的 `HeroDied` 计数。
+    pub hero_died_events: usize,
+    /// 本批次事实事件中的 `Revived` 计数。
+    pub revived_events: usize,
+}
+
+impl ReviveHudModel {
+    /// 从只读快照拷贝与事实事件拷贝派生 HUD 数据；纯只读、无副作用。
+    ///
+    /// `snapshot` 是 [`w3_core::Snapshot`] 的所有权副本（由 `StepDriver::snapshot`
+    /// 提供），`events` 是 `drain_events()` 的事实事件拷贝。本函数只读取两者，
+    /// 不调用 `step()`、不提交命令、不改写任何权威状态字段。
+    pub fn derive(snapshot: &Snapshot, events: &[Event]) -> Self {
+        let queue = snapshot
+            .revive
+            .queue
+            .values()
+            .map(|item| HudReviveItem {
+                hero: item.hero.value(),
+                altar: item.altar.value(),
+                altar_def: item.altar_def,
+                owner: item.owner,
+                remaining_frames: item.remaining_frames,
+                total_frames: item.total_frames,
+                gold: item.gold,
+                lumber: item.lumber,
+            })
+            .collect();
+        let hero_died_events = events
+            .iter()
+            .filter(|event| event.kind == EventKind::HeroDied)
+            .count();
+        let revived_events = events
+            .iter()
+            .filter(|event| event.kind == EventKind::Revived)
+            .count();
+        Self {
+            queue,
+            deaths: snapshot.revive.deaths.len(),
+            charges: snapshot.revive.charges.len(),
+            hero_died_events,
+            revived_events,
+        }
+    }
 }
 
 /// 命令卡动作（由选中集合与实体类型只读派生）。
@@ -225,6 +302,9 @@ pub struct HudModel {
     pub supply_used: i64,
     pub supply_cap: i64,
     pub queue: Vec<HudQueueItem>,
+    /// 祭坛复活队列的只读 HUD 投影（P8.5a / tasks 6.1）；纯表现层派生，
+    /// MUST NOT 反写权威状态、进状态哈希 / 快照 / `first_difference()`。
+    pub revive: ReviveHudModel,
     pub selected_count: usize,
     pub event_count: usize,
     /// 本地玩家编号，用于按队伍区分 HUD 标记颜色。
@@ -456,6 +536,8 @@ impl HudModel {
             supply_used: economy.map_or(0, |e| e.supply_used),
             supply_cap: economy.map_or(0, |e| e.supply_cap),
             queue,
+            // 只读派生：只消费 `snapshot.revive` 与事实事件拷贝，不写回模拟状态。
+            revive: ReviveHudModel::derive(snapshot, events),
             selected_count: selection.len(),
             event_count: events.len(),
             local_player,
@@ -698,6 +780,39 @@ pub fn draw_with_minimap(
                 ));
             }
         }
+        ui.separator();
+
+        // 祭坛复活队列：只读投影的进度 / 费用 / 剩余帧（P8.5a / tasks 6.1）。
+        // 文案全部走 i18n，MUST NOT 进日志 / 权威状态 / 状态哈希（ADR 0002 §5）。
+        ui.label(texts.revive_queue);
+        if model.revive.queue.is_empty() {
+            ui.label(texts.revive_empty);
+        } else {
+            for item in &model.revive.queue {
+                ui.label(format!(
+                    "{} #{}: {} {}/{} | {} {} {}",
+                    texts.revive_hero,
+                    item.hero,
+                    texts.revive_remaining,
+                    item.remaining_frames,
+                    item.total_frames,
+                    texts.revive_cost,
+                    item.gold,
+                    item.lumber,
+                ));
+            }
+        }
+        ui.label(format!(
+            "{}: {} | {}: {} | {}: {} | {}: {}",
+            texts.revive_deaths,
+            model.revive.deaths,
+            texts.revive_charges,
+            model.revive.charges,
+            texts.hero_died,
+            model.revive.hero_died_events,
+            texts.hero_revived,
+            model.revive.revived_events,
+        ));
         ui.separator();
 
         // 小地图：只读实体点 + 相机视口框；点击只返回归一化坐标。

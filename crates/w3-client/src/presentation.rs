@@ -3,7 +3,7 @@
 //! 本模块只消费 `WorldView` / 事实事件拷贝与一个表现层 `alpha`，从不持有
 //! `RtsMatch`，因此结构上无法写回位置 / 朝向 / 生命，也无法把 `alpha`、
 //! 相机、选中或 HUD 状态塞进权威状态、FNV-1a 状态哈希或 `SNAPSHOT_VERSION`
-//! （当前 3）快照（ADR 0002 §1、§5、design D2 / D4）。
+//! （当前 4）快照（ADR 0002 §1、§5、design D2 / D4）。
 
 use w3_core::{Event, WorldView};
 use w3_render::{FrameInput, ModelLibrary, Scene, SceneVertex, TerrainMesh};

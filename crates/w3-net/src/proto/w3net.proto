@@ -11,6 +11,9 @@
 // PROTOCOL_VERSION 3：新增玩法命令线格式（ADR 0005 §3）。玩法命令用独立的
 // GameplayCommand 消息与 GameplayCommandBatch，只在顶层 CommandBatch 追加；
 // 既有 Command 的 oneof 与控制包字段编号、reserved 一律零改动。
+// PROTOCOL_VERSION 4（新增游戏玩法命令变体 ReviveHero / CancelRevive）：
+// 在 GameplayCommand.oneof 只追加 tag 33 / 34，reserved 14 to 32 原样保留；
+// 明确拒绝 v3，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
 
 syntax = "proto3";
 package w3net;
@@ -112,7 +115,7 @@ message Reject {
   reserved 2 to 6;
 }
 
-// ---- 玩法命令线格式（PROTOCOL_VERSION 3，只追加，见 ADR 0005 §3）----
+// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体，只追加，见 ADR 0005 §3）----
 
 // 效果定义（玩法命令参数）：EffectKind 用稳定码 uint32 承载，amount 用 int64。
 message EffectDef {
@@ -123,7 +126,8 @@ message EffectDef {
 }
 
 // 玩法命令：execute_frame / player_id / sequence 与 w3_core::GameplayCommand 一一对应。
-// oneof kind 用 tag 4–13 覆盖全部 10 个玩法变体，reserved 14 to 32 留给后续只追加。
+// oneof kind 用 tag 4–13 覆盖前 10 个玩法变体；PROTOCOL_VERSION 4 在
+// reserved 14 to 32 之后只追加 tag 33 / 34 两个变体（跳过 reserved 段）。
 // arrival 不编码，由各端提交时按稳定序本地分配。
 message GameplayCommand {
   uint64 execute_frame = 1;
@@ -140,6 +144,8 @@ message GameplayCommand {
     GameplaySpawnWave spawn_wave = 11;
     GameplaySetAi set_ai = 12;
     GameplayLeave leave = 13;
+    GameplayReviveHero revive_hero = 33;
+    GameplayCancelRevive cancel_revive = 34;
   }
   reserved 14 to 32;
 }
@@ -200,6 +206,19 @@ message GameplaySetAi {
 // 离开：w3_core 的 u8 用 uint32 承载，解码时显式校验不溢出。
 message GameplayLeave {
   uint32 player = 1;
+  reserved 2 to 8;
+}
+// 祭坛复活（PROTOCOL_VERSION 4 追加）：EntityId 用 uint64 的 value()，
+// DefId 用 u32，解码时无符号不溢出；字段编号只追加，尾部保留 reserved。
+message GameplayReviveHero {
+  uint64 hero = 1;
+  uint64 altar = 2;
+  uint32 altar_def = 3;
+  reserved 4 to 8;
+}
+// 取消复活（PROTOCOL_VERSION 4 追加）：目标英雄 EntityId 用 uint64。
+message GameplayCancelRevive {
+  uint64 hero = 1;
   reserved 2 to 8;
 }
 

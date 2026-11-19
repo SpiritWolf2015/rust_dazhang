@@ -10,6 +10,10 @@
 //! 与玩法 `GameplayCommand`（独立 `GameplayCommandBatch` 子批）。两类命令
 //! 是两条独立队列、各自独立 `arrival`；`arrival` 一律不编码，由各端提交时
 //! 按稳定序本地分配。Input / Frame / ResyncReplay 三条路径共用这一批结构。
+//!
+//! `PROTOCOL_VERSION = 4` 在玩法 oneof 只追加 `ReviveHero` / `CancelRevive`
+//! 两个变体（tag 33 / 34，跳过 `reserved 14 to 32`）；帧编排、`arrival` 语义
+//! 与「恰好一次 `step()`」推进点一律不变（ADR 0005 §3）。
 
 use prost::Message;
 use w3_core::{
@@ -200,10 +204,10 @@ fn from_pb_kind(kind: pb::command::Kind) -> CommandKind {
 }
 
 // ---------------------------------------------------------------------------
-// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（10 变体）
+// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（12 变体）
 // ---------------------------------------------------------------------------
 
-/// 把 10 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
+/// 把 12 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
 pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::Kind {
     match *kind {
         GameplayCommandKind::Cast {
@@ -259,10 +263,24 @@ pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::
                 player: u32::from(player),
             })
         }
+        GameplayCommandKind::ReviveHero {
+            hero,
+            altar,
+            altar_def,
+        } => pb::gameplay_command::Kind::ReviveHero(pb::GameplayReviveHero {
+            hero: hero.value(),
+            altar: altar.value(),
+            altar_def,
+        }),
+        GameplayCommandKind::CancelRevive { hero } => {
+            pb::gameplay_command::Kind::CancelRevive(pb::GameplayCancelRevive {
+                hero: hero.value(),
+            })
+        }
     }
 }
 
-/// 把 protobuf `GameplayCommand.kind` oneof 还原为 10 类 `GameplayCommandKind`；穷尽匹配。
+/// 把 protobuf `GameplayCommand.kind` oneof 还原为 12 类 `GameplayCommandKind`；穷尽匹配。
 /// 缺 `kind` / 缺 `effect` / 未知效果码 / 数值溢出一律显式返回 `NetError`，不猜测、不回退。
 pub fn from_pb_gameplay_kind(
     kind: pb::gameplay_command::Kind,
@@ -308,6 +326,16 @@ pub fn from_pb_gameplay_kind(
         pb::gameplay_command::Kind::SetAi(m) => GameplayCommandKind::SetAi { enabled: m.enabled },
         pb::gameplay_command::Kind::Leave(m) => GameplayCommandKind::Leave {
             player: u8::try_from(m.player).map_err(|_| overflow_error("player", m.player))?,
+        },
+        // uint64 -> EntityId(u64) / uint32 -> DefId(u32) 均为无损定宽映射，
+        // 无收窄转换，因此不存在数值溢出分支；缺字段由 oneof 的 Option 拦截。
+        pb::gameplay_command::Kind::ReviveHero(m) => GameplayCommandKind::ReviveHero {
+            hero: entity_from_raw(m.hero),
+            altar: entity_from_raw(m.altar),
+            altar_def: m.altar_def,
+        },
+        pb::gameplay_command::Kind::CancelRevive(m) => GameplayCommandKind::CancelRevive {
+            hero: entity_from_raw(m.hero),
         },
     })
 }
@@ -554,7 +582,8 @@ mod tests {
         ]
     }
 
-    /// 覆盖 10 类玩法变体与 4 种 EffectKind 稳定码的样本。
+    /// 覆盖全部 12 类玩法变体的样本（含 1 种 EffectKind 稳定码）；
+    /// 其余 3 种 EffectKind 稳定码由专门用例覆盖。
     fn sample_gameplay() -> Vec<GameplayCommand> {
         let caster = entity_from_raw(1);
         let target = entity_from_raw(2);
@@ -638,6 +667,24 @@ mod tests {
                 2,
                 GameplayCommandKind::Leave { player: 2 },
             ),
+            GameplayCommand::new(
+                Frame::new(7),
+                1,
+                1,
+                GameplayCommandKind::ReviveHero {
+                    hero: entity_from_raw(20),
+                    altar: entity_from_raw(21),
+                    altar_def: 22,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(7),
+                2,
+                2,
+                GameplayCommandKind::CancelRevive {
+                    hero: entity_from_raw(20),
+                },
+            ),
         ]
     }
 
@@ -700,8 +747,9 @@ mod tests {
     }
 
     #[test]
-    fn all_ten_gameplay_kinds_roundtrip() {
+    fn all_twelve_gameplay_kinds_roundtrip() {
         let gameplay = sample_gameplay();
+        assert_eq!(gameplay.len(), 12, "sample must cover every gameplay kind");
         let bytes = encode_commands(&[], &gameplay).unwrap();
         let (commands, decoded) = decode_commands(&bytes).unwrap();
         assert!(commands.is_empty());
@@ -961,5 +1009,297 @@ mod tests {
         assert_eq!(parse_resync_replay(&bytes).unwrap(), frames);
         // 重复编码逐字节一致（canonical）。
         assert_eq!(payload_resync_replay(&frames).unwrap(), bytes);
+    }
+
+    // ---- PROTOCOL_VERSION 4：新增玩法变体的线格式回归 ----
+
+    // 手工拼装 protobuf 原语（仅测试用），用于构造 canonical / 非 canonical 反例。
+    fn put_varint(out: &mut Vec<u8>, mut value: u64) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+
+    fn field_varint(tag: u32, value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        put_varint(&mut out, (u64::from(tag) << 3) | 0);
+        put_varint(&mut out, value);
+        out
+    }
+
+    fn field_bytes(tag: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        put_varint(&mut out, (u64::from(tag) << 3) | 2);
+        put_varint(&mut out, payload.len() as u64);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    /// 手工拼装一条 `GameplayCommand`：oneof kind 落在调用方指定的 tag 上，
+    /// 载荷为 `GameplayReviveHero` 形状，便于把新变体错放进 reserved 段做反例。
+    fn gameplay_command_with_kind_tag(tag: u32, hero: u64, altar: u64, altar_def: u32) -> Vec<u8> {
+        let mut revive = Vec::new();
+        revive.extend(field_varint(1, hero));
+        revive.extend(field_varint(2, altar));
+        revive.extend(field_varint(3, u64::from(altar_def)));
+        let mut command = Vec::new();
+        command.extend(field_varint(1, 3)); // execute_frame = 3
+        command.extend(field_varint(2, 1)); // player_id = 1
+        command.extend(field_varint(3, 1)); // sequence = 1
+        command.extend(field_bytes(tag, &revive));
+        command
+    }
+
+    /// 把一条玩法命令装进 `GameplayCommandBatch`（field 1）与 `CommandBatch`（field 9）。
+    fn command_batch_with_gameplay(command: Vec<u8>) -> Vec<u8> {
+        field_bytes(9, &field_bytes(1, &command))
+    }
+
+    #[test]
+    fn revive_and_cancel_variants_roundtrip_is_canonical() {
+        // 含定宽边界值：uint64 / uint32 无损，且不产生收窄溢出。
+        let gameplay = vec![
+            GameplayCommand::new(
+                Frame::new(3),
+                1,
+                1,
+                GameplayCommandKind::ReviveHero {
+                    hero: entity_from_raw(20),
+                    altar: entity_from_raw(21),
+                    altar_def: 22,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(3),
+                2,
+                2,
+                GameplayCommandKind::ReviveHero {
+                    hero: entity_from_raw(u64::MAX),
+                    altar: entity_from_raw(1),
+                    altar_def: u32::MAX,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(4),
+                1,
+                3,
+                GameplayCommandKind::CancelRevive {
+                    hero: entity_from_raw(u64::MAX),
+                },
+            ),
+        ];
+        let first = encode_commands(&[], &gameplay).unwrap();
+        let second = encode_commands(&[], &gameplay).unwrap();
+        assert_eq!(first, second, "two encodes must be byte-identical");
+        let (commands, decoded) = decode_commands(&first).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            first,
+            "decode -> encode must be canonical"
+        );
+        // 逐条单独往返，避免批量编码掩盖某个变体的歧义映射。
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    #[test]
+    fn appended_variants_use_wire_tags_33_and_34() {
+        // tag 33 / wire 2 -> key varint (33<<3)|2 = 266 -> [0x8a, 0x02]。
+        let revive = encode_commands(
+            &[],
+            &[GameplayCommand::new(
+                Frame::new(3),
+                1,
+                1,
+                GameplayCommandKind::ReviveHero {
+                    hero: entity_from_raw(5),
+                    altar: entity_from_raw(6),
+                    altar_def: 7,
+                },
+            )],
+        )
+        .unwrap();
+        assert!(
+            revive.windows(2).any(|w| w == &[0x8a, 0x02][..]),
+            "ReviveHero must be encoded on tag 33"
+        );
+        // tag 34 / wire 2 -> key varint (34<<3)|2 = 274 -> [0x92, 0x02]。
+        let cancel = encode_commands(
+            &[],
+            &[GameplayCommand::new(
+                Frame::new(3),
+                1,
+                1,
+                GameplayCommandKind::CancelRevive {
+                    hero: entity_from_raw(5),
+                },
+            )],
+        )
+        .unwrap();
+        assert!(
+            cancel.windows(2).any(|w| w == &[0x92, 0x02][..]),
+            "CancelRevive must be encoded on tag 34"
+        );
+    }
+
+    #[test]
+    fn reserved_tag_for_new_variant_is_rejected_not_silently_interpreted() {
+        // 缺陷态：把 ReviveHero 载荷错放进 reserved 14 to 32 段的 tag 14。
+        // prost 把该 tag 视作 unknown field 丢弃，kind 变 None，解码必须
+        // 显式返回 Malformed，绝不猜测成某个玩法变体、也不静默降级。
+        let defect = command_batch_with_gameplay(gameplay_command_with_kind_tag(14, 5, 6, 7));
+        assert!(matches!(
+            decode_commands(&defect),
+            Err(NetError::Malformed(_))
+        ));
+        // reserved 段另一端 tag 32 同样被拒。
+        let defect_high = command_batch_with_gameplay(gameplay_command_with_kind_tag(32, 5, 6, 7));
+        assert!(matches!(
+            decode_commands(&defect_high),
+            Err(NetError::Malformed(_))
+        ));
+
+        // 元断言防退化：同一载荷只改回规范 tag 33 / 34 时必须成功解码，
+        // 证明上面的拒绝仅来自「reserved tag 被丢弃」，而非载荷本身畸形。
+        let revive = command_batch_with_gameplay(gameplay_command_with_kind_tag(33, 5, 6, 7));
+        let (commands, gameplay) = decode_commands(&revive).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 1);
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::ReviveHero {
+                hero: entity_from_raw(5),
+                altar: entity_from_raw(6),
+                altar_def: 7,
+            }
+        );
+        // tag 34 载荷为 CancelRevive 形状（field 1 = hero）。
+        let mut cancel = Vec::new();
+        cancel.extend(field_varint(1, 3));
+        cancel.extend(field_varint(2, 1));
+        cancel.extend(field_varint(3, 1));
+        cancel.extend(field_bytes(34, &field_varint(1, 5)));
+        let cancel_batch = command_batch_with_gameplay(cancel);
+        let (_, gameplay) = decode_commands(&cancel_batch).unwrap();
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::CancelRevive {
+                hero: entity_from_raw(5),
+            }
+        );
+    }
+
+    #[test]
+    fn non_canonical_varint_is_rejected_or_normalized_never_echoed() {
+        // 溢出型非规范 varint（10 个以上 continuation 字节）：prost 报
+        // invalid varint，decode_commands 明确转成 NetError::Malformed。
+        let mut overlong_cmd = vec![0x08]; // execute_frame field 1, wire type 0
+        overlong_cmd.extend_from_slice(&[0x80u8; 11]);
+        overlong_cmd.push(0x00);
+        overlong_cmd.extend(field_varint(2, 1));
+        overlong_cmd.extend(field_varint(3, 1));
+        let overflow = command_batch_with_gameplay(overlong_cmd);
+        assert!(matches!(
+            decode_commands(&overflow),
+            Err(NetError::Malformed(_))
+        ));
+
+        // overlong 但可解码的 varint（0x81 0x00 表示 1）：prost 宽容解码，
+        // 但解码 -> 再编码产出规范最短字节，绝不回显非规范字节（canonical）。
+        // ADR 0005 §3 的「解码 → 再编码」canonical 往返校验正是此约束。
+        let mut non_canonical = vec![0x08];
+        non_canonical.extend_from_slice(&[0x81, 0x00]); // execute_frame = 1（overlong）
+        non_canonical.extend(field_varint(2, 1)); // player_id = 1
+        non_canonical.extend(field_varint(3, 1)); // sequence = 1
+        let mut revive = Vec::new();
+        revive.extend(field_varint(1, 5));
+        revive.extend(field_varint(2, 6));
+        revive.extend(field_varint(3, 7));
+        non_canonical.extend(field_bytes(33, &revive));
+        let bytes = command_batch_with_gameplay(non_canonical.clone());
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::ReviveHero {
+                hero: entity_from_raw(5),
+                altar: entity_from_raw(6),
+                altar_def: 7,
+            }
+        );
+        let reencoded = encode_commands(&commands, &gameplay).unwrap();
+        // 再编码等于同一逻辑命令的规范编码，且绝不回显 overlong 字节。
+        let canonical_command = GameplayCommand::new(
+            Frame::new(1),
+            1,
+            1,
+            GameplayCommandKind::ReviveHero {
+                hero: entity_from_raw(5),
+                altar: entity_from_raw(6),
+                altar_def: 7,
+            },
+        );
+        assert_eq!(
+            reencoded,
+            encode_commands(&[], &[canonical_command]).unwrap(),
+            "decode -> encode must normalize to canonical bytes"
+        );
+        assert_ne!(reencoded, bytes, "non-canonical bytes must not be echoed");
+        assert!(
+            reencoded.windows(2).any(|w| w == &[0x08, 0x01][..]),
+            "re-encode must use minimal varint for execute_frame=1"
+        );
+        assert!(
+            !reencoded.windows(3).any(|w| w == &[0x08, 0x81, 0x00][..]),
+            "overlong varint must not survive re-encode"
+        );
+    }
+
+    #[test]
+    fn schema_appends_only_tags_33_and_34_and_preserves_reserved() {
+        let schema = include_str!("proto/w3net.proto");
+        assert!(schema.contains("reserved 14 to 32;"));
+        assert!(schema.contains("message GameplayReviveHero {"));
+        assert!(schema.contains("message GameplayCancelRevive {"));
+        assert!(schema.contains("uint64 hero = 1;"));
+        assert!(schema.contains("uint64 altar = 2;"));
+        assert!(schema.contains("uint32 altar_def = 3;"));
+        // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加 33 / 34。
+        let oneof = schema
+            .split("oneof kind {")
+            .nth(2)
+            .expect("gameplay oneof missing")
+            .split('}')
+            .next()
+            .expect("gameplay oneof body missing");
+        let tags: Vec<u32> = oneof
+            .lines()
+            .filter_map(|line| {
+                let code = line.split("//").next().unwrap_or("").trim();
+                let value = code.rsplit("= ").next()?.trim().trim_end_matches(';');
+                value.parse().ok()
+            })
+            .collect();
+        assert_eq!(
+            tags,
+            vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34],
+            "oneof tags must be append-only (4-13 + 33/34)"
+        );
+        // 新消息尾部保留 reserved；既有编号段零改动。
+        assert!(schema.contains("reserved 4 to 8;"));
+        assert!(schema.contains("reserved 2 to 8;"));
+        assert!(schema.contains("reserved 11 to 16;"));
     }
 }

@@ -1,0 +1,48 @@
+# Proposal
+
+## Why
+
+落实路线图 `docs/roadmap/P8-human-orc-melee.md §3 P8.5`（:119-131）的 **P8.5a「英雄复活」**（:125 表行「祭坛复活队列、费用 / 时间读冻结常量、英雄状态与背包恢复」、验收「英雄阵亡后可复活、复活后状态与哈希一致」）；P8.5 全量已由用户 2026-11-14 拍板必做（:28 / :151），五个子系统各单独 change、串行推进、不塞回 P8.0–P8.4（:121）。用户 **2026-11-19 经 `AskUserQuestion` 明确拍板「改内核真复活（推荐）」**：按 ADR 0002 全流程新增权威状态（死亡登记 / 复活队列 / 费用）进状态哈希、快照与 `first_difference()`，跑 `cargo test -p w3-core --test determinism`（26 项）与「改坏验红」反向验证，同步修订主 specs「`w3-core` 零 diff / `SNAPSHOT_VERSION` 仍 3 / golden hash 逐字节不变」口径，golden hash 基线必变。现状内核无复活命令 / 事件 / 队列字段 / 扣款路径，`HeroState` 是从不构造 `Some` 的死字段，`complete_production` 生成 `hero=None` 的新实体，故「只读派生降级」无法满足验收线（详见 `decision-memo.md` C2–C9 与 `design.md`「## 参考项目对照」）。业务规则依据 `docs/references/WC3-MELEE-RULES.md`：R4.2（祭坛召唤与复活）、R6.1 / R6.2 / R6.3 / R6.4 / R6.5（英雄等级 / 6 格物品栏 / 死亡与复活 / 属性 / 经验分摊）、R7.2 / R8.6、R9.3（中立建筑走既有命令面）、R11.2（英雄死亡不结束对局）、R12.4（回放哈希一致）、R1.2 / R13.3（定义层类别驱动、不写死建筑名）、§14（不静默改规则）；1.0 范围 §0 的 S1（局域网联机对战，含真人 VS AI 敌人玩家）/ S2（回放）/ S3（四族功能做完）。不做范围 N1–N6 不纳入。相关 ADR：0001（零资产 / 许可证）、0002（确定性硬门禁）、0003（范围与分期）、0004（冻结坐标）、0005（联机线格式与 protobuf 分层边界）。
+
+## What Changes
+
+- **新增权威状态并纳入确定性契约**：在 `w3-core` 新增英雄死亡登记（整数帧号 `death_frame: u64` + `BTreeMap` 确定性有序容器）、祭坛复活队列项（指向同一英雄 `EntityId`、剩余帧数、费用）、复活费用 / 时间常量；以上全部 MUST 同步进入 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION` 定义的快照与 `first_difference()`（ADR 0002 §6-8 / `CODEBUDDY.md §5`）。30 Hz 整数帧、`ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序键、稳定 `EntityId` 顺序不变。
+- **复活恢复同一英雄实体**：完成祭坛复活队列项时 MUST 恢复**同一个英雄实体**（同一 `EntityId`、等级 / 经验 / 6 格背包 / 技能等级随实体保留，置回存活并按冻结常量恢复生命 / 法力、改到祭坛位置），MUST NOT `spawn` 新实体、MUST NOT 清空 `hero` / `bag`；英雄死亡不删实体、不判负（R6.3 / R11.2）。依据 Warsmash `CUnit.java:1940-1946,2128-2160` 与 godot `apply_revived_hero_state` 语义（只借鉴语义，见 `design.md`）。
+- **费用 / 时间读冻结合成常量**：复活费用（gold / lumber）/ 时间（整数帧）MUST 读冻结的**合成 / 原创编译期整数常量**、随英雄等级按「基数 + 等级系数 → 绝对上限」计算、全部标 `[待核]`、不写死数值、不冒充原版、不入库（ADR 0001 / ADR 0004 / §14）；祭坛复活与酒馆买活参数 / 命令分离（R6.3 / R9.3，酒馆买活是否纳入本期见待确认项 Q4）。
+- **费用事务与效果执行链分离**：扣费提交与队列效果执行 MUST 分离（主 `openspec/specs/gameplay-systems/spec.md:19`）；取消 / 死亡 / 失败 MUST 事务性退款并恢复死亡登记，MUST NOT 静默丢队列或重复扣费（Warsmash `CAbilityReviveHero.java:124-131,144-149` / godot `production_module.gd:192-214` 语义）。
+- **命令与事件面**：按用户拍板改内核，按 Q2 拍板新增独立 `ReviveHero` / `CancelRevive` `GameplayCommandKind` 变体 + `HeroDied` / `Revived` 事实事件变体（不复用 `Train` + 扩展 `ProductionItem` 的被否备选），经公开提交入口按冻结帧号入队、同源校验、`ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序；牵动 `hash_gameplay_command` 编码、命令校验 / 穷尽分发、ADR 0005 protobuf 字段编号（只追加 / `reserved 14 to 32`）/ `PROTOCOL_VERSION` bump 与 `Reject` 旧版本，`net-owner` 按 `CODEBUDDY.md §9` 串行协作。
+- **表现层 HUD 队列只读派生**：祭坛复活队列进度 / 费用 / 剩余帧 SHOULD 经只读视图或事实事件向 HUD 投影、MUST NOT 反写权威状态、MUST NOT 进状态哈希 / 快照（ADR 0002 §5）；只读视图扩展不得引入墙钟 / 全局静态字典 / 建筑名白名单。
+- **主 specs 口径同步修订**：用 `## MODIFIED Requirements` 修订 `faction-definitions` / `melee-match` / `human-faction` / `gameplay-systems` 中「`w3-core` 零 diff / `SNAPSHOT_VERSION` 仍 3 / golden hash 逐字节不变」等历史断言（归档时才合并，本阶段不改主 `openspec/specs/**` 正文），改为「本 change 按 ADR 0002 全流程改 `w3-core`、新增权威状态同步进哈希 / 快照 / `first_difference()`、determinism 26 项、golden hash 基线按新实现更新、`SNAPSHOT_VERSION` 按 Q1 拍板 bump 4（连同 `SIM_VERSION`、快照头部、单测硬断言、golden hash 基线、ADR 0002 复核记录同步更新；旧 v3 快照 / 回放按 `SnapshotError` / `Reject` 明确拒绝）；`GameplayCommandKind` 按 Q2 拍板新增独立 `ReviveHero` / `CancelRevive` 变体」。`human-faction` 增补 3 条 MODIFIED delta（连同既有 1 条共 4 条）消除 critic 规格门 blocker B-1，逐字保留历史 `#### Scenario:` 身份键、口径改在 THEN；主 `melee-match/spec.md:6` Purpose 下 blockquote 注记经实测 OpenSpec 1.17.0 delta 机制不合并，登记为已知限制由 `docs-owner` 后续独立 change 收口（见 `design.md` / `decision-memo.md`「## 已知限制 / 边界」）。
+- **BREAKING**：golden hash 基线按新实现如实更新（必变，不沿用旧基线）；`SNAPSHOT_VERSION` 按 Q1 拍板 bump 4（连同 `SIM_VERSION`、快照头部、单测硬断言、golden hash 基线、ADR 0002 复核记录同步更新；旧 v3 快照 / 回放按 `SnapshotError` / `Reject` 明确拒绝），新增字段 MUST 完整进哈希 / 快照 / `first_difference()` 并跑通 determinism 26 项；主 specs 的旧零 diff 口径失效、由本 change 的 MODIFIED delta 同步修订。
+
+## Capabilities
+
+### New Capabilities
+
+- `hero-revive`: P8.5a 英雄复活的确定性权威契约——死亡登记（整数帧 + `BTreeMap`）、祭坛复活队列与恢复同一英雄实体（等级 / 经验 / 背包 / 技能）、费用 / 时间读冻结合成常量且随等级计算、费用事务与队列效果分离及取消 / 失败退款、新增权威状态同步进状态哈希 / `SNAPSHOT_VERSION` 快照 / `first_difference()`、命令与事件、只读 HUD 派生、determinism 26 项与「改坏验红」、零资产与 `[待核]` 边界、与 P8.2 `orc-faction/spec.md:39` 的边界衔接。
+
+### Modified Capabilities
+
+- `faction-definitions`: 修订「开局按种族装配且不新增权威状态」requirement 的「`SNAPSHOT_VERSION` 仍 3 / 内核零 diff」验收口径（:24 / :31-34），选族不进权威状态的既有语义不变。
+- `melee-match`: 修订「内核零改动与确定性契约」（:127-139）与「四组合双族对局的会话装配与逐帧哈希一致」（:141-163，尤其 :155-158「重开干净与快照版本不变」）中「零改动 / 仍 3 / golden hash 逐字节不变」口径。
+- `human-faction`: 共修订 4 条 requirement 消除 critic 规格门 blocker B-1——①「人族冻结定义完整集」（:8-25，尤其 :22-25「内容哈希随新增定义变化而非新增权威状态」）、②「人族主动技能与攻防升级走既有命令面」（:29 / :41-44「内核命令与效果类型集合不变」，改 `w3-core` 真复活后按 Q2 新增 `Revive*` 变体）、③「Race 分派与开局装配不新增权威状态」（:48 / :60-63「不新增运行时权威状态」）、④「人族 CPU 端到端一局与确定性闭环」（:79-126，尤其 :118-121 / :123-126）；统一把「`git diff -- crates/w3-core/` 为空 / `SNAPSHOT_VERSION` 仍 3 / 逐字节不变 / 变体集合不变 / MUST NOT 新增权威状态」旧断言改为 P8.5a 按 ADR 0002 全流程改内核、`SNAPSHOT_VERSION` 按 Q1 拍板 bump 4 的口径，逐字保留全部历史 `#### Scenario:` 身份键、正向语义（六类定义齐备 / 合成整数零资产 / 两族 Spawn 字节一致 / Cast·Research 走既有命令面 / Race 分派 `100..200`）不删。
+- `gameplay-systems`: 修订「Shared effect settlement」（:17-26，尤其 :19「费用提交事务与效果执行链 MUST 分离」）以明确覆盖复活费用提交 / 取消退款事务，并落实其 Purpose（:4）「新增权威状态同步进状态哈希与快照」对复活队列 / 费用 / 死亡登记的约束；既有 Purpose 正文不改写。
+
+## Impact
+
+- **代码面 / owner**：实施期 `sim-owner` 为 `crates/w3-core/` 唯一实现所有者（守 ADR 0002），`client-owner`（`w3-client` / `w3-render` 只读 HUD 派生）、`net-owner`（按 Q2 拍板新增命令变体牵动 ADR 0005 protobuf / `PROTOCOL_VERSION`）按 `CODEBUDDY.md §9` 由 leader 编排、串行协作、不并行改同一 owner 文件；本**提案阶段只写 `openspec/changes/p8-hero-revive/` 下的文档**，不改 `crates/` 任何文件。`w3-content` 原始 `f64` 冻结输入边界不变（ADR 0004）。
+- **确定性契约（ADR 0002）**：本 change **按用户 2026-11-19 拍板改 `w3-core` 真复活**，是有新增权威状态的内核改动，不是既有 P8.0–P8.4 的「零 diff」型 change。新增权威状态（死亡登记 / 复活队列 / 费用）MUST 同步进 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION` 定义的快照、`first_difference()`；MUST 跑 `cargo test -p w3-core --test determinism`（26 项）与「改坏验红」反向验证（`CODEBUDDY.md §5`）；golden hash 基线按新实现如实更新；`SNAPSHOT_VERSION` 按 Q1 拍板 bump 4（连同 `SIM_VERSION`、快照头部、单测硬断言、golden hash 基线、ADR 0002 复核记录同步更新；旧 v3 快照 / 回放按 `SnapshotError` / `Reject` 明确拒绝），按路线图 :138 走 ADR 复核、同步 `SIM_VERSION` / 快照头部 / 单测硬断言 / 归档纪要。命令排序键、30 Hz 整数帧、稳定 `EntityId` 顺序、FNV-1a 编码方式不变；表现层只读派生不进权威状态 / 哈希 / 快照。
+- **ADR 0005 连带**：按 Q2 拍板新增 `GameplayCommandKind::ReviveHero` / `CancelRevive` 命令变体 + `HeroDied` / `Revived` 事件变体，牵动 `hash_gameplay_command`（`gameplay.rs:633-698`）/ 校验（:701-718）/ 穷尽分发（`sim_match.rs:1180-1206`）/ `EventKind`（`sim_match.rs:162-169`）/ protobuf schema 字段编号只追加、`reserved 14 to 32`、`PROTOCOL_VERSION` bump 与 `Reject` 明确拒绝旧版本（`docs/decisions/0005-protobuf-payload.md:34-44,84`、修订记录）；canonical 约束继续适用、`net-owner` 按 `CODEBUDDY.md §9` 串行协作、CI 双平台生成代码字节一致。
+- **资产 / 法律（ADR 0001 / ADR 0004）**：仓库零资产，复活费用 / 时间 / 上限全部为合成 / 原创编译期整数常量 `[待核]`，不含 MPQ 派生数据、真实导出 JSON、参考项目单位名 / rawcode / 原创数值；`w3-content` 原始 `f64` 坐标不进哈希 / 快照；`WarsmashModEngine`（AGPLv3）**只借鉴语义、禁止复制任何 Java / LibGDX 代码**；`rts_kernel_cs` 的 `double` 路线与「不承诺跨平台确定性」不采用；`vera20k`（GPLv3 + Section 7）只读、线格式以本项目 ADR 0005 自有 `W3N1` 为准。
+- **主 specs 同步修订**：4 份 MODIFIED delta 归档后合并进主 `openspec/specs/`，本阶段不改主 specs 正文；其余含同类历史口径的主 specs（如 `dual-faction` / `orc-faction` / `command-hotkeys` 等）未纳入本次修订，如实登记为已知限制、由后续独立 change 统一收口，不冒充已全量对齐（见 `design.md` Risks）。
+- **活文档 / ADR**：本轮**不改** `docs/references/WC3-MELEE-RULES.md`（附录 R6.5「最强结论」降级、R6.3 补锚、防误用清单补锚按 Q5 拍板登记为 `docs-owner` 后续独立 change 待办，见 §14；§14 `[待核]` 形式仅在 `design.md` / `decision-memo.md` 登记）、**不改 ADR**；按 Q1 拍板 bump 4，其 ADR 0002 复核记录在实施 / 归档阶段另行追加。
+- **阶段与 ADR 编号**：阶段 **P8.5a**（路线图 §3 :119-131；`openspec/config.yaml` 的 `rules.proposal` 措辞为 P0–P5，此处按项目实际阶段标注，与已归档 P8.0 / P8.1 / P8.2 / P8.4 一致）。相关 ADR：0001 / 0002 / 0003 / 0004 / 0005。
+- **人工边界**：本阶段不 apply、不 commit、不 archive、不 push / fetch / pull / clone；规格门 `status: pending`，不 self-approve、不回填指纹；本地 commit（中文描述 + Conventional Commits 英文 type 前缀）与远端同步的人工边界见 `CODEBUDDY.md §4 / §10`。
+
+## Scope
+
+- **做**：① 定义层：合成原创编译期整数常量（复活费用 / 时间 / 上限、`CATEGORY_ALTAR` 类别驱动），按 Q3 拍板落 `FrozenDefinitions` 冻结常量、与 `compute_defs_hash` 衔接进 `defs_hash` / `content_hash` 快照头部；② 内核权威状态：死亡登记（整数帧 + `BTreeMap`）、祭坛复活队列项、费用字段，全部进状态哈希 / 快照 / `first_difference()`，`SNAPSHOT_VERSION` 按 Q1 拍板 bump 4（连同 `SIM_VERSION`、快照头部、单测硬断言、golden hash 基线、ADR 0002 复核记录同步更新；旧 v3 快照 / 回放按 `SnapshotError` / `Reject` 明确拒绝）；③ 命令与事件：按 Q2 拍板新增独立 `ReviveHero` / `CancelRevive` 命令 + `HeroDied` / `Revived` 事件变体（连带 ADR 0005 / `PROTOCOL_VERSION` / `net-owner`）；④ 费用事务：提交与效果执行链分离、取消 / 失败事务性退款 + 恢复登记；⑤ 表现层 HUD 队列只读派生；⑥ 回归：determinism 26 项 + 「改坏验红」+ `cargo test --workspace` + golden hash 基线如实更新；⑦ 门禁：`openspec validate --strict` / `check_encoding.py` / `verify_all.py`；⑧ 真窗口人工验收清单（如实标注未执行）。
+- **与 P8.2 边界衔接**：主 `openspec/specs/orc-faction/spec.md:39` 明确 P8.2「不借 `orcHeroActives.json` 的 `AOwk` 隐身 / 移速增益这类**需新增权威状态的 P8.5 语义**」——本 change 正是承接这类「需新增权威状态」的 P8.5 语义、串行推进，不重做 / 不改写 P8.2 兽族定义与技能契约，也不把 Warsmash `abilityBehaviors` 分组设定当本 change 的技能来源。
+- **不做**：JASS / wtg 触发器 VM（N5，ADR 0003 范围与分期已列）、全科技树、地图编辑器 / RPG 自定义地图 / 剧情战役（N2–N4）、联机底座重做（P4 已交付，1.0 已在能力）、纯本地单机对局形态（N1）；按 Q4 拍板范围外承接（酒馆买活 / 多英雄复活队列 UI / 复活后技能点与装备态一致性回归）、按 Q6 拍板留后续 change 的 AI × lockstep 复活命令注入架构（§0.3 T5）、按 Q5 拍板登记为 `docs-owner` 后续独立 change 待办的 `WC3-MELEE-RULES.md` 活文档修订（§14）——均显式登记为后续 change 待办（见 `tasks.md` / `decision-memo.md`「## 已知限制 / 边界」），不冒充本期已解决；不改主 `openspec/specs/**` 正文、不改 ADR、不改 `crates/`（提案阶段）、不把任何资产 / 导出数据入库。
+- **跨平台确定性口径**：仅按 ADR 0002 复核记录沿用「Windows 11 与 Debian 12 x86_64 / rustc 1.99.1 已验证」结论，macOS / ARM64 / 其它 rustc 仍属待验证项，**不得据本 change 声称全平台确定性已达成**。
+- **本阶段交付边界**：仅产出 `openspec/changes/p8-hero-revive/` 下的 `proposal.md` / `specs/**` / `design.md` / `tasks.md` + `decision-memo.md`；主 `openspec/specs/` **不变化**（归档时才合并 delta）。

@@ -11,7 +11,7 @@
 //! 不纳入分段。既有 6 个 `UnitDef` 的 `DefId`（`1..=6`）保持原值，确保
 //! `DEFAULT_UNIT_DEF` / `SOLDIER` / `BARRACKS` 等既有入口行为不变。
 //! 分段差异只经既有 `defs_hash` 字段天然覆盖，不新增权威状态字段、
-//! 不改 `SNAPSHOT_VERSION`（当前 3）与快照头部布局（ADR 0002）。
+//! 不改 `SNAPSHOT_VERSION`（当前 4）与快照头部布局（ADR 0002）。
 //!
 //! P8.1 人族完整化：在人族段 `1xx` 追加远程 / 反重甲 / 人口 / 祭坛 /
 //! 研发 / 英雄六类 `UnitDef`，以及类别内唯一 ID 的英雄主动技能与攻防升级。
@@ -25,13 +25,20 @@
 //! 常量，并补技能 / 升级 ID 按族查表。全部是合成 / 原创编译期整数常量，
 //! 数值差异只以常量相对大小表达、标 `[取舍]`、引用 R2 / R5，MUST NOT
 //! 冒充经典事实或参考项目结论（design D1 / D10 / C6）。新增定义仍是
-//! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3。
+//! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3（P8.5a 起为 4）。
+//!
+//! P8.5a 英雄复活接入：真实对局装配在 [`synthetic_definitions`] 内经纯链式
+//! [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与祭坛 / 英雄类别集合，
+//! 使 `is_altar` / `is_hero` 对两族祭坛 / 英雄 DefId 为真、英雄经既有 `Train`
+//! 路径产出 `Some(HeroState)`。冻结常量段与类别集合经 `compute_defs_hash`
+//! 无条件进入 `defs_hash` / `content_hash()` 快照头部，故接入后内容哈希必变；
+//! 表现层只读派生 MUST NOT 反写权威状态或新增权威状态字段（ADR 0002 §5 / D2）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use w3_core::{
-    AbilityDef, DefId, EffectDef, EffectKind, FrozenDefinitions, ItemDef, SimFixed, UnitDef,
-    UpgradeDef,
+    AbilityDef, DefId, EffectDef, EffectKind, FrozenDefinitions, ItemDef,
+    SYNTHETIC_REVIVE_CONSTANTS, SimFixed, UnitDef, UpgradeDef,
 };
 
 // 新类别槽位编号（表现层装配查表键，**不是** `EntityId`，MUST NOT 进入
@@ -375,7 +382,9 @@ fn unit_with_mana(
 /// **相对大小**表达、标 `[取舍]`，是本项目在 R2 / R5 / R5.1 / R5.3
 /// `[已核]` 框架下的原创取舍，不是参考项目得来的经典事实（design D1 / D10）。
 /// 新增定义只改变 `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），
-/// 不改 `SNAPSHOT_VERSION`（当前 3）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// 不改 `SNAPSHOT_VERSION`（当前 4）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// P8.5a 起额外经 [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与
+/// 两族祭坛 / 英雄类别集合，使真实对局的复活命令面可达（Q3 / D2 / R1.2）。
 pub fn synthetic_definitions() -> FrozenDefinitions {
     let units = vec![
         // 既有基线定义（1..=6），既有入口行为不变。
@@ -557,8 +566,14 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
             },
         ),
     ];
+    // P8.5a：链式登记复活冻结常量与祭坛 / 英雄类别集合。类别由定义层
+    // `BTreeSet<DefId>` 驱动，MUST NOT 用建筑名 / rawcode 白名单（R1.2 / R13.3 / D2）。
+    // `FrozenDefinitions::new` 四参数签名保持不变，纯链式新增。
+    let altar_defs: BTreeSet<DefId> = [HUMAN_ALTAR, ORC_ALTAR].into_iter().collect();
+    let hero_defs: BTreeSet<DefId> = [HUMAN_HERO, ORC_HERO].into_iter().collect();
     FrozenDefinitions::new(units, abilities, items, upgrades)
         .expect("melee defs: reason=invalid_synthetic_definitions")
+        .with_hero_revive(SYNTHETIC_REVIVE_CONSTANTS, altar_defs, hero_defs)
 }
 
 /// 本机导出数据的可选来源（ADR 0001 / design D2）。
@@ -819,7 +834,15 @@ mod tests {
             a.items().iter().map(|(&id, &d)| (id, d)).collect(),
             a.upgrades().iter().map(|(&id, &d)| (id, d)).collect(),
         )
-        .unwrap();
+        .unwrap()
+        // P8.5a：反向验证的重建定义 MUST 与正式定义同源登记复活段，
+        // 否则 `FrozenDefinitions::new` 的类别集合为空会让 `assert_ne!` 恒真、
+        // 稀释「少一个单位即改哈希」的判别力（CODEBUDDY §5 / 不静默降级）。
+        .with_hero_revive(
+            *a.revive_constants(),
+            a.altar_defs().clone(),
+            a.hero_defs().clone(),
+        );
         assert_ne!(a.content_hash(), smaller.content_hash());
     }
 
@@ -850,8 +873,15 @@ mod tests {
             .filter(|&(&id, _)| Some(id) != drop_upgrade)
             .map(|(&id, &d)| (id, d))
             .collect();
+        // P8.5a：重建定义经公开 getter 同源登记复活段，使 `full` 与 `variant`
+        // 的唯一差异就是被删除的条目，保住 `content_hash()` 反向验证判别力。
         FrozenDefinitions::new(units, abilities, items, upgrades)
             .expect("melee defs: reason=rebuild_definitions_failed")
+            .with_hero_revive(
+                *full.revive_constants(),
+                full.altar_defs().clone(),
+                full.hero_defs().clone(),
+            )
     }
 
     /// 退化哈希（缺陷态）：只散列 P8.0 基线 16 个 `UnitDef`，忽略全部
@@ -1283,6 +1313,13 @@ mod tests {
             full.upgrades().iter().map(|(&id, &d)| (id, d)).collect(),
         )
         .expect("melee defs: reason=degenerate_mana_defs_invalid")
+        // P8.5a：同源登记复活段，使缺陷态只差「mana 退化」这一项，
+        // 避免类别集合差异让 `content_hash()` 断言失真（CODEBUDDY §5）。
+        .with_hero_revive(
+            *full.revive_constants(),
+            full.altar_defs().clone(),
+            full.hero_defs().clone(),
+        )
     }
 
     /// 被反向验证的断言：兽族英雄定义在冻结定义层带 `mana > 0`（R6）。

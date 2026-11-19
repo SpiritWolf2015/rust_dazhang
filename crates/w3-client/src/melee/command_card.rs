@@ -24,8 +24,8 @@ use w3_core::DefId;
 use super::defs::{
     BARRACKS, GOLD_MINE, HUMAN_ALTAR, HUMAN_BARRACKS, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT,
     HUMAN_RANGED, HUMAN_SIEGE, HUMAN_SMITHY, HUMAN_SOLDIER, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE,
-    NEUTRAL_TREE, ORC_BARRACKS, ORC_PEASANT, ORC_SOLDIER, ORC_TOWN_HALL, PEASANT, SOLDIER,
-    TOWN_HALL, TREE,
+    NEUTRAL_TREE, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_PEASANT, ORC_RANGED, ORC_SIEGE,
+    ORC_SMITHY, ORC_SOLDIER, ORC_TOWN_HALL, PEASANT, Race, SOLDIER, TOWN_HALL, TREE,
 };
 
 /// 命令卡列数。
@@ -195,13 +195,184 @@ const fn btn(
     }
 }
 
+/// 命令卡训练 / 建造目标的类别键（编译期整数 `DefId` 定义表的列索引）。
+///
+/// 纯表现层枚举，MUST NOT 进入权威状态 / 状态哈希 / 快照；键位与命令解耦，
+/// 分派只经 [`CommandCatalog::for_race_with_targets`] 的只读定义表查表，
+/// MUST NOT 散落 `if race` 分支、不判玩法规则、不用建筑名 / `H`/`O` id
+/// 前缀白名单推断（R1.2 / design D2 / godot `BUILD_SYSTEM.md:298/:348-349`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrainCategory {
+    Soldier,
+    Ranged,
+    Siege,
+    Hero,
+    Altar,
+    Farm,
+    Barracks,
+    Smithy,
+    TownHall,
+}
+
+impl TrainCategory {
+    /// 定义表列数。
+    pub const COUNT: usize = 9;
+
+    /// 该类别在定义表中的列下标（编译期常量，不引入运行时分支判断）。
+    /// 只读查询，供 CPU 回归核对定义表逐项登记（表现层，不进权威状态）。
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Soldier => 0,
+            Self::Ranged => 1,
+            Self::Siege => 2,
+            Self::Hero => 3,
+            Self::Altar => 4,
+            Self::Farm => 5,
+            Self::Barracks => 6,
+            Self::Smithy => 7,
+            Self::TownHall => 8,
+        }
+    }
+}
+
+/// 定义表行数：两族各一行（人族 `1xx` / 兽族 `2xx`）。
+pub const RACE_ROWS: usize = 2;
+
+/// 按族只读查表的编译期整数 `DefId` 定义表类型：行 = 种族段，列 = 目标类别。
+///
+/// `None` 表示该类别缺登记（由 [`table_target`] 明确回落到人族段默认并以
+/// 英文结构化日志可诊断）。全部 `Some` 表项来自 `defs.rs` 的合成原创
+/// 编译期整数常量，零文件 IO、不冻结进 `FrozenDefinitions`、不入库
+/// （ADR 0001 / ADR 0004 / Q2 拍板 `[待核]`）。
+pub type RaceTargetTable = [[Option<DefId>; TrainCategory::COUNT]; RACE_ROWS];
+
+/// 两族训练 / 建造目标定义表（编译期常量）。
+///
+/// 人族行全部落在 `1xx` 段、兽族行全部落在 `2xx` 段；Producer / Build /
+/// Train 卡的 `TrainUnit { unit_def, .. }` 一律经本表查表得到，MUST NOT
+/// 在卡片构造处写死某一族的 `DefId`（Q2 / R2 / R4 / R13.3）。
+pub const RACE_TRAIN_TARGETS: RaceTargetTable = [
+    [
+        Some(HUMAN_SOLDIER),
+        Some(HUMAN_RANGED),
+        Some(HUMAN_SIEGE),
+        Some(HUMAN_HERO),
+        Some(HUMAN_ALTAR),
+        Some(HUMAN_FARM),
+        Some(HUMAN_BARRACKS),
+        Some(HUMAN_SMITHY),
+        Some(HUMAN_TOWN_HALL),
+    ],
+    [
+        Some(ORC_SOLDIER),
+        Some(ORC_RANGED),
+        Some(ORC_SIEGE),
+        Some(ORC_HERO),
+        Some(ORC_ALTAR),
+        Some(ORC_FARM),
+        Some(ORC_BARRACKS),
+        Some(ORC_SMITHY),
+        Some(ORC_TOWN_HALL),
+    ],
+];
+
+/// 缺表项 / 未知族的明确默认回落（人族段编译期整数常量）。
+///
+/// 不以族名 / `H`/`O` id 前缀推断机制（R1.2），只按类别列取编译期常量；
+/// 回落发生时由 [`table_target`] 以英文结构化 `key=value` 日志明确报告。
+pub const DEFAULT_COMMAND_TARGETS: [DefId; TrainCategory::COUNT] = [
+    HUMAN_SOLDIER,
+    HUMAN_RANGED,
+    HUMAN_SIEGE,
+    HUMAN_HERO,
+    HUMAN_ALTAR,
+    HUMAN_FARM,
+    HUMAN_BARRACKS,
+    HUMAN_SMITHY,
+    HUMAN_TOWN_HALL,
+];
+
+/// 本地族 → 定义表行（唯一一处 `match race`，新增族只改定义表与此映射）。
+///
+/// 这是表索引查表、不是玩法规则分支：卡片构造处一律通过
+/// [`table_target`] 取目标，MUST NOT 散落 `if race { HUMAN_* } else { ORC_* }`。
+const fn race_row(race: Race) -> usize {
+    match race {
+        Race::Human => 0,
+        Race::Orc => 1,
+    }
+}
+
+/// 按本地族 + 类别从定义表只读查出目标 `DefId`。
+///
+/// 缺表项（行 / 列越界）SHALL 明确回落到人族段默认并以英文结构化
+/// `key=value` 日志可诊断，MUST NOT 静默产出错误族目标、不写死中文名 /
+/// 图标表（C8 / C9 / `CODEBUDDY.md §3` / godot `command_card.gd:441-445`）。
+fn table_target(table: &RaceTargetTable, row: usize, category: TrainCategory) -> DefId {
+    let fallback = DEFAULT_COMMAND_TARGETS[category.index()];
+    let resolved = table
+        .get(row)
+        .and_then(|entries| entries.get(category.index()))
+        .copied()
+        .flatten();
+    match resolved {
+        Some(def_id) => def_id,
+        None => {
+            log::warn!(
+                target: "w3_client",
+                "command card target fallback: reason=table_entry_absent row={} category={:?} fallback_def_id={}",
+                row, category, fallback
+            );
+            fallback
+        }
+    }
+}
+
 impl CommandCatalog {
     /// 合成 / 原创标准定义表（全编译期常量，零文件 IO）。
     ///
-    /// 快捷键字母均为 `[待核]` 的合成配置，只用于验证「键 → 命令表 / 12 格 /
-    /// chords / 随卡重建」的可验证契约，**不冒充对齐原版经典键位**（C6）。
+    /// 保留为**人族装配**的兼容入口：逐字节等于
+    /// [`CommandCatalog::for_race`]`(Race::Human)`，既有 12 格 / 键位 / chords
+    /// 契约与人族训练目标不变（Q2「人族装配行为逐字节不变」）。
+    /// 快捷键字母均为 `[待核]` 的合成配置，不冒充原版经典键位（C6）。
     pub fn standard() -> Self {
+        Self::for_race(Race::Human)
+    }
+
+    /// 按本地族只读查表构造目录（Q2 生产入口）。
+    ///
+    /// 目标 `DefId` 全部来自 [`RACE_TRAIN_TARGETS`]：人族 `1xx` / 兽族 `2xx`。
+    /// 卡片 12 格 / `slot = y * 4 + x` / 键位解耦 / 两级 chords / 子菜单栈 /
+    /// `Esc` 取消一律原样保留（不是重做 R13 命令卡，C5 / C8）。
+    pub fn for_race(race: Race) -> Self {
+        Self::for_race_with_targets(race, RACE_TRAIN_TARGETS)
+    }
+
+    /// 未知族 / 未确认选族的装配入口：`None` 明确回落到人族段并以英文结构化
+    /// `key=value` 日志可诊断（C8 / C9）。生产实现 MUST 传 `Some(race)`。
+    pub fn for_optional_race(race: Option<Race>) -> Self {
+        match race {
+            Some(race) => Self::for_race(race),
+            None => {
+                log::warn!(
+                    target: "w3_client",
+                    "command card race fallback: reason=unknown_race fallback=human_segment"
+                );
+                Self::for_race(Race::Human)
+            }
+        }
+    }
+
+    /// 由「本地族 + 编译期整数 `DefId` 定义表」构造目录（装配 / 反向验证注入点）。
+    ///
+    /// 生产实现 MUST 用 [`CommandCatalog::for_race`]；本注入点让改坏验红可以
+    /// 把定义表退化成「两行都写死 `HUMAN_*`」的旧实现，**真经本构造路径**
+    /// 产出目录后，令「兽族训练产兽族目标」断言在缺陷态失败、非旁路模拟
+    /// （`CODEBUDDY.md §5` / design D6）。只读派生，MUST NOT 反写权威状态。
+    pub fn for_race_with_targets(race: Race, table: RaceTargetTable) -> Self {
         use CardCommand as C;
+        let row = race_row(race);
+        let t = |category: TrainCategory| table_target(&table, row, category);
         let main = CommandCard::new(
             CardId::Main,
             &[
@@ -232,7 +403,7 @@ impl CommandCatalog {
                     0,
                     'f',
                     C::TrainUnit {
-                        unit_def: HUMAN_SOLDIER,
+                        unit_def: t(TrainCategory::Soldier),
                         is_building: false,
                     },
                     "Footman",
@@ -243,7 +414,7 @@ impl CommandCatalog {
                     0,
                     'r',
                     C::TrainUnit {
-                        unit_def: HUMAN_RANGED,
+                        unit_def: t(TrainCategory::Ranged),
                         is_building: false,
                     },
                     "Ranged",
@@ -253,6 +424,7 @@ impl CommandCatalog {
         );
         // 建造子卡：第二键列表全部由定义表记录驱动（TrainUnit 携带目标
         // `DefId`），MUST NOT 用建筑名字符串白名单（R1.2 / R13.3）。
+        // 目标 `DefId` 按本地族只读查表：人族 `1xx` / 兽族 `2xx`（Q2）。
         let build = CommandCard::new(
             CardId::Build,
             &[
@@ -262,7 +434,7 @@ impl CommandCatalog {
                     0,
                     'a',
                     C::TrainUnit {
-                        unit_def: HUMAN_ALTAR,
+                        unit_def: t(TrainCategory::Altar),
                         is_building: true,
                     },
                     "Altar",
@@ -273,7 +445,7 @@ impl CommandCatalog {
                     0,
                     'f',
                     C::TrainUnit {
-                        unit_def: HUMAN_FARM,
+                        unit_def: t(TrainCategory::Farm),
                         is_building: true,
                     },
                     "Farm",
@@ -284,7 +456,7 @@ impl CommandCatalog {
                     0,
                     'b',
                     C::TrainUnit {
-                        unit_def: HUMAN_BARRACKS,
+                        unit_def: t(TrainCategory::Barracks),
                         is_building: true,
                     },
                     "Barracks",
@@ -295,7 +467,7 @@ impl CommandCatalog {
                     0,
                     'g',
                     C::TrainUnit {
-                        unit_def: HUMAN_SMITHY,
+                        unit_def: t(TrainCategory::Smithy),
                         is_building: true,
                     },
                     "Smithy",
@@ -306,7 +478,7 @@ impl CommandCatalog {
                     1,
                     'e',
                     C::TrainUnit {
-                        unit_def: HUMAN_TOWN_HALL,
+                        unit_def: t(TrainCategory::TownHall),
                         is_building: true,
                     },
                     "Hall",
@@ -314,7 +486,8 @@ impl CommandCatalog {
                 btn(BTN_CANCEL, 3, 2, 'c', C::CancelTrain, "Cancel"),
             ],
         );
-        // 训练子卡：战斗单位第二键（人族六类新 `DefId` 里的可移动单位）。
+        // 训练子卡：战斗单位第二键（两族六类新 `DefId` 里的可移动单位，
+        // 目标按本地族只读查表，MUST NOT 写死 `HUMAN_*`）。
         let train = CommandCard::new(
             CardId::Train,
             &[
@@ -324,7 +497,7 @@ impl CommandCatalog {
                     0,
                     'f',
                     C::TrainUnit {
-                        unit_def: HUMAN_SOLDIER,
+                        unit_def: t(TrainCategory::Soldier),
                         is_building: false,
                     },
                     "Footman",
@@ -335,7 +508,7 @@ impl CommandCatalog {
                     0,
                     'r',
                     C::TrainUnit {
-                        unit_def: HUMAN_RANGED,
+                        unit_def: t(TrainCategory::Ranged),
                         is_building: false,
                     },
                     "Ranged",
@@ -346,7 +519,7 @@ impl CommandCatalog {
                     0,
                     'k',
                     C::TrainUnit {
-                        unit_def: HUMAN_SIEGE,
+                        unit_def: t(TrainCategory::Siege),
                         is_building: false,
                     },
                     "Siege",
@@ -357,7 +530,7 @@ impl CommandCatalog {
                     0,
                     'h',
                     C::TrainUnit {
-                        unit_def: HUMAN_HERO,
+                        unit_def: t(TrainCategory::Hero),
                         is_building: false,
                     },
                     "Hero",
@@ -379,9 +552,11 @@ impl CommandCatalog {
             cards.insert(card.id, card);
         }
 
-        // `DefId → 选中集合类型` 查表：覆盖既有 6 基线、人兽两族段与
-        // P8.1 人族六类新定义；未登记 `DefId` 由 `kind_of` 回退通用类型，
-        // 运行时动态实体也能按只读查表派生（Risks / tasks 1.4）。
+        // `DefId → 选中集合类型` 查表：覆盖既有 6 基线、人兽两族段、
+        // P8.1 人族六类与 P8.2 兽族六类新定义（Q2 补齐两族登记，design
+        // 「逐锚核对差异」差异 2）；未登记 `DefId` 由 `kind_of` 回退通用
+        // 类型，运行时动态实体也能按只读查表派生（Risks / tasks 1.4）。
+        // 表只读派生，MUST NOT 反写权威状态 / 进哈希 / 快照（ADR 0002）。
         let def_kinds: BTreeMap<DefId, CardKind> = [
             (SOLDIER, CardKind::Combat),
             (PEASANT, CardKind::Worker),
@@ -403,6 +578,12 @@ impl CommandCatalog {
             (ORC_SOLDIER, CardKind::Combat),
             (ORC_TOWN_HALL, CardKind::Producer),
             (ORC_BARRACKS, CardKind::Producer),
+            (ORC_RANGED, CardKind::Combat),
+            (ORC_SIEGE, CardKind::Combat),
+            (ORC_FARM, CardKind::Producer),
+            (ORC_ALTAR, CardKind::Producer),
+            (ORC_SMITHY, CardKind::Producer),
+            (ORC_HERO, CardKind::Hero),
             (NEUTRAL_GOLD_MINE, CardKind::Resource),
             (NEUTRAL_TREE, CardKind::Resource),
         ]

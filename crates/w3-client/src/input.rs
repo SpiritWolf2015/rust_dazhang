@@ -494,6 +494,22 @@ impl InputState {
         self
     }
 
+    /// 就地切换命令卡定义表（Q2 按本地族只读查表刷新）。
+    ///
+    /// 选族是表现层本地只读状态：切换目录只重建当前卡的「键 → action」
+    /// 表，MUST NOT 反写模拟状态、不进 FNV-1a 状态哈希 / 快照（ADR 0002）。
+    /// 与 [`InputState::set_entity_defs`] 同源，供 HUD 显示侧与输入翻译侧
+    /// 保持一致（B1 接线）。
+    pub fn set_catalog(&mut self, catalog: CommandCatalog) {
+        self.catalog = catalog;
+        self.refresh_card();
+    }
+
+    /// 只读当前命令卡定义表（供验收 / 诊断读取按族目录）。
+    pub fn catalog(&self) -> &CommandCatalog {
+        &self.catalog
+    }
+
     /// 当前卡 ID（表现层只读）。
     pub fn current_card(&self) -> CardId {
         self.current_card

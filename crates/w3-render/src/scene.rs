@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use w3_content::RgbaImage;
 use w3_core::{ANGLE_SCALE, Event, EventKind, SCALE, WorldView};
 
-use crate::model::{ModelLibrary, team_color};
+use crate::model::{ModelLibrary, REASON_ASSET_MISSING, team_color};
 use crate::model_geometry::{
     BakedModel, ENTITY_DISPLAY_SCALE, MODEL_DISPLAY_SCALE, ModelTransform, expand_model,
 };
@@ -175,6 +175,13 @@ pub struct Scene {
     last_tick: u64,
     /// 实际应用的事件数（诊断用，表现层元数据）。
     applied_events: u64,
+    /// 最近一次 `consume` 记录的显式回退诊断（表现层只读元数据）。
+    /// `EntityId → reason`，MUST NOT 进权威状态 / 状态哈希 / 快照；
+    /// 供 CPU 回归核对「缺键 / 缺资产显式可诊断回退」（Q3 / C9）。
+    fallback_diagnostics: BTreeMap<u64, &'static str>,
+    /// 静默回退退化开关（仅供 tasks 6.1 ④ 反向验证注入）。
+    /// 默认 `false` = 显式可诊断；`true` = 静默吞掉日志 = 缺陷态。
+    silent_fallback: bool,
 }
 
 fn switch_sequence(instance: &mut Instance, library: &ModelLibrary, name: &str) {
@@ -646,12 +653,63 @@ impl Scene {
     pub fn consume(&mut self, input: FrameInput<'_>, library: &ModelLibrary) {
         let view = input.view;
 
-        // 1. 按只读视图同步实例（唯一权威来源）。
+        // 1. 只读解析所有实体的模型键与显式回退诊断（Q3 / D3）。
+        //    先按只读 `WorldView` 算完再写 `self` 字段，避免与 `instances`
+        //    可变借用冲突。运行时动态实体（不在装配期 `EntityId → key`
+        //    绑定内）按 `owner` 席位段 + 只读 `speed` 解析真实模型键，
+        //    保证新 Train / Build 实体呈现真实 glTF 网格；已精确绑定的
+        //    frame-0 实体保持绑定不变（每帧刷新也幂等）。
+        let mut resolutions = BTreeMap::new();
+        let mut diagnostics = BTreeMap::new();
+        for entity in &view.entities {
+            let resolution = library.resolve_with_reason(entity);
+            // 解析层诊断（缺键 / 键未插入库）优先；否则再核对真实 glTF 网格
+            // 是否已烘焙注入。本机资产缺失时 `entity_models` 为空 / 缺该键，
+            // 段键虽命中但 `instance_vertices` 仍会走四面体，故 MUST 也显式
+            // 诊断（MUST NOT 只在「无本机资产」时才可诊断，C7 / C9）。
+            let reason = resolution.reason.or_else(|| {
+                let key = resolution.key.as_deref()?;
+                let real_mesh = self
+                    .entity_models
+                    .get(key)
+                    .is_some_and(|model| !model.is_empty());
+                (!real_mesh).then_some(REASON_ASSET_MISSING)
+            });
+            if let Some(reason) = reason {
+                // 退化实现（仅反向验证注入）：静默吞掉日志 + 不记录诊断。
+                if !self.silent_fallback {
+                    diagnostics.insert(entity.id, (reason, resolution.key.clone()));
+                }
+            }
+            resolutions.insert(entity.id, resolution);
+        }
+        // 仅新增实例打一次日志（避免每帧刷屏），诊断元数据每帧刷新。
+        let fresh: Vec<(u64, &'static str, Option<String>)> = diagnostics
+            .iter()
+            .filter(|(id, _)| !self.instances.contains_key(*id))
+            .map(|(id, (reason, key))| (*id, *reason, key.clone()))
+            .collect();
+        self.fallback_diagnostics.clear();
+        for (id, reason, key) in fresh {
+            log::warn!(
+                target: "w3_render",
+                "model fallback: {} entity={} key={:?} scope=presentation_only",
+                reason, id, key
+            );
+        }
+        for (id, (reason, _)) in diagnostics {
+            self.fallback_diagnostics.insert(id, reason);
+        }
+
+        // 2. 按只读视图同步实例（唯一权威来源）。
         let mut present = BTreeSet::new();
         for entity in &view.entities {
             present.insert(entity.id);
             let target_x = world_to_f32(entity.x);
             let target_y = world_to_f32(entity.y);
+            let model_key = resolutions
+                .remove(&entity.id)
+                .and_then(|resolution| resolution.key);
             if let Some(instance) = self.instances.get_mut(&entity.id) {
                 instance.prev_x = instance.target_x;
                 instance.prev_y = instance.target_y;
@@ -661,6 +719,7 @@ impl Scene {
                 instance.team = entity.owner;
                 instance.hp = entity.hp;
                 instance.alive = entity.alive;
+                instance.model_key = model_key;
             } else {
                 self.instances.insert(
                     entity.id,
@@ -676,7 +735,7 @@ impl Scene {
                         team: entity.owner,
                         hp: entity.hp,
                         alive: entity.alive,
-                        model_key: library.resolve(entity),
+                        model_key,
                         sequence: 0,
                     },
                 );
@@ -684,7 +743,7 @@ impl Scene {
         }
         self.instances.retain(|id, _| present.contains(id));
 
-        // 2. 事件消费（按 sequence 稳定排序 + 去重）。
+        // 3. 事件消费（按 sequence 稳定排序 + 去重）。
         let mut events: Vec<&Event> = input.events.iter().collect();
         events.sort_by_key(|event| event.sequence);
         for event in events {
@@ -703,6 +762,19 @@ impl Scene {
             self.applied_events += 1;
         }
         self.last_tick = view.tick;
+    }
+
+    /// 最近一次 `consume` 的显式回退诊断（`EntityId → reason`，只读）。
+    /// 供 CPU 回归核对「缺资产显式可诊断回退」（tasks 6.1 ④）。
+    pub fn fallback_diagnostics(&self) -> &BTreeMap<u64, &'static str> {
+        &self.fallback_diagnostics
+    }
+
+    /// 注入「静默回退」退化实现（仅供反向验证，tasks 6.1 ④）。
+    /// 生产实现 MUST 保持默认 `false`（显式可诊断、写 `key=value` 日志）。
+    pub fn with_silent_fallback(mut self, silent: bool) -> Self {
+        self.silent_fallback = silent;
+        self
     }
 
     /// 稳定顺序迭代所有实例（只读）。
@@ -852,6 +924,11 @@ impl Scene {
                 return expand_model(model, &transform);
             }
         }
+        // 真实网格缺失（本机资产缺失 / 键未烘焙）：保留程序化标记作为最后
+        // 兜底，但 MUST 以英文结构化 `key=value` 日志明确报告，
+        // MUST NOT 静默降级、MUST NOT 冒充真实 glTF 网格（Q3 / C9 / D7）。
+        // 每帧每实体只记一次诊断在 `consume` 完成；这里只按实例位姿展开
+        // 明确默认几何（不同 key 不同形状，可辨），不改变模拟推进 / 哈希。
         let mut vertices = Vec::new();
         append_typed_marker(&mut vertices, instance, terrain, key);
         vertices

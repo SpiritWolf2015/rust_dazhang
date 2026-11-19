@@ -38,12 +38,15 @@ use winit::window::{Window, WindowId};
 use crate::accumulator::{FrameAdvance, TICKS_PER_SECOND};
 use crate::camera::{CameraAction, CameraState, PAN_STEP, YAW_STEP, ZOOM_STEP};
 use crate::client::FixedStepClient;
+use crate::faction::FactionSelection;
 use crate::hud::{self, HudAssets, HudModel, MinimapBackdrop, minimap_backdrop};
 use crate::i18n::{Texts, ZH};
 use crate::input::{
     AimState, ClientCommand, InputAction, InputError, InputState, MovabilityMap, ScreenMapper,
 };
 use crate::melee::EntityKind;
+use crate::melee::command_card::CommandCatalog;
+use crate::runtime_models::RuntimeModelPlan;
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 /// 小地图底图的降采样网格边长（纯表现层参数，不进权威状态 / 哈希）。
@@ -206,8 +209,18 @@ pub struct ClientApp<P: StepDriver> {
     /// 装配层注入的 `EntityId → DefId` 只读关联（表现层专属，供 HUD
     /// 命令卡按定义表派生；MUST NOT 进权威状态 / 状态哈希 / 快照，tasks 1.4）。
     entity_defs: BTreeMap<u64, DefId>,
+    /// 开局前选族（表现层本地只读状态，Q1）。确认后由装配层用同一份
+    /// `FactionSelection` 经 `MeleeSetup::with_races` 派生开局；本字段
+    /// MUST NOT 进权威状态 / 状态哈希 / 快照 / `first_difference()`（ADR 0002）。
+    faction: FactionSelection,
+    /// 是否显示开局前选族 overlay（`playable.rs` 冒烟窗口不注入，Q1 / D8）。
+    faction_overlay: bool,
     /// 命令卡点击待翻译的输入动作（表现层，在 GPU 借用结束后提交）。
     pending_input_action: Option<InputAction>,
+    /// 选族 overlay 的待应用结果（表现层，在 GPU 借用结束后经
+    /// `apply_faction_selection` 统一装配，与 `pending_input_action` 同一
+    /// 收口模式；MUST NOT 反写模拟状态 / 进哈希 / 快照，ADR 0002）。
+    pending_faction_selection: Option<FactionSelection>,
     /// 真实模型贴图数组（上传 GPU `texture_2d_array`，纯表现层）。
     textures: Option<w3_content::TextureArray>,
 
@@ -249,7 +262,10 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             // 装配期定义可经 `with_movability` 注入，未注入时由兜底覆盖。
             movability: MovabilityMap::new(),
             entity_defs: BTreeMap::new(),
+            faction: FactionSelection::default(),
+            faction_overlay: false,
             pending_input_action: None,
+            pending_faction_selection: None,
             textures: None,
             window: None,
             gpu: None,
@@ -293,6 +309,49 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         self.input.set_entity_defs(defs.clone());
         self.entity_defs = defs;
         self
+    }
+
+    /// 注入开局前选族（表现层本地只读状态，Q1），并启用窗口内 egui
+    /// 选族 overlay、按本地族只读查表刷新命令卡目录（Q2）。
+    ///
+    /// `MeleeSetup` 已在 example 装配期由同一份 `FactionSelection` 经
+    /// `with_races` 派生；本 builder 只把表现层状态带给 HUD 与输入翻译层，
+    /// MUST NOT 反写模拟状态、不进 FNV-1a 状态哈希 / 快照（ADR 0002）。
+    /// 不改动 `new` 签名，`playable.rs` 冒烟窗口不调用即保持既有 HUD。
+    pub fn with_faction_selection(mut self, faction: FactionSelection) -> Self {
+        self.faction = faction;
+        self.faction_overlay = true;
+        self.input
+            .set_catalog(CommandCatalog::for_race(faction.local_race));
+        // Q3：按选族把 14 个真实模型键占位 + 两席位段绑定注入 `library`，
+        // 使运行时新实体按 owner 席位段命中真实 glTF 网格。纯表现层只读。
+        RuntimeModelPlan::from_faction(faction).bind_seats(&mut self.library);
+        self
+    }
+
+    /// 只读当前开局前选族（验收用；纯表现层状态）。
+    pub fn faction_selection(&self) -> FactionSelection {
+        self.faction
+    }
+
+    /// 应用选族 overlay 的交互结果（表现层状态机，Q1 / Q2）。
+    ///
+    /// 确认后把 `(local_race, ai_race)` 经既有 `MeleeSetup::with_races`
+    /// 真经派生**表现层只读** `EntityId → DefId` 关联（Q1「传参再装配」），
+    /// 并按本地族只读查表刷新命令卡目录（Q2）。`CommandKind::Spawn` 字节
+    /// 族无关（P8.0 决策），故 MUST NOT 重建 `RtsMatch`、不提交任何命令、
+    /// 不进 FNV-1a 状态哈希 / 快照 / `first_difference()`（ADR 0002）。
+    /// HUD 显示侧 `entity_defs` 与输入翻译侧同源刷新（B1 接线）。
+    pub fn apply_faction_selection(&mut self, faction: FactionSelection) {
+        self.faction = faction;
+        let defs = faction.assemble_setup().def_ids().clone();
+        self.input.set_entity_defs(defs.clone());
+        self.entity_defs = defs;
+        self.input
+            .set_catalog(CommandCatalog::for_race(faction.local_race));
+        // Q3：改选族后段绑定同步刷新（幂等），保持 Q1 / Q2 / Q3 表现层只读
+        // 状态同源；MUST NOT 触碰 driver / 权威状态 / 哈希 / 快照。
+        RuntimeModelPlan::from_faction(faction).bind_seats(&mut self.library);
     }
 
     /// 注入导出地图的静态摆放（真实地图入口用，纯表现层）。
@@ -398,6 +457,8 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         .with_entity_defs(self.entity_defs.clone())
         .with_active_card(self.input.current_card())
         .with_minimap_backdrop(self.minimap_backdrop.clone())
+        .with_faction(self.faction)
+        .with_faction_overlay(self.faction_overlay)
     }
 
     /// 最近一次显式错误（输入 / 命令提交失败），供验收读取。
@@ -574,7 +635,9 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         .with_kinds(self.entity_kinds.clone())
         .with_entity_defs(self.entity_defs.clone())
         .with_active_card(self.input.current_card())
-        .with_minimap_backdrop(self.minimap_backdrop.clone());
+        .with_minimap_backdrop(self.minimap_backdrop.clone())
+        .with_faction(self.faction)
+        .with_faction_overlay(self.faction_overlay);
         self.last_events = events.clone();
 
         let texts = self.texts;
@@ -620,6 +683,26 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         // `RedrawRequested` 分支在借用结束后统一提交。
         if pending.is_some() {
             self.pending_input_action = pending;
+        }
+        // 开局前选族 overlay：把交互合并成新的表现层本地只读状态，记为
+        // 待应用；由 `RedrawRequested` 在 GPU 借用结束后统一装配（Q1）。
+        // 不生成权威命令、不触碰模拟状态 / 哈希 / 快照（ADR 0002）。
+        let mut faction = self.faction;
+        let mut faction_changed = false;
+        if let Some(race) = interaction.faction_local {
+            faction = faction.with_local_race(race);
+            faction_changed = true;
+        }
+        if let Some(race) = interaction.faction_ai {
+            faction = faction.with_ai_race(race);
+            faction_changed = true;
+        }
+        if interaction.faction_confirm {
+            faction = faction.confirm();
+            faction_changed = true;
+        }
+        if faction_changed {
+            self.pending_faction_selection = Some(faction);
         }
         let egui::FullOutput {
             platform_output,
@@ -903,6 +986,11 @@ impl<P: StepDriver + 'static> ApplicationHandler<()> for ClientApp<P> {
                 // 命令卡点击：GPU 借用结束后，经既有公开提交入口入队。
                 if let Some(action) = self.pending_input_action.take() {
                     self.report_input(action);
+                }
+                // 选族确认：GPU 借用结束后统一装配表现层只读状态（Q1）。
+                // 权威状态 / 哈希 / 快照零改动（ADR 0002）。
+                if let Some(faction) = self.pending_faction_selection.take() {
+                    self.apply_faction_selection(faction);
                 }
             }
             _ => {}

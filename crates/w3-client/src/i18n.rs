@@ -34,6 +34,20 @@ pub struct Texts {
     pub winner: &'static str,
     /// 胜负结算标题。
     pub victory: &'static str,
+    /// 开局前选族 overlay 标题（Q1）。
+    pub faction_title: &'static str,
+    /// 本地族标签。
+    pub faction_local: &'static str,
+    /// AI 族标签。
+    pub faction_ai: &'static str,
+    /// 人族选项标签。
+    pub faction_human: &'static str,
+    /// 兽族选项标签。
+    pub faction_orc: &'static str,
+    /// 确认按钮标签。
+    pub faction_confirm: &'static str,
+    /// 已选族只读状态提示。
+    pub faction_status: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
@@ -58,4 +72,11 @@ pub const ZH: Texts = Texts {
     minimap: "Minimap",
     winner: "Winner",
     victory: "VICTORY",
+    faction_title: "Faction (pre-match)",
+    faction_local: "Local",
+    faction_ai: "AI",
+    faction_human: "Human",
+    faction_orc: "Orc",
+    faction_confirm: "Confirm",
+    faction_status: "Selected",
 };

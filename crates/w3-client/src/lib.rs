@@ -33,11 +33,18 @@
 //! 坐标到 `SimFixed` 只经 `w3_app::freeze_f64` 冻结边界（ADR 0004），
 //! 不新增浮点到权威状态的路径。UI 中文文案走 [`i18n`]，不进日志、权威状态
 //! 或状态哈希；字体用 egui 内置默认字体，不加载任何资产文件（ADR 0001）。
+//!
+//! P8.4 / Q1：[`faction::FactionSelection`] 是开局前窗口内 egui overlay 的
+//! 表现层本地只读状态；装配期把它交给既有 `MeleeSetup::with_races`，
+//! MUST NOT 新增 `Player.race` 权威状态、不进状态哈希 / 快照（ADR 0002）。
+//! P8.4 / Q2：命令卡按本地族只读查表分派训练 / 建造目标，键位 / 格位 /
+//! 子菜单栈等既有契约原样保留（design D2）。
 
 pub mod accumulator;
 pub mod app;
 pub mod camera;
 pub mod client;
+pub mod faction;
 pub mod hud;
 pub mod i18n;
 pub mod input;
@@ -46,6 +53,7 @@ pub mod model_assembly;
 pub mod net_driver;
 pub mod presentation;
 pub mod real_map;
+pub mod runtime_models;
 
 pub use accumulator::{
     FrameAccumulator, FrameAdvance, LOGIC_FPS, MAX_CATCHUP_STEPS, TICKS_PER_LOGIC_FRAME,
@@ -54,6 +62,7 @@ pub use accumulator::{
 pub use app::{ClientApp, ClientError, HostClock, StepDriver};
 pub use camera::{CameraAction, CameraState};
 pub use client::FixedStepClient;
+pub use faction::{FactionSelection, assemble_from_selection};
 pub use hud::{HudAssetError, HudAssets, HudModel, draw};
 pub use i18n::{Texts, ZH};
 pub use input::{

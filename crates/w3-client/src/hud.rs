@@ -19,9 +19,11 @@ use w3_content::RgbaImage;
 use w3_core::{DefId, Event, SCALE, Snapshot, WorldView};
 use w3_render::{display_hints, team_color};
 
+use crate::faction::FactionSelection;
 use crate::i18n::Texts;
 use crate::input::ScreenMapper;
 use crate::melee::EntityKind;
+use crate::melee::Race;
 use crate::melee::command_card::{
     CardCommand, CardId, CardKind, CommandCard, CommandCatalog, GRID_HEIGHT, GRID_WIDTH, slot,
 };
@@ -247,6 +249,12 @@ pub struct HudModel {
     pub minimap: MinimapModel,
     /// 胜负结果（只读派生，来自 `VictoryState`）。
     pub winner: Option<u8>,
+    /// 开局前选族（表现层本地只读状态，Q1）。HUD 只读取它绘制 overlay，
+    /// MUST NOT 进权威状态 / 状态哈希 / 快照（ADR 0002）。
+    pub faction: FactionSelection,
+    /// 是否绘制开局前选族 overlay（由 [`ClientApp::with_faction_selection`]
+    /// 注入；`playable.rs` 冒烟窗口不注入、保持既有 HUD 行为，Q1 / design D8）。
+    pub faction_overlay: bool,
 }
 
 /// 把世界坐标归一化到小地图 `[0, 1]` 区间。
@@ -315,6 +323,7 @@ fn derive_command_card(
     units: &[HudUnit],
     entity_defs: &BTreeMap<u64, DefId>,
     active_card: CardId,
+    local_race: Race,
 ) -> Option<CommandCard> {
     let selected: Vec<&HudUnit> = units
         .iter()
@@ -323,7 +332,9 @@ fn derive_command_card(
     if selected.is_empty() {
         return None;
     }
-    let catalog = CommandCatalog::standard();
+    // 按本地族只读查表构造命令卡目录：人族 `1xx` / 兽族 `2xx`（Q2）。
+    // 默认人族与既有 `standard()` 逐字节一致，既有入口行为不变。
+    let catalog = CommandCatalog::for_race(local_race);
     let card_id = match active_card {
         // 子卡来自输入层注入的子菜单栈顶（建造 / 训练 / 商店）。
         CardId::Build | CardId::Train | CardId::Shop => active_card,
@@ -455,6 +466,8 @@ impl HudModel {
             selection_panel: None,
             minimap: derive_minimap(view, selection, extent),
             winner: snapshot.gameplay.victory.winner,
+            faction: FactionSelection::default(),
+            faction_overlay: false,
             kinds,
         }
     }
@@ -485,10 +498,31 @@ impl HudModel {
         self
     }
 
-    /// 由当前 `entity_defs` / `active_card` / 选中集合按定义表重派生 12 格。
-    /// 纯只读派生，不触碰任何权威状态。
+    /// 注入开局前选族（表现层本地只读状态，Q1）并按本地族重派生命令卡
+    /// （Q2 按族查表）。选族 MUST NOT 进权威状态 / 状态哈希 / 快照；
+    /// HUD 只用它绘制 overlay 与挑选按族命令卡目录（ADR 0002 / design D1）。
+    pub fn with_faction(mut self, faction: FactionSelection) -> Self {
+        self.faction = faction;
+        self.refresh_command_card();
+        self
+    }
+
+    /// 开关开局前选族 overlay 的绘制（表现层，默认关闭）。
+    /// `playable.rs` 冒烟窗口不注入，保持既有 HUD（design D8 / Q1）。
+    pub fn with_faction_overlay(mut self, visible: bool) -> Self {
+        self.faction_overlay = visible;
+        self
+    }
+
+    /// 由当前 `entity_defs` / `active_card` / 选中集合 / 本地族按定义表
+    /// 重派生 12 格。纯只读派生，不触碰任何权威状态。
     fn refresh_command_card(&mut self) {
-        self.command_card = derive_command_card(&self.units, &self.entity_defs, self.active_card);
+        self.command_card = derive_command_card(
+            &self.units,
+            &self.entity_defs,
+            self.active_card,
+            self.faction.local_race,
+        );
     }
 
     /// 注入真实小地图底图（纯表现层 CPU 降采样数据）；不改变任何权威状态。
@@ -520,6 +554,12 @@ pub struct HudInteraction {
     /// 键盘与命令卡点击都归一化成同一个 `InputAction::Hotkey`、汇入
     /// 同一 `InputState::apply`（D1 / R13.6）；不携带「命令来源标记」。
     pub command_hotkey: Option<char>,
+    /// 开局前选族 overlay 的本地族按钮点击（表现层本地只读状态，Q1）。
+    pub faction_local: Option<Race>,
+    /// 开局前选族 overlay 的 AI 族按钮点击（表现层本地只读状态，Q1）。
+    pub faction_ai: Option<Race>,
+    /// 开局前选族 overlay 的确认按钮点击（不生成任何权威命令）。
+    pub faction_confirm: bool,
 }
 
 /// 绘制一帧 HUD：只读 `HudModel` + i18n 文案，MUST NOT 触碰权威状态。
@@ -710,7 +750,82 @@ pub fn draw_with_minimap(
         ui.separator();
         ui.label(texts.action_hint);
     });
+
+    draw_faction_overlay(
+        ctx,
+        &model.faction,
+        model.faction_overlay,
+        texts,
+        &mut interaction,
+    );
     interaction
+}
+
+/// 绘制开局前可见的选族 overlay（窗口内 egui，Q1 用户 2026-11-18 拍板）。
+///
+/// 只读取表现层本地只读状态 [`FactionSelection`]，回传按钮点击到
+/// [`HudInteraction`]；状态机与确认动作落在 [`crate::app::ClientApp`]
+/// 装配链内部。未注入 overlay 或 `confirmed == true` 后不绘制，MUST NOT
+/// 生成任何权威命令、不进日志 / 权威状态 / 状态哈希 / 快照（ADR 0002）。
+/// UI 文案全部来自 [`Texts`]（ASCII，走 i18n 边界，不写死中文名 / 图标表）。
+fn draw_faction_overlay(
+    ctx: &egui::Context,
+    faction: &FactionSelection,
+    visible: bool,
+    texts: &Texts,
+    interaction: &mut HudInteraction,
+) {
+    if !visible || faction.confirmed {
+        return;
+    }
+    egui::Window::new(texts.faction_title)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            // 只读状态提示（ASCII 文案，MUST NOT 进日志 / 权威状态 / 哈希）。
+            ui.label(format!(
+                "{}: {} {} / {} {}",
+                texts.faction_status,
+                texts.faction_local,
+                race_label(faction.local_race, texts),
+                texts.faction_ai,
+                race_label(faction.ai_race, texts),
+            ));
+            ui.separator();
+
+            ui.label(texts.faction_local);
+            ui.horizontal(|ui| {
+                if ui.button(texts.faction_human).clicked() {
+                    interaction.faction_local = Some(Race::Human);
+                }
+                if ui.button(texts.faction_orc).clicked() {
+                    interaction.faction_local = Some(Race::Orc);
+                }
+            });
+
+            ui.label(texts.faction_ai);
+            ui.horizontal(|ui| {
+                if ui.button(texts.faction_human).clicked() {
+                    interaction.faction_ai = Some(Race::Human);
+                }
+                if ui.button(texts.faction_orc).clicked() {
+                    interaction.faction_ai = Some(Race::Orc);
+                }
+            });
+
+            ui.separator();
+            if ui.button(texts.faction_confirm).clicked() {
+                interaction.faction_confirm = true;
+            }
+        });
+}
+
+/// 选族的只读 ASCII 展示标签（走 i18n 边界，不进日志 / 权威状态 / 哈希）。
+fn race_label(race: Race, texts: &Texts) -> &'static str {
+    match race {
+        Race::Human => texts.faction_human,
+        Race::Orc => texts.faction_orc,
+    }
 }
 
 #[cfg(test)]

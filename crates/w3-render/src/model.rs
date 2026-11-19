@@ -467,7 +467,42 @@ impl Model {
     }
 }
 
-/// 本机模型库：`key → Model`、`owner → key` 与 `实体 ID → key` 绑定。
+/// 席位（`owner`）对应的段模型键（表现层只读，Q3）。
+///
+/// `w3-core` 的 `EntityView` 无 `def_id`、`complete_production` 只
+/// `entities.spawn()+units.insert()`、不发 `Spawned` 事件，故运行时
+/// `Train` / `Build` 新实体无法精确取得 DefId。改由 `owner` 席位反推
+/// 所属族段（`1xx` 人族 / `2xx` 兽族 / `9xx` 中立）+ 只读 `speed`
+/// （建筑 `0`、可移动单位 `> 0`）派生该段代表真实模型键。段键表由装配层
+/// 从 `w3-content::ENTITY_MODEL_FILES` 只读注入，MUST NOT 进权威状态 /
+/// 状态哈希 / 快照（ADR 0002）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeatModels {
+    /// 该族段可移动单位的代表真实模型键。
+    pub unit_key: String,
+    /// 该族段建筑的代表真实模型键。
+    pub building_key: String,
+}
+
+/// 运行时实体未命中任何类型 / 席位绑定、回落 `"default"` 时的回退原因。
+pub const REASON_MODEL_KEY_MISSING: &str = "reason=model_key_missing";
+/// 已解析到真实模型键但本机 glTF / 烘焙网格缺失时的回退原因。
+pub const REASON_ASSET_MISSING: &str = "reason=asset_missing";
+
+/// 模型键解析结果（表现层只读，含显式可诊断回退原因）。
+///
+/// `reason` 为 `Some` 时表示走了**显式**回退，消费方 MUST 以英文结构化
+/// `key=value` 日志记录；`None` 表示命中真实键、不降级（Q3 / C9）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelResolution {
+    /// 采用的模型键；`None` 表示连 `"default"` 都缺失（实例不显示）。
+    pub key: Option<String>,
+    /// 回退原因（英文结构化常量），`None` 表示正常命中。
+    pub reason: Option<&'static str>,
+}
+
+/// 本机模型库：`key → Model`、`owner → key`、`实体 ID → key` 绑定，
+/// 以及 Q3 的 `席位 owner → 段模型键` 绑定。
 /// 资源缺失时 `resolve` 返回 `None`，实例降级为不显示（spec Scenario）。
 #[derive(Default)]
 pub struct ModelLibrary {
@@ -475,6 +510,8 @@ pub struct ModelLibrary {
     bindings: BTreeMap<u8, String>,
     /// 按实体 ID 绑定的类型标签（表现层专属，不进权威状态）。
     entity_bindings: BTreeMap<u64, String>,
+    /// 运行时动态实体的席位段模型键（Q3，表现层只读，装配期注入）。
+    seat_bindings: BTreeMap<u8, SeatModels>,
 }
 
 impl ModelLibrary {
@@ -492,12 +529,34 @@ impl ModelLibrary {
         self.entity_bindings.insert(entity_id, key.to_string());
     }
 
+    /// 注入某席位（`owner`）的段模型键（Q3，装配期按 `FactionSelection`
+    /// 从只读 `ENTITY_MODEL_FILES` 键表派生）。纯表现层数据，
+    /// MUST NOT 进权威状态 / 状态哈希 / 快照（ADR 0002）。
+    pub fn bind_seat(&mut self, owner: u8, unit_key: &str, building_key: &str) {
+        self.seat_bindings.insert(
+            owner,
+            SeatModels {
+                unit_key: unit_key.to_string(),
+                building_key: building_key.to_string(),
+            },
+        );
+    }
+
+    /// 只读某席位段绑定（验收 / 诊断用）。
+    pub fn seat(&self, owner: u8) -> Option<&SeatModels> {
+        self.seat_bindings.get(&owner)
+    }
+
     pub fn get(&self, key: &str) -> Option<&Model> {
         self.models.get(key)
     }
 
     /// 把实体映射到模型 key：优先按实体 ID 的类型绑定，其次按 `owner`
     /// 的队伍绑定，最后回退 `"default"`；库里没有该 key 时返回 `None`。
+    ///
+    /// 保持既有签名与逐字节语义（Q3 不改旧入口）；可诊断版本见
+    /// [`ModelLibrary::resolve_with_reason`]，它额外按 `owner` 席位段 +
+    /// 只读 `speed` 派生运行时动态实体的真实模型键（Q3）。
     pub fn resolve(&self, entity: &EntityView) -> Option<String> {
         let key = self
             .entity_bindings
@@ -506,6 +565,73 @@ impl ModelLibrary {
             .cloned()
             .unwrap_or_else(|| "default".to_string());
         self.models.contains_key(&key).then_some(key)
+    }
+
+    /// 可诊断的模型键解析（Q3 生产入口）。
+    ///
+    /// 优先级：① 装配期 `EntityId → key` 精确绑定；② `owner` 席位段绑定
+    /// 按只读 `EntityView.speed`（建筑 `0` / 单位 `> 0`）选代表真实模型键；
+    /// ③ 既有 `owner → key` 队伍绑定；④ 显式可诊断的 `"default"` 最后兜底。
+    /// ①②③ 命中但该 key 未插入库（本机 glTF 缺失）时以
+    /// [`REASON_ASSET_MISSING`] 标注；落到 ④ 时以
+    /// [`REASON_MODEL_KEY_MISSING`] 标注，MUST NOT 静默降级、MUST NOT 只在
+    /// 「无本机资产」时才可诊断（godot `wc3_game_cursor.gd:219` / C9）。
+    ///
+    /// 只读派生、确定性（同一 `EntityView` + 同一席位表 → 同一键与原因），
+    /// 不反写模拟状态、不进哈希 / 快照（ADR 0002）。
+    pub fn resolve_with_reason(&self, entity: &EntityView) -> ModelResolution {
+        // ① 装配期 frame-0 实体：精确类型绑定优先（P8.0 既有 12 键）。
+        if let Some(key) = self.entity_bindings.get(&entity.id) {
+            return self.finish_resolve(key.clone());
+        }
+        // ② 运行时动态实体：owner 席位段 + 只读 speed 派生段代表键。
+        if let Some(seat) = self.seat_bindings.get(&entity.owner) {
+            let key = if entity.speed == 0 {
+                seat.building_key.clone()
+            } else {
+                seat.unit_key.clone()
+            };
+            return self.finish_resolve(key);
+        }
+        // ③ 既有队伍绑定（兼容）。
+        if let Some(key) = self.bindings.get(&entity.owner) {
+            return self.finish_resolve(key.clone());
+        }
+        // ④ 显式可诊断最后兜底：保留 `"default"`，但明确标注缺键。
+        let key = self
+            .models
+            .contains_key("default")
+            .then(|| "default".to_string());
+        ModelResolution {
+            key,
+            reason: Some(REASON_MODEL_KEY_MISSING),
+        }
+    }
+
+    /// 收尾解析：真实键已在库 → 直接采用；缺失 → 回落到 `"default"`
+    /// 并以 [`REASON_ASSET_MISSING`] 显式标注（不静默产出错误族键）。
+    fn finish_resolve(&self, key: String) -> ModelResolution {
+        if self.models.contains_key(&key) {
+            return ModelResolution {
+                key: Some(key),
+                reason: None,
+            };
+        }
+        let default = self
+            .models
+            .contains_key("default")
+            .then(|| "default".to_string());
+        ModelResolution {
+            key: default,
+            reason: Some(REASON_ASSET_MISSING),
+        }
+    }
+
+    /// 按席位段模型库的全部键插入占位 `Model`（供 `synthetic_library` 装配，
+    /// 使 `resolve_with_reason` 命中真实段键；真实 glTF 网格仍由
+    /// `Scene::set_entity_models` 注入）。纯表现层，不进权威状态。
+    pub fn insert_placeholder(&mut self, key: &str) {
+        self.models.entry(key.to_string()).or_default();
     }
 
     /// 从本机目录加载所有 `*.json` 模型，文件名（去扩展名）作为 key。

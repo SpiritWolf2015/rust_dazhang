@@ -232,12 +232,33 @@ fn real_gltf_models_replace_all_programmatic_geometry() {
         .count();
     assert!(textured > 0, "真实模型顶点应走 GPU 纹理采样路径");
 
-    // 6 个动态实体类型键全部绑定真实网格。
-    assert_eq!(map.entity_models.len(), 6);
-    for (key, model) in &map.entity_models {
-        assert!(model.triangle_count() > 0, "实体 {key} 模型不能为空");
+    // 14 个动态实体类型键（6 人族/中立 + 8 兽族）全部绑定真实网格。
+    // `content-owner` 已在 `ENTITY_MODEL_FILES` 定死 14 键：原 6 键
+    // （peasant/soldier/town-hall/barracks/gold-mine/tree）不变 + 新增
+    // 8 兽族键。严格断言恰好 14、逐键 `triangle_count() > 0`，
+    // MUST NOT 放宽成 `>= 6` / `> 0` 之类的宽松断言，也不删除该检查。
+    // 本机资产缺失导致某键无网格时明确报告 `reason=asset_missing key=...`，
+    // 不静默跳过（Q3「缺资产显式可诊断回退」）。
+    assert_eq!(
+        w3_content::ENTITY_MODEL_FILES.len(),
+        14,
+        "reason=entity_model_key_table_mismatch expected=14"
+    );
+    assert_eq!(
+        map.entity_models.len(),
+        14,
+        "reason=entity_models_count_mismatch expected=14"
+    );
+    for (key, _) in w3_content::ENTITY_MODEL_FILES {
+        let model = map.entity_models.get(*key).unwrap_or_else(|| {
+            panic!("reason=asset_missing key={key} hint=run asset-convert with Orc includes")
+        });
+        assert!(
+            model.triangle_count() > 0,
+            "reason=empty_model key={key} triangles=0"
+        );
     }
-    // 建筑 / 单位模型比程序化四面体复杂得多。
+    // 建筑 / 单位模型比程序化四面体复杂得多（原 6 键的人族建筑回归不删）。
     assert!(map.entity_models["town-hall"].triangle_count() > 500);
     assert!(map.entity_models["barracks"].triangle_count() > 500);
 }

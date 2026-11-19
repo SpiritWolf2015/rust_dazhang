@@ -27,7 +27,8 @@ pub use gpu::{
 };
 pub use model::{
     Attachment, Bone, FilterMode, GeosetAnim, Material, Model, ModelDocument, ModelLibrary,
-    ResolvedMaterial, Sequence, TEAM_COLORS, Track, team_color,
+    ModelResolution, REASON_ASSET_MISSING, REASON_MODEL_KEY_MISSING, ResolvedMaterial, SeatModels,
+    Sequence, TEAM_COLORS, Track, team_color,
 };
 pub use model_geometry::{
     BakedModel, BakedTriangle, ENTITY_DISPLAY_SCALE, MODEL_DISPLAY_SCALE, MODEL_WORLD_SCALE,

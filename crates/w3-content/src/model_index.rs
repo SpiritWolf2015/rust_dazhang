@@ -62,6 +62,15 @@ pub const ENTITY_MODEL_FILES: &[(&str, &str)] = &[
     ("barracks", "buildings/Human/HumanBarracks/HumanBarracks"),
     ("gold-mine", "buildings/Other/GoldMine/GoldMine"),
     ("tree", "Doodads/Terrain/LordaeronTree/LordaeronTree"),
+    // 兽族 2xx 段键：值为全小写归一逻辑路径，由 normalize() 双侧归一命中真实大小写磁盘文件。
+    ("orc-peon", "units/orc/peon/peon"),
+    ("orc-grunt", "units/orc/grunt/grunt"),
+    ("orc-headhunter", "units/orc/headhunter/headhunter"),
+    ("orc-great-hall", "buildings/orc/greathall/greathall"),
+    ("orc-barracks", "buildings/orc/orcbarracks/orcbarracks"),
+    ("orc-burrow", "buildings/orc/trollburrow/trollburrow"),
+    ("orc-altar", "buildings/orc/altarofstorms/altarofstorms"),
+    ("orc-war-mill", "buildings/orc/warmill/warmill"),
 ];
 
 /// 按类别兜底的真实模型逻辑路径候选（确定性取用，均为本机 convert 产物）。
@@ -434,5 +443,197 @@ mod tests {
             ModelCatalog::load(missing, missing),
             Err(ModelIndexError::Io { .. })
         ));
+    }
+
+    /// 兽族 8 键契约：键名 → 全小写归一逻辑路径 → 真实大小写磁盘相对路径。
+    /// 全部为合成字符串表，不含任何资产内容，不依赖本机资产目录。
+    const ORC_CONTRACT: &[(&str, &str, &str)] = &[
+        (
+            "orc-peon",
+            "units/orc/peon/peon",
+            "Units/Orc/Peon/peon.gltf",
+        ),
+        (
+            "orc-grunt",
+            "units/orc/grunt/grunt",
+            "Units/Orc/Grunt/grunt.gltf",
+        ),
+        (
+            "orc-headhunter",
+            "units/orc/headhunter/headhunter",
+            "Units/Orc/HeadHunter/Headhunter.gltf",
+        ),
+        (
+            "orc-great-hall",
+            "buildings/orc/greathall/greathall",
+            "buildings/Orc/GreatHall/GreatHall.gltf",
+        ),
+        (
+            "orc-barracks",
+            "buildings/orc/orcbarracks/orcbarracks",
+            "buildings/Orc/OrcBarracks/OrcBarracks.gltf",
+        ),
+        (
+            "orc-burrow",
+            "buildings/orc/trollburrow/trollburrow",
+            "buildings/Orc/TrollBurrow/TrollBurrow.gltf",
+        ),
+        (
+            "orc-altar",
+            "buildings/orc/altarofstorms/altarofstorms",
+            "buildings/Orc/AltarOfStorms/AltarofStorms.gltf",
+        ),
+        (
+            "orc-war-mill",
+            "buildings/orc/warmill/warmill",
+            "buildings/Orc/WarMill/WarMill.gltf",
+        ),
+    ];
+
+    /// 构造兽族合成目录：目录名刻意保留上游真实大小写，配空 SLK 表；
+    /// 不读 config.toml、不碰本机资产，用于验证全小写逻辑路径命中真实大小写磁盘文件。
+    fn orc_fixture(base: &Path) -> (PathBuf, PathBuf) {
+        let conv = base.join("converted");
+        let slk = base.join("slk");
+        for &(_, _, real) in ORC_CONTRACT {
+            let p = conv.join(real);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"{}").unwrap();
+        }
+        std::fs::create_dir_all(slk.join("Units")).unwrap();
+        std::fs::create_dir_all(slk.join("Doodads")).unwrap();
+        std::fs::write(slk.join("Units/unitUI.json"), r#"{"records":[]}"#).unwrap();
+        std::fs::write(slk.join("Doodads/Doodads.json"), r#"{"records":[]}"#).unwrap();
+        (conv, slk)
+    }
+
+    #[test]
+    fn orc_entity_keys_resolve_to_table_paths() {
+        let dir = std::env::temp_dir().join("w3_model_index_test_orc_a");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (conv, slk) = orc_fixture(&dir);
+        let catalog = ModelCatalog::load(&conv, &slk).unwrap();
+        assert_eq!(
+            catalog.len(),
+            ORC_CONTRACT.len(),
+            "synthetic fixture indexes all orc files"
+        );
+        for &(key, logical, real) in ORC_CONTRACT {
+            // 表项与契约一致，且值已是全小写归一逻辑路径。
+            let entry = ENTITY_MODEL_FILES
+                .iter()
+                .find(|item| item.0 == key)
+                .expect("orc key present in ENTITY_MODEL_FILES");
+            assert_eq!(entry.1, logical, "table logical path matches contract");
+            assert_eq!(
+                normalize(logical).as_str(),
+                logical,
+                "table value is lowercase normalized"
+            );
+            // resolve_entity_key 命中，返回的 PathBuf 保留真实磁盘大小写。
+            let path = catalog.resolve_entity_key(key).expect("orc key resolves");
+            let display = path.to_string_lossy().replace('\\', "/");
+            assert!(
+                display.ends_with(real),
+                "resolved path keeps real on-disk casing"
+            );
+            assert!(path.exists(), "resolved path points to a real fixture file");
+            // 反向把磁盘 stem 归一，应等于表项逻辑路径。
+            let rel = path
+                .strip_prefix(&conv)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let stem = rel.strip_suffix(".gltf").unwrap_or(&rel);
+            assert_eq!(
+                normalize(stem).as_str(),
+                logical,
+                "disk stem normalizes to table logical path"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lowercase_logical_paths_hit_real_casing_fixture() {
+        let dir = std::env::temp_dir().join("w3_model_index_test_orc_b");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (conv, slk) = orc_fixture(&dir);
+        let catalog = ModelCatalog::load(&conv, &slk).unwrap();
+        for &(_, logical, real) in ORC_CONTRACT {
+            let stem = real.strip_suffix(".gltf").unwrap_or(real);
+            // scan_gltf 侧：真实大小写磁盘 stem 归一后等于表项全小写逻辑路径。
+            assert_eq!(
+                normalize(stem).as_str(),
+                logical,
+                "disk stem normalizes to logical path"
+            );
+            // 表项本身已是归一态。
+            assert_eq!(
+                normalize(logical).as_str(),
+                logical,
+                "logical path is normalized"
+            );
+            // lookup 输入侧：全小写逻辑路径命中真实大小写合成目录。
+            let path = catalog
+                .lookup(logical, 0)
+                .expect("lowercase logical path resolves");
+            let display = path.to_string_lossy().replace('\\', "/");
+            assert!(
+                display.ends_with(real),
+                "lookup returns real-casing disk path"
+            );
+            // 反向：真实大小写未归一输入也命中，证明双侧归一。
+            assert!(
+                catalog.lookup(stem, 0).is_some(),
+                "real-casing query also resolves"
+            );
+        }
+        // 元断言：索引键全是小写归一态，命中不依赖文件系统大小写不敏感兜底。
+        assert!(
+            catalog
+                .by_path
+                .keys()
+                .all(|k| k.as_str() == normalize(k).as_str()),
+            "index keys are lowercase normalized"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn existing_six_entity_keys_are_unchanged() {
+        // 改动前 6 键逐字、顺序冻结为合成键表基线（逻辑路径字符串，非资产）。
+        let original: &[(&str, &str)] = &[
+            ("peasant", "units/Human/Peasant/Peasant"),
+            ("soldier", "units/Human/Footman/Footman"),
+            ("town-hall", "buildings/Human/TownHall/TownHall"),
+            ("barracks", "buildings/Human/HumanBarracks/HumanBarracks"),
+            ("gold-mine", "buildings/Other/GoldMine/GoldMine"),
+            ("tree", "Doodads/Terrain/LordaeronTree/LordaeronTree"),
+        ];
+        assert_eq!(
+            &ENTITY_MODEL_FILES[..6],
+            original,
+            "existing 6 keys unchanged in text and order"
+        );
+        // 仅追加 8 个兽族键，未补齐 ORC_SIEGE(206) / ORC_HERO(210) 或人族新类别。
+        assert_eq!(ENTITY_MODEL_FILES.len(), 14, "only 8 orc keys appended");
+        // 既有解析行为不变：resolve_entity_key 仍只做「查表 → lookup」两步。
+        let dir = std::env::temp_dir().join("w3_model_index_test_orc_c");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (conv, slk) = fixture(&dir);
+        let catalog = ModelCatalog::load(&conv, &slk).unwrap();
+        assert_eq!(catalog.len(), 6, "existing synthetic fixture untouched");
+        for &(key, path) in original {
+            assert_eq!(
+                catalog.resolve_entity_key(key),
+                catalog.lookup(path, 0),
+                "existing key resolution unchanged"
+            );
+        }
+        assert!(catalog.resolve_entity_key("peasant").is_some());
+        assert!(catalog.resolve_entity_key("soldier").is_some());
+        assert!(catalog.resolve_entity_key("tree").is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

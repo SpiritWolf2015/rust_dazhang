@@ -27,7 +27,9 @@
 
 use std::path::Path;
 
+use w3_client::faction::{FactionSelection, assemble_from_selection};
 use w3_client::melee::{MeleeDriver, MeleeSetup, synthetic_definitions, synthetic_world};
+use w3_client::runtime_models::RuntimeModelPlan;
 use w3_client::{ClientApp, FixedStepClient};
 use w3_core::{MatchConfig, RtsMatch};
 use w3_render::{Model, ModelLibrary};
@@ -47,19 +49,17 @@ const AI_HORIZON: u64 = 3600;
 /// 绑定类型标签。`Scene` 用该 key 匹配 [`Scene::set_entity_models`] 注入的
 /// 真实 glTF 模型；无真实模型时回退到程序化几何。本库本身零资产读取，
 /// 真实网格由 `real_map::assemble` 从本机 glTF 装配后单独注入。
-fn synthetic_library(setup: &MeleeSetup) -> ModelLibrary {
+///
+/// Q3：再按开局选族派生 [`RuntimeModelPlan`]，把 14 个真实模型键占位与
+/// 两席位的段模型键绑定注入，使运行时 `Train` / `Build` 新实体按
+/// `owner` 席位段 + 只读 `speed` 命中真实 glTF 网格而非四面体（D3）。
+/// 纯表现层只读派生，MUST NOT 进权威状态 / 哈希 / 快照（ADR 0002）。
+fn synthetic_library(setup: &MeleeSetup, faction: FactionSelection) -> ModelLibrary {
     let mut library = ModelLibrary::default();
-    for key in [
-        "default",
-        "peasant",
-        "soldier",
-        "town-hall",
-        "barracks",
-        "gold-mine",
-        "tree",
-    ] {
-        library.insert(key, Model::default());
-    }
+    library.insert("default", Model::default());
+    // Q3：14 键占位 + 本地 / AI 席位段绑定（编译期整数 DefId 段定义表）。
+    RuntimeModelPlan::from_faction(faction).bind_seats(&mut library);
+    // frame-0 的 12 个实体保留既有精确 `EntityId → key` 类型绑定（R13.1）。
     for (id, key) in setup.model_keys() {
         library.bind_entity(id, key);
     }
@@ -95,7 +95,13 @@ fn main() {
         real_map.model_stats.placements,
     );
 
-    let setup = MeleeSetup::new();
+    // 开局前选族（Q1）：表现层本地只读状态，默认回落本地人族 / AI 兽族，
+    // 与既有 `MeleeSetup::new()` 逐字节一致。装配期把 `(local_race,
+    // ai_race)` 经既有 `MeleeSetup::with_races` 派生开局，同一份选族再注入
+    // `ClientApp` 供窗口内 egui overlay 显示与调整；MUST NOT 新增
+    // `Player.race` 权威状态、不改 `Spawn` 命令字节（ADR 0002 / P8.0）。
+    let faction = FactionSelection::default();
+    let setup = assemble_from_selection(faction, MeleeSetup::with_races);
     let defs = synthetic_definitions();
     // 装配期由 client 侧冻结定义 `speed_raw` 派生只读可移动性映射，
     // 注入输入翻译层；表现层专属，不进权威状态 / 哈希 / 快照（design D1）。
@@ -119,7 +125,7 @@ fn main() {
     // （design D3：单一外部命令源）。
     let driver = MeleeDriver::new(FixedStepClient::from_match(sim), &setup, AI_HORIZON);
     let kinds = setup.kinds.clone();
-    let library = synthetic_library(&setup);
+    let library = synthetic_library(&setup, faction);
 
     // 初始相机对准玩家主城的 RTS 常规开局视角：主城落在真实 EI 出生区的
     // 无树空地 `LOCAL_START=(-74,38)`，相机 target 略偏右下让主城完整居中、
@@ -142,6 +148,10 @@ fn main() {
         // 装配层 `EntityId → DefId` 只读关联：HUD 命令卡据此按定义表
         // 派生 12 格并随选中类型切换（tasks 1.4 / R13.1）。表现层专属。
         .with_entity_defs(setup.def_ids().clone())
+        // 开局前选族 overlay（Q1）：同一份表现层本地只读状态注入
+        // ClientApp，窗口内 egui 可见；按本地族只读查表刷新命令卡（Q2）。
+        // 纯表现层派生，MUST NOT 反写模拟状态 / 进哈希 / 快照（ADR 0002）。
+        .with_faction_selection(faction)
         .with_initial_camera(initial_zoom, initial_pan)
         .run()
         .expect("melee example: reason=window_run_failed");

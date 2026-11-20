@@ -14,6 +14,10 @@
 // PROTOCOL_VERSION 4（新增游戏玩法命令变体 ReviveHero / CancelRevive）：
 // 在 GameplayCommand.oneof 只追加 tag 33 / 34，reserved 14 to 32 原样保留；
 // 明确拒绝 v3，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
+// PROTOCOL_VERSION 5（新增游戏玩法命令变体 UpgradeTownHall）：
+// 在 GameplayCommand.oneof 只追加 tag 35，reserved 14 to 32 原样保留；
+// 新增 GameplayUpgradeTownHall 消息，字段编号只追加、尾部保留 reserved；
+// 明确拒绝 v4，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
 
 syntax = "proto3";
 package w3net;
@@ -115,7 +119,7 @@ message Reject {
   reserved 2 to 6;
 }
 
-// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体，只追加，见 ADR 0005 §3）----
+// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体 / 5 追加一个变体，只追加，见 ADR 0005 §3）----
 
 // 效果定义（玩法命令参数）：EffectKind 用稳定码 uint32 承载，amount 用 int64。
 message EffectDef {
@@ -127,7 +131,8 @@ message EffectDef {
 
 // 玩法命令：execute_frame / player_id / sequence 与 w3_core::GameplayCommand 一一对应。
 // oneof kind 用 tag 4–13 覆盖前 10 个玩法变体；PROTOCOL_VERSION 4 在
-// reserved 14 to 32 之后只追加 tag 33 / 34 两个变体（跳过 reserved 段）。
+// reserved 14 to 32 之后只追加 tag 33 / 34 两个变体，PROTOCOL_VERSION 5
+// 再只追加 tag 35 一个变体（均跳过 reserved 段，字段编号只追加）。
 // arrival 不编码，由各端提交时按稳定序本地分配。
 message GameplayCommand {
   uint64 execute_frame = 1;
@@ -146,6 +151,7 @@ message GameplayCommand {
     GameplayLeave leave = 13;
     GameplayReviveHero revive_hero = 33;
     GameplayCancelRevive cancel_revive = 34;
+    GameplayUpgradeTownHall upgrade_town_hall = 35;
   }
   reserved 14 to 32;
 }
@@ -220,6 +226,17 @@ message GameplayReviveHero {
 message GameplayCancelRevive {
   uint64 hero = 1;
   reserved 2 to 8;
+}
+// 主城升级 / 取消升级（PROTOCOL_VERSION 5 追加）：EntityId 用 uint64 的 value()，
+// DefId 用 uint32，target_tier 用 TownHallTier::code() 的稳定 uint32 码，
+// cancel 为变体内字段（false 发起 / true 取消），不另设第二个命令变体。
+// 字段编号只追加，尾部保留 reserved。
+message GameplayUpgradeTownHall {
+  uint64 town_hall = 1;
+  uint32 town_hall_def = 2;
+  uint32 target_tier = 3;
+  bool cancel = 4;
+  reserved 5 to 8;
 }
 
 // 一批玩法命令；集合一律 repeated + 显式顺序，禁止 map。

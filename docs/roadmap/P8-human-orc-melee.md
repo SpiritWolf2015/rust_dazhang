@@ -135,7 +135,7 @@
 ## 4. 全程硬约束
 
 1. **ADR 0001 零资产**：两族定义全为合成 / 原创编译期整数常量；真实导出数据（SLK / 地图 / glTF / PNG）只经 gitignored `config.toml` 作**表现层**接缝，不进仓库、不进权威定义。
-2. **ADR 0002 确定性**：`w3-core` 尽量零改动；若确需新增权威状态字段，MUST 同时进入状态哈希、快照与 `first_difference()`，并跑 `cargo test -p w3-core --test determinism`（26 项）。`SNAPSHOT_VERSION`（当前 4）变更须 ADR 复核。30 Hz 整数帧、命令稳定排序键、稳定 `EntityId` 顺序、FNV-1a 哈希一律不变。P8.5a `p8-hero-revive` 已按 Q1 拍板 bump 4 并在 ADR 0002 复核记录追加（tasks 3.3）。
+2. **ADR 0002 确定性**：`w3-core` 尽量零改动；若确需新增权威状态字段，MUST 同时进入状态哈希、快照与 `first_difference()`，并跑 `cargo test -p w3-core --test determinism`（26 项）。`SNAPSHOT_VERSION`（当前 5）变更须 ADR 复核。30 Hz 整数帧、命令稳定排序键、稳定 `EntityId` 顺序、FNV-1a 哈希一律不变。P8.5a `p8-hero-revive` 已按 Q1 拍板 bump 4 并在 ADR 0002 复核记录追加（tasks 3.3）。P8.5b `p8-townhall-upgrade` 已按 Q1 拍板 bump 5 并在 ADR 0002 复核记录追加（tasks 3.3）。
 3. **ADR 0004 冻结边界**：`w3-content` 原始 `f64` 坐标 MUST NOT 直接转 `SimFixed`、MUST NOT 进哈希 / 快照；`ExportSource` 的 provider 边界保持。
 4. **许可证**：四个参考项目只读；Warsmash AGPLv3 仅借鉴语义、不复制代码；新增依赖须核许可并登记 `NOTICE.md` / `Cargo.lock`。
 5. **工作流**（`CODEBUDDY.md` §8 / §9）：一个 change 一个 owner、配只读 `critic`；proposal 阶段出 `decision-memo.md` 与规格门、`critic` 复审、四件套一致性、机械门禁 `verify_all.py`；`push` / `fetch` / `pull` / `clone` 人工独占。

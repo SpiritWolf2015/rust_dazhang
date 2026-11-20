@@ -3,15 +3,15 @@
 //! 两个 `RtsMatch` 经自建 relay 的权威帧命令流推进，只传输入命令、
 //! 不传状态；逐帧比对 `compute_state_hash()`、`read_view()`、
 //! `first_difference()` 与双方 checksum 交换结果。权威帧批轮转携带全部
-//! 12 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
-//! `CancelRevive`），验证联机与本地行为一致、联机唯一推进点仍是
-//! `w3_net::apply_frame`。
+//! 13 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
+//! `CancelRevive` 与 PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`），
+//! 验证联机与本地行为一致、联机唯一推进点仍是 `w3_net::apply_frame`。
 //! 注意：此处两个客户端实例跑在内存回环总线上；真实 UDP 双进程实机
 //! 验收另见 `vera20k-mapping.md`，对应 tasks.md 的人工验收项。
 
 use w3_core::{
     Command, CommandKind, EffectDef, EffectKind, EntityId, Frame, GameplayCommand,
-    GameplayCommandKind, MatchConfig, RtsMatch, SimFixed, StaticWorld,
+    GameplayCommandKind, MatchConfig, RtsMatch, SimFixed, StaticWorld, TownHallTier,
 };
 use w3_net::packet::{Packet, PacketKind};
 use w3_net::transport::{Endpoint, LoopbackBus, LoopbackTransport, SharedBus, Transport};
@@ -70,14 +70,15 @@ fn commands_for(frame: u64, player: u8) -> Vec<Command> {
     )]
 }
 
-/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 12 类
+/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 13 类
 /// `GameplayCommandKind`（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
-/// `CancelRevive`），且 `execute_frame` 落在原定帧，验证玩法命令仍在
-/// 原定 `ExecuteFrame` 执行一次、不改变帧序、两端逐帧哈希一致。
+/// `CancelRevive` 与 PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`），
+/// 且 `execute_frame` 落在原定帧，验证玩法命令仍在原定 `ExecuteFrame`
+/// 执行一次、不改变帧序、两端逐帧哈希一致。
 fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
     let entity = EntityId::new(u64::from(player)).unwrap();
     let altar = EntityId::new(u64::from(player) + 100).unwrap();
-    let kind = match frame % 12 {
+    let kind = match frame % 13 {
         0 => GameplayCommandKind::Cast {
             caster: entity,
             ability: 10,
@@ -114,7 +115,15 @@ fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
             altar,
             altar_def: 16,
         },
-        _ => GameplayCommandKind::CancelRevive { hero: entity },
+        11 => GameplayCommandKind::CancelRevive { hero: entity },
+        // 12：PROTOCOL_VERSION 5 新增的独立主城升级命令（cancel 为变体内
+        // 字段，false 发起 / true 取消，二者共用同一变体、同一 tag 35）。
+        _ => GameplayCommandKind::UpgradeTownHall {
+            town_hall: entity,
+            town_hall_def: 17,
+            target_tier: TownHallTier::T2,
+            cancel: false,
+        },
     };
     vec![GameplayCommand::new(
         Frame::new(frame),

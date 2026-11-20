@@ -99,3 +99,47 @@
 - approved_by: 用户 2026-11-20 本会话 `AskUserQuestion` 规格门拍板「Q1–Q8 全部按推荐」+「R-1 / R-2 登记已知限制直接锁定」+「批准并锁定（推荐）」（`critic` 规格门报告：清单第 7/10/12/13 项全清单复核、`blocker: 0`、建议批准有保留）
 - date: 2026-11-20
 - reason: 一轮规格门。`reference-researcher` 对照报告（T1/T2/T4/T5 命中、T6 条件命中、T3 不命中）→ P1 方向经 `AskUserQuestion` 拍板「A 独立 tier 状态」→ `spec-steward` 一次成文四件套（新 capability `town-hall-upgrade` 9 条 ADDED + 6 份 MODIFIED delta 共 14 条，逐字保留全部历史 `#### Scenario:` 身份键）+ `decision-memo.md`（C1–C24 逐条带锚、Q1–Q8 逐条「推荐+依据+代价+备选」、被否方向台账 R1–R7）→ leader 复核 `openspec validate p8-townhall-upgrade --strict` 零 warning / `check_encoding.py` 全绿 / 指纹 `7d87c0eb…` → `critic` 规格门报告 `blocker: 0`、B-1 教训未复发（14 条 MODIFIED 覆盖 6 个主 capability 全部冲突硬断言，含 P8.5a 未修订的 `orc-faction` / `command-hotkeys`）、建议批准有保留 → 用户 2026-11-20 规格门经 `AskUserQuestion` 逐条拍板「Q1–Q8 全部按推荐」「R-1 / R-2 登记已知限制直接锁定」「批准并锁定」。拍板结果与四件套收敛口径一致，未改四件套、指纹 `7d87c0eb…` 不变、不重走门；`status: pending` fail-closed 期间未绕过门禁、不改门禁、不 self-approve、不拿沉默当授权（C22）。批准记录与四件套指纹一致，此后规格锁定并由 `tools/verify_all.py::spec_gate_check()` 机械校验；此后四件套任一改动即视为规格解锁，MUST 按 §8 同步回查其余三份并由 `spec-steward` 修订后重走规格门，不得由实现方自行放行。
+
+## 应用阶段处置（2026-11-20，`/opsx:apply` 收尾，leader 回填）
+
+> 边界：本小节只写进 `decision-memo.md`（该文件不在 `spec_artifact_fingerprint` 哈希集合，`tools/verify_all.py:169-189`）；`tasks.md` 只勾选复选框、不改任何正文文字（`[x]` 被归一化，`verify_all.py:185-186`）。二者均不触发 `CODEBUDDY.md §8` 规格解锁，指纹保持 `7d87c0eb…`。回填后已复跑 `--fingerprint` 与 `verify_all.py` 确认 `[check] spec gate OK`。四件套任一正文（非复选框）改动即视为解锁，须按 §8/§9 同步回查、`spec-steward` 修订、重走规格门、由人重新拍板。
+
+### 代码门两轮与 blocker 1 处置（路径 a）
+
+- 第 1 轮 `critic` 代码门判 `blocker: 1`（第 8 项：真实装配「升级后训练 / 解锁生效」不可达），建议「驳回（暂缓本地 commit）」。根因：`crates/w3-client/src/melee/defs.rs:180,182,616-617` 的 `TIER2_UNIT(8101)` / `TIER2_TECH(8102)` 只登记在 `tier_requirements`，未注册进 `units`/`upgrades` 定义表 → `tier_requirement_met()`（`sim_match.rs:1492-1500`）对真实装配里所有可训练 / 可研发 DefId 恒 `true`，升级前后 `Train`/`Research` 逐字节一致；占位 DefId 即便走到判据，`complete_production`（`:1782-1785`）/ `apply_upgrade`（`:1819-1822`）查不到 def 也提前 return、不生成实体；`w3-core` 正向回归用的是自建夹具（`town_hall_upgrade.rs:77-106` 把 8111/8121 注册为真实定义），workspace 全绿仅证明「既有命令未破坏」，不构成 `roadmap:126` 验收线达成证据。该取舍未在四件套 / 纪要登记，属静默降级。
+- leader 判定该 blocker 影响行为契约 / 验收线（非「仅可见性不足」），不适用「直接登记已知限制收尾」；按 `critic` 推荐**路径 (a)「补可达路径」**退回 `client-owner` 聚焦修复：不登记已知限制、不接受降级、不改四件套、不触发规格解锁、不补 Q6 范围外接线。代码门是 AI 内部质量门、修复实现不属规格 / 范围变更，故未另请用户拍板（规格门才需人拍板，`CODEBUDDY.md §9`）。
+- 第 2 轮 `critic` 只复审改过的 4 个 `crates/w3-client/` 文件：`blocker: 0`、无新增 blocker、建议「批准（可转入 leader 收尾）」。最多两轮，不以「测试全绿」或多派 agent 当结果保证。
+
+### 修复内容与 4 项真实装配 CPU 回归
+
+- `defs.rs:473` 把 `TIER2_UNIT(8101)` 注册为真实 `UnitDef = unit(150,4,26,300,2,8)`（`train_frames=8`、可移动 `speed>0`）；`:613-620` 把 `TIER2_TECH(8102)` 注册为真实 `UpgradeDef { damage_mod:3, hp_mod:6, research_frames:8 }`；`tier_requirements` 仍 `(8101,T2)/(8102,T2)`（`:637-639`）、`town_hall_defs` 仍两族主城（`:634-636`）；既有 `1xx`/`2xx` 真实 DefId 未标 T2、行为不变；同步 `units().len()==29` / `upgrades().len()==6` / `TIER2_NEW_UNIT_IDS` / `NEW_UPGRADE_IDS` / 8xxx 分段断言。全合成原创编译期整数 `[待核]`、零资产、非经典命名、无建筑名白名单、无 rawcode。
+- `town_hall_upgrade_hud.rs` 现 12 项测试，新增 4 项（均以 `synthetic_definitions()` 真实装配为夹具、经 `create_with_definitions` + `submit_gameplay_command` + `step()` 既有确定性生产路径，非自建夹具、非旁路模拟）：`:1025` T1 显式拒绝 + no-op 对齐后哈希 / 快照 / `first_difference()==None` 无漂移；`:1101` T2 接受 → `alive_entities+1` / `next_entity_id+1` / `upgrades[8102]=true` / `produced+1` / `stat_mods.damage=3`·`max_hp=6` / 队列清空 / 双实例逐帧一致；`:1221` 同一命令脚本 T1 vs T2 哈希不等 / 快照不等 / `first_difference().is_some()`（直接证伪「恒放行」）；`:1312` 缺陷态缺需求链 → T1 错误接受，被哈希与首差异诊断抓出（改坏验红）。实跑 `12 passed; 0 failed`。
+- 反向验证辅助函数经公开 getter 克隆整张定义表、补注册 8101/8102 后自动同源，`content_hash()` 判别力未稀释；`town_hall_upgrade_hud.rs` 故意不 `with_town_hall_upgrade` 的 A-B 缺陷态设计意图保持、被第 4 项回归实际复用。
+- 收口结论：`roadmap:126`「升级后训练 / 解锁生效，快照哈希稳定」在**内核 + 真实装配 CPU 回归**层达成；MUST NOT 扩大表述为真窗口人工验收已通过。
+
+### golden hash 核实与层次区分（Q7 / R-k）
+
+- `crates/w3-core/examples/golden_hash.rs:171` 用 `RtsMatch::create_with_world`（`sim_match.rs:427` `FrozenDefinitions::empty()`）+ 编译期常量，不依赖 `w3-client::synthetic_definitions()`；本轮 client 装配层补注册**不影响**其输出。实测 `final_hash=0xce89a7baf4d711ec` / 整份文本 sha256 `202b7490f94cbc059a266c1663fc21e847e55ebb2c3620750f4346855475742c` / 41 行 1371 字节，与 `ADR 0002:112` 一致；**未重取、不假称重取、未改 `golden_hash.rs` / `ADR 0002`**。
+- 层次区分（R-k）：client 装配层 `content_hash()` / 快照头部 `defs_hash` 因新增两条真实定义而变化（所有 client 测试以同脚本基线比对、未硬编码旧值，故全绿），与 `w3-core` 空定义 golden 基线是两个不同层次；**不声称客户端快照逐字节不变、不假称已重取 golden hash**。
+- Q7 口径不变：Debian 12 侧 v4 / v5 逐字节离线比对仍待 VM / 人工，macOS / ARM64 / 其它 rustc 待验证；不声称跨平台 / 全平台已验证或有新验证结论。
+
+### 残留与已知限制（如实登记、不冒充已解决、不扩范围）
+
+- **Q6 / R-i / R-b（重点）**：真窗口玩家 `U` 键 / 命令卡升级格位 / 8101·8102 训练格位仍无 UI 接线——`input.rs` 无 `U` 键绑定、`CardCommand` 无升级变体、`derive_upgrade_slot` 零生产调用方、`ai.rs` 无升级注入。这是本纪要 Q6 ②（B 类键位 `[待核]`、不入库）③（`SetAi`/`run_ai` 外部命令面、本 change 不新设 AI × lockstep 注入架构）+ `design.md:35-36` Non-Goals + `tasks.md:60,68` **用户规格门已拍板的范围外承接**，与 P8.5a 归档纪要「本期无玩家 / AI 复活触发接线」同类；不是遗漏、不冒充已解决、不因本轮 CPU 层修复而消失。8.1/8.2/8.3 字面依赖这些接线、当前实现下真窗口不可达，8.1–8.7 全部保持 `- [ ]`「未执行 / 待人工」并补注「当前实现下不可达 / 待后续 change」；补 UI/AI 接线属规格变更，须用户拍板后另立 change，本轮不扩范围。
+- **Q8 证据形态（R-a）**：反向验证采用 `CODEBUDDY.md §5` 形态①（测试内构造反例 + 元断言防退化）；`reverse_validation_town_hall_upgrade.rs` 四类退化成对 `formal_passes`/`degenerate_fails` + `formal_still_passes` 元断言；本轮 `town_hall_upgrade_hud.rs:1312-1366` 缺陷态经真实 `FrozenDefinitions::new` + `tier_gate_fixture_with_defs` 生产路径注入。未做形态② A-B 命令输出留档，`tasks.md` 7.1 按形态①判定，**不冒充**「缺陷态红 / 修复态绿两条命令输出留档」。
+- **R-2 措辞订正（R-g）**：本纪要「## 已知限制 / 边界」R-2「当前无取消入口」应订正为「当前无取消 UI 接线」——`w3-core` 命令面 `UpgradeTownHall { cancel: true }`（`gameplay.rs:1169-1174`）入口已存在、事务性退款已实现并经四条中止路径验证，缺的是 UI 接线；8.3 保持「未执行 / 待人工」。Q2 / R-2 锁定「1 变体 / 码 13 / proto 1 tag」口径全程保持，未新增 `CancelUpgradeTownHall`。
+- **其余 residual**：`derive_upgrade_slot` 无生产调用方（R-b）、`snapshot_bytes` 用 `Debug` 格式作快照字节代理（`town_hall_upgrade_hud.rs:478-482`，`isolation.rs:353-356` 另有 `Snapshot: PartialEq` 全字段相等兜底，R-c）、`CODEBUDDY.md §5` v3 措辞易被误读为涵盖 v5（R-d，后续 `docs-owner` 澄清）、`isolation.rs` 新增中文 `assert_eq!` 消息沿用同文件 P8.5a 惯例（R-e）、`openspec validate --all` 多条 `>500 字符` warning 落在既有主 specs 且 `Totals: 25 passed, 0 failed`（R-f / R-13）——均如实登记为既知 residual、不冒充已解决、不扩范围。
+- **R-j 并发门禁事实**：`crates/w3-content/src/model_index.rs:391,408,436,600` 四个用例共用固定临时目录 + `remove_dir_all(...).unwrap()`，并发多 cargo 进程会触发 `PermissionDenied` 的 4 个环境性 FAILED；第 1 轮复核中一次并发运行实际出现 `50 passed; 4 failed`，串行单实例复跑 `cargo test -p w3-content --lib` → `54 passed; 0 failed`、`cargo test --workspace` 全 `0 failed`、`verify_all.py` 三次 `Verification OK`。本轮修复与串行复跑**不改变**该既有事实；`model_index` 临时目录修复属后续独立 change、本轮不顺手扩范围；leader commit 前串行单实例留档，不得把并发 FAILED 或后台任务 `exit code 0` 冒充通过证据。
+- **Q4 / Q5 / Q6 / Q7 residual（R-h）逐条标「未解决 / 待后续独立 change」**：T3 全量升级链、两族完整二线单位与科技清单、差价扣费、`U` 键绑定（Q4）；AI × lockstep 升级命令注入架构（Q6）；活文档 `WC3-MELEE-RULES.md` 附录补锚 / 防误用清单补锚 / `R4.1 :137` 旧行号收口、其余含同类历史口径的主 specs 与所有 `## Purpose` 概述残留、R-1 `command-hotkeys` 陈旧版本口径（Q5，`docs-owner` 后续独立 change）；Debian 12 侧 v4 / v5 逐字节比对、macOS / ARM64 / 其它 rustc 待验证（Q7）。不冒充已解决或全平台达成。
+
+### 串行单实例门禁留档（本轮实测，`critic` 第二轮复核一致）
+
+- `cargo fmt --all -- --check` → `FMT_OK`；`cargo test --workspace`（串行单实例）→ `594 passed; 0 failed`；`cargo test -p w3-client --test town_hall_upgrade_hud` → `12 passed; 0 failed`；`cargo test -p w3-core --test determinism -- --nocapture` → `26 passed; 0 failed`；`w3-net` 65 / `w3-relay` 15 / `w3-render isolation` 5 全绿；`cargo run -q -p w3-core --example golden_hash` → `final_hash=0xce89a7baf4d711ec`；`python tools/verify_all.py` → `Totals: 25 passed, 0 failed` + `Verification OK` + `[check] spec gate OK`；`env -u PYTHONIOENCODING PYTHONUTF8=0 python tools/verify_all.py`（CI 真实 locale 复现）→ `Verification OK`；`python tools/check_encoding.py` → `Encoding check OK: 340 text files`；`python tools/check_source_conventions.py` → `Source conventions OK: 97 Rust files`；`openspec validate p8-townhall-upgrade --strict` → valid；`git diff --check` → 0；`--fingerprint` → `7d87c0eb…`；资产扫描 0 / 平台脚本 0；`git ls-files --others` 仅 3 个新测试文件。`cargo test --workspace` 取的是串行单实例输出，并发那次 4 个环境性 FAILED 按 R-j 如实登记、不隐瞒、不以之否定串行结果。
+
+### 真窗口 / 人工边界
+
+- 8.1–8.7 全部 `- [ ]`「未执行 / 待人工」、不用离屏 CPU 回归或截图冒充真窗口验收、CI MUST NOT 声称已验证 GPU；CI 双平台 `verify_all.py` 未执行；人工 `push`/`fetch`/`pull`/`clone`、发布、`/opsx:archive` 归档全部人工独占且本轮未执行。本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀），四件套 + `decision-memo.md` + 3 个新测试文件一并纳入。
+
+### `tasks.md` 勾选
+
+- 1–7 组共 26 项按上述串行单实例实测证据勾选为 `- [x]`（7.1 按 Q8 形态①判定、7.3 只勾 Windows 侧重取 / Debian 侧留待人工）；8.1–8.7 全部保持 `- [ ]`「未执行 / 待人工」。只翻复选框、未改任何正文文字，指纹 `7d87c0eb…` 不变、未触发规格解锁。

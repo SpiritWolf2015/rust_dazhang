@@ -40,8 +40,9 @@ pub use gameplay::{
     GameplayCommand, GameplayCommandError, GameplayCommandKind, GameplayCommandQueue,
     HeroDeathRecord, HeroReviveState, HeroState, ItemDef, PlayerEconomy, ProductionItem,
     ReviveCharge, ReviveConstants, ReviveCost, ReviveQueueItem, SYNTHETIC_REVIVE_CONSTANTS,
-    StatMods, UnitDef, UnitGameplayState, UpgradeDef, VictoryState, WaveState, WorldGameplayState,
-    resolve_effects, restore_by_percent,
+    SYNTHETIC_TOWN_HALL_CONSTANTS, StatMods, TownHallConstants, TownHallCost, TownHallTier,
+    TownHallUpgradeCharge, TownHallUpgradeItem, TownHallUpgradeState, UnitDef, UnitGameplayState,
+    UpgradeDef, VictoryState, WaveState, WorldGameplayState, resolve_effects, restore_by_percent,
 };
 pub use nav::{DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 pub use sim_match::{EntityView, Event, EventKind, MatchConfig, RtsMatch, WorldView};

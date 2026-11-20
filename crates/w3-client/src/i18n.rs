@@ -66,6 +66,28 @@ pub struct Texts {
     pub hero_died: &'static str,
     /// 英雄复活完成事实事件标签。
     pub hero_revived: &'static str,
+    /// 主城升级队列标题（P8.5b / tasks 6.2）。
+    pub town_hall_queue: &'static str,
+    /// 主城升级条目主体标签。
+    pub town_hall: &'static str,
+    /// 主城等级标签。
+    pub town_hall_tier: &'static str,
+    /// 主城升级剩余 / 总帧标签。
+    pub town_hall_remaining: &'static str,
+    /// 主城升级费用标签。
+    pub town_hall_cost: &'static str,
+    /// 空升级队列提示。
+    pub town_hall_empty: &'static str,
+    /// 升级冻结扣费登记条数标签。
+    pub town_hall_charges: &'static str,
+    /// 升级开始事实事件标签。
+    pub town_hall_started: &'static str,
+    /// 升级完成事实事件标签。
+    pub town_hall_completed: &'static str,
+    /// 升级取消 / 中止事实事件标签。
+    pub town_hall_cancelled: &'static str,
+    /// 已登记主城等级条数标签。
+    pub town_hall_tier_count: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
@@ -106,4 +128,15 @@ pub const ZH: Texts = Texts {
     revive_charges: "Charges",
     hero_died: "Hero fell",
     hero_revived: "Hero revived",
+    town_hall_queue: "Town Hall Upgrade",
+    town_hall: "Hall",
+    town_hall_tier: "Tier",
+    town_hall_remaining: "Frames",
+    town_hall_cost: "Cost",
+    town_hall_empty: "no upgrade in progress",
+    town_hall_charges: "Charges",
+    town_hall_started: "Started",
+    town_hall_completed: "Completed",
+    town_hall_cancelled: "Cancelled",
+    town_hall_tier_count: "Tiers",
 };

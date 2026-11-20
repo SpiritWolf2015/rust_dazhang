@@ -12,8 +12,9 @@
 //! `Gameplay=1`），在**恰好一次**无参 `RtsMatch::step()` 之前全部提交。
 //! 统一键只用于规范化归并顺序，不改变各类队列内部 `arrival` 语义。
 //!
-//! `PROTOCOL_VERSION = 4` 只在玩法线格式 oneof 追加 `ReviveHero` /
-//! `CancelRevive` 两个变体；帧编排、稳定排序键、依序提交与「恰好一次
+//! `PROTOCOL_VERSION = 4` 在玩法线格式 oneof 追加 `ReviveHero` /
+//! `CancelRevive` 两个变体，`PROTOCOL_VERSION = 5` 再只追加
+//! `UpgradeTownHall` 一个变体；帧编排、稳定排序键、依序提交与「恰好一次
 //! `step()`」推进点一律不变（ADR 0005 §3）。
 
 use std::collections::{BTreeMap, BTreeSet};

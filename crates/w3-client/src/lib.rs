@@ -5,7 +5,7 @@
 //! 驱动 `step()`，并只读消费 `WorldView` 与事实事件。任何新状态——整数帧
 //! 累加器余数、插值 `alpha`、窗口尺寸、选中集合、HUD 布局、相机位姿、
 //! `Instant` 宿主时钟——一律为表现层专属，MUST NOT 进入 FNV-1a 状态哈希或
-//! `SNAPSHOT_VERSION`（当前 4）定义的快照。
+//! `SNAPSHOT_VERSION`（当前 5）定义的快照。
 //!
 //! 逻辑帧由冻结的 `logic_fps = 30` 整数帧累加器驱动（ADR 0002 §2）：
 //! `step()` 不接受 delta、墙钟或刷新率；`RedrawRequested`、垂直同步与 GPU
@@ -63,7 +63,10 @@ pub use app::{ClientApp, ClientError, HostClock, StepDriver};
 pub use camera::{CameraAction, CameraState};
 pub use client::FixedStepClient;
 pub use faction::{FactionSelection, assemble_from_selection};
-pub use hud::{HudAssetError, HudAssets, HudModel, HudReviveItem, ReviveHudModel, draw};
+pub use hud::{
+    HudAssetError, HudAssets, HudModel, HudReviveItem, HudUpgradeItem, ReviveHudModel,
+    TownHallUpgradeHudModel, draw,
+};
 pub use i18n::{Texts, ZH};
 pub use input::{
     AimState, ClientCommand, InputAction, InputError, InputState, LEAD_FRAMES, LOCAL_PLAYER,
@@ -72,7 +75,7 @@ pub use input::{
 };
 pub use melee::command_card::{
     ButtonDef, CARD_SLOTS, CardCommand, CardId, CardKind, CommandCard, CommandCatalog, GRID_HEIGHT,
-    GRID_WIDTH, slot,
+    GRID_WIDTH, UpgradeSlot, derive_upgrade_slot, slot,
 };
 pub use net_driver::NetSessionDriver;
 pub use presentation::present;

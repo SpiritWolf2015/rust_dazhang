@@ -10,7 +10,7 @@ context: |
   整数逻辑帧冻结为 30 Hz；命令按
   ExecuteFrame -> PlayerId -> Sequence -> Arrival 排序；稳定 EntityId 顺序；
   FNV-1a 状态哈希；快照版本由 crates/w3-core/src/snapshot.rs 的
-  SNAPSHOT_VERSION 定义（当前 4，头部含 defs_hash / content_hash），
+  SNAPSHOT_VERSION 定义（当前 5，头部含 defs_hash / content_hash），
   快照是帧提交完成后的完整状态。
   w3-content 的坐标只是冻结的 f64 输入，绝不能进入快照或状态哈希；
   P2 必须先冻结 SimFixed 的转换规则。
@@ -53,7 +53,7 @@ rules:
     - 同步产出 `decision-memo.md`（模板 `openspec/decision-memo.template.md`）：只记拍板决策（含被否备选与理由）、承重约束（逐条带 `file:line` / commit / 命令输出证据锚）、待确认项；无证据项 MUST NOT 写成「用户已确认」。小改动须在文件内显式声明省略理由。
   specs:
     - 使用 SHALL/MUST；每条 requirement 至少一个 #### Scenario（WHEN/THEN）。
-    - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 4）。
+    - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 5）。
     - 玩法 requirement / Scenario MUST 引用 `WC3-MELEE-RULES.md` 的规则编号 `R-x.y` 并给出可执行验证；无规则依据的玩法需求回到人拍板，不臆造。
     - 特别校验 R1 可移动性：金矿 / 树木 / 建筑 / 资源点等不可移动实体 MUST NOT 出现在 `Move` 命令的 Scenario 中；框选含建筑时 MUST 只为可移动单位生成 `Move`。
   design:

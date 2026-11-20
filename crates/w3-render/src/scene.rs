@@ -213,6 +213,17 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
             switch_sequence(instance, library, "stand");
         }
         EventKind::MoveFailed => {}
+        // P8.5b 主城升级开始事实事件：升级进度 / tier / 费用是 `w3-core`
+        // 顶层权威状态，只由 `RtsMatch` 写入并进 FNV-1a 状态哈希 / 快照；
+        // HUD 从只读 `Snapshot.town_hall` 派生，本场景仅按 sequence 去重消费
+        // 事件拷贝，不持有权威句柄、无对应动画序列，故幂等 no-op。
+        EventKind::TownHallUpgradeStarted => {}
+        // P8.5b 主城升级完成事实事件：tier 递进与解锁由内核结算，
+        // 表现层同样只读派生、幂等 no-op，MUST NOT 改哈希 / 快照 / 首差异字段。
+        EventKind::TownHallUpgradeCompleted => {}
+        // P8.5b 主城升级取消 / 中止事实事件：事务性退款由内核结算，
+        // 表现层只读派生、幂等 no-op，重复投递由 `consume` 的 sequence 去重吸收。
+        EventKind::TownHallUpgradeCancelled => {}
     }
 }
 

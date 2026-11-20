@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_content::RgbaImage;
-use w3_core::{DefId, Event, EventKind, SCALE, Snapshot, WorldView};
+use w3_core::{DefId, Event, EventKind, SCALE, Snapshot, TownHallTier, WorldView};
 use w3_render::{display_hints, team_color};
 
 use crate::faction::FactionSelection;
@@ -181,6 +181,102 @@ impl ReviveHudModel {
     }
 }
 
+/// 单个主城升级队列项的只读 HUD 投影（P8.5b / tasks 6.1-6.2）。
+///
+/// 全部字段来自只读 [`w3_core::Snapshot::town_hall`] 的 `queue` 值拷贝，
+/// owned、纯表现层，MUST NOT 反写 `RtsMatch` 权威状态、进状态哈希 / 快照 /
+/// `first_difference()`。当前 tier、升级进度 / 剩余帧 / 费用均由冻结权威状态
+/// 只读派生，不引入墙钟、全局静态字典或建筑名白名单（ADR 0002 §5 / D6 / D7）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudUpgradeItem {
+    pub town_hall: u64,
+    pub town_hall_def: DefId,
+    pub owner: u8,
+    pub from_tier: TownHallTier,
+    pub target_tier: TownHallTier,
+    pub remaining_frames: u32,
+    pub total_frames: u32,
+    pub gold: i64,
+    pub lumber: i64,
+}
+
+/// 主城升级 HUD 的只读投影模型（一帧）。
+///
+/// 只从只读 `Snapshot.town_hall.{tiers,queue,charges}` 与 `drain_events()`
+/// 的 `TownHallUpgradeStarted` / `TownHallUpgradeCompleted` /
+/// `TownHallUpgradeCancelled` 事实事件拷贝派生；本结构不持有 `RtsMatch`，结构上
+/// 无法反写模拟状态，也不进入 FNV-1a 状态哈希 / 快照 / `first_difference()`
+/// （ADR 0002 §5 / C6 / D6）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TownHallUpgradeHudModel {
+    /// 升级队列项（按 `BTreeMap` 稳定 `EntityId` 顺序）。
+    pub queue: Vec<HudUpgradeItem>,
+    /// 当前各主城等级（按稳定 `EntityId` 顺序）。
+    pub tiers: Vec<(u64, TownHallTier)>,
+    /// 冻结扣费登记条数（只读派生，仅用于 HUD 展示）。
+    pub charges: usize,
+    /// 本批次 `TownHallUpgradeStarted` 事实事件计数。
+    pub started_events: usize,
+    /// 本批次 `TownHallUpgradeCompleted` 事实事件计数。
+    pub completed_events: usize,
+    /// 本批次 `TownHallUpgradeCancelled` 事实事件计数。
+    pub cancelled_events: usize,
+}
+
+impl TownHallUpgradeHudModel {
+    /// 从只读快照拷贝与事实事件拷贝派生 HUD 数据；纯只读、无副作用。
+    ///
+    /// `snapshot` 是 [`w3_core::Snapshot`] 的所有权副本（由
+    /// `StepDriver::snapshot` 提供），`events` 是 `drain_events()` 的事实事件
+    /// 拷贝。本函数只读取两者，不调用 `step()`、不提交命令、不改写任何权威
+    /// 状态字段；队列 / 等级 / 费用均走 `BTreeMap` 稳定顺序，无墙钟 / `HashMap`
+    /// 迭代顺序 / 全局静态字典 / 建筑名白名单（R13 / R13.7 / ADR 0002 §5）。
+    pub fn derive(snapshot: &Snapshot, events: &[Event]) -> Self {
+        let queue = snapshot
+            .town_hall
+            .queue
+            .values()
+            .map(|item| HudUpgradeItem {
+                town_hall: item.town_hall.value(),
+                town_hall_def: item.town_hall_def,
+                owner: item.owner,
+                from_tier: item.from_tier,
+                target_tier: item.target_tier,
+                remaining_frames: item.remaining_frames,
+                total_frames: item.total_frames,
+                gold: item.gold,
+                lumber: item.lumber,
+            })
+            .collect();
+        let tiers = snapshot
+            .town_hall
+            .tiers
+            .iter()
+            .map(|(&entity, &tier)| (entity.value(), tier))
+            .collect();
+        let started_events = events
+            .iter()
+            .filter(|event| event.kind == EventKind::TownHallUpgradeStarted)
+            .count();
+        let completed_events = events
+            .iter()
+            .filter(|event| event.kind == EventKind::TownHallUpgradeCompleted)
+            .count();
+        let cancelled_events = events
+            .iter()
+            .filter(|event| event.kind == EventKind::TownHallUpgradeCancelled)
+            .count();
+        Self {
+            queue,
+            tiers,
+            charges: snapshot.town_hall.charges.len(),
+            started_events,
+            completed_events,
+            cancelled_events,
+        }
+    }
+}
+
 /// 命令卡动作（由选中集合与实体类型只读派生）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandAction {
@@ -305,6 +401,10 @@ pub struct HudModel {
     /// 祭坛复活队列的只读 HUD 投影（P8.5a / tasks 6.1）；纯表现层派生，
     /// MUST NOT 反写权威状态、进状态哈希 / 快照 / `first_difference()`。
     pub revive: ReviveHudModel,
+    /// 主城升级等级 / 队列 / 费用的只读 HUD 投影（P8.5b / tasks 6.1-6.2）；
+    /// 纯表现层派生，MUST NOT 反写权威状态、进状态哈希 / 快照 /
+    /// `first_difference()`（ADR 0002 §5 / D6）。
+    pub town_hall: TownHallUpgradeHudModel,
     pub selected_count: usize,
     pub event_count: usize,
     /// 本地玩家编号，用于按队伍区分 HUD 标记颜色。
@@ -538,6 +638,8 @@ impl HudModel {
             queue,
             // 只读派生：只消费 `snapshot.revive` 与事实事件拷贝，不写回模拟状态。
             revive: ReviveHudModel::derive(snapshot, events),
+            // 只读派生：只消费 `snapshot.town_hall` 与事实事件拷贝，不写回模拟状态。
+            town_hall: TownHallUpgradeHudModel::derive(snapshot, events),
             selected_count: selection.len(),
             event_count: events.len(),
             local_player,
@@ -812,6 +914,53 @@ pub fn draw_with_minimap(
             model.revive.hero_died_events,
             texts.hero_revived,
             model.revive.revived_events,
+        ));
+        ui.separator();
+
+        // 主城升级队列：只读投影的当前 tier、进度 / 剩余帧 / 费用
+        // （P8.5b / tasks 6.1-6.2）。文案全部走 i18n，MUST NOT 进日志 /
+        // 权威状态 / 状态哈希（ADR 0002 §5 / D6）。
+        ui.label(texts.town_hall_queue);
+        if model.town_hall.queue.is_empty() {
+            ui.label(texts.town_hall_empty);
+        } else {
+            for item in &model.town_hall.queue {
+                ui.label(format!(
+                    "{} #{}: T{} -> T{} | {} {}/{} | {} {} {}",
+                    texts.town_hall,
+                    item.town_hall,
+                    item.from_tier.code(),
+                    item.target_tier.code(),
+                    texts.town_hall_remaining,
+                    item.remaining_frames,
+                    item.total_frames,
+                    texts.town_hall_cost,
+                    item.gold,
+                    item.lumber,
+                ));
+            }
+        }
+        for (entity, tier) in &model.town_hall.tiers {
+            ui.label(format!(
+                "{} #{}: {} T{}",
+                texts.town_hall,
+                entity,
+                texts.town_hall_tier,
+                tier.code(),
+            ));
+        }
+        ui.label(format!(
+            "{}: {} | {}: {} | {}: {} | {}: {} | {}: {}",
+            texts.town_hall_charges,
+            model.town_hall.charges,
+            texts.town_hall_started,
+            model.town_hall.started_events,
+            texts.town_hall_completed,
+            model.town_hall.completed_events,
+            texts.town_hall_cancelled,
+            model.town_hall.cancelled_events,
+            texts.town_hall_tier_count,
+            model.town_hall.tiers.len(),
         ));
         ui.separator();
 

@@ -12,13 +12,15 @@
 //! 按稳定序本地分配。Input / Frame / ResyncReplay 三条路径共用这一批结构。
 //!
 //! `PROTOCOL_VERSION = 4` 在玩法 oneof 只追加 `ReviveHero` / `CancelRevive`
-//! 两个变体（tag 33 / 34，跳过 `reserved 14 to 32`）；帧编排、`arrival` 语义
-//! 与「恰好一次 `step()`」推进点一律不变（ADR 0005 §3）。
+//! 两个变体（tag 33 / 34）；`PROTOCOL_VERSION = 5` 再只追加
+//! `UpgradeTownHall` 一个变体（tag 35，跳过 `reserved 14 to 32`），玩法变体
+//! 累计 13 类；帧编排、`arrival` 语义与「恰好一次 `step()`」推进点一律不变
+//! （ADR 0005 §3）。
 
 use prost::Message;
 use w3_core::{
     Command, CommandKind, EffectDef, EffectKind, EntityId, Frame, GameplayCommand,
-    GameplayCommandKind, SimFixed,
+    GameplayCommandKind, SimFixed, TownHallTier,
 };
 
 use crate::error::NetError;
@@ -204,10 +206,10 @@ fn from_pb_kind(kind: pb::command::Kind) -> CommandKind {
 }
 
 // ---------------------------------------------------------------------------
-// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（12 变体）
+// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（13 变体）
 // ---------------------------------------------------------------------------
 
-/// 把 12 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
+/// 把 13 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
 pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::Kind {
     match *kind {
         GameplayCommandKind::Cast {
@@ -277,11 +279,23 @@ pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::
                 hero: hero.value(),
             })
         }
+        GameplayCommandKind::UpgradeTownHall {
+            town_hall,
+            town_hall_def,
+            target_tier,
+            cancel,
+        } => pb::gameplay_command::Kind::UpgradeTownHall(pb::GameplayUpgradeTownHall {
+            town_hall: town_hall.value(),
+            town_hall_def,
+            target_tier: u32::from(target_tier.code()),
+            cancel,
+        }),
     }
 }
 
-/// 把 protobuf `GameplayCommand.kind` oneof 还原为 12 类 `GameplayCommandKind`；穷尽匹配。
-/// 缺 `kind` / 缺 `effect` / 未知效果码 / 数值溢出一律显式返回 `NetError`，不猜测、不回退。
+/// 把 protobuf `GameplayCommand.kind` oneof 还原为 13 类 `GameplayCommandKind`；穷尽匹配。
+/// 缺 `kind` / 缺 `effect` / 未知效果码 / 未知等级 / 数值溢出一律显式返回 `NetError`，
+/// 不猜测、不回退。
 pub fn from_pb_gameplay_kind(
     kind: pb::gameplay_command::Kind,
 ) -> Result<GameplayCommandKind, NetError> {
@@ -337,6 +351,22 @@ pub fn from_pb_gameplay_kind(
         pb::gameplay_command::Kind::CancelRevive(m) => GameplayCommandKind::CancelRevive {
             hero: entity_from_raw(m.hero),
         },
+        // EntityId 用 uint64 的 value()、DefId 用 uint32，均为无损定宽映射；
+        // target_tier 先收窄到 u8（溢出显式拒绝），再按 from_code 校验合法性，
+        // 非法等级绝不静默降级为某个默认 tier。
+        pb::gameplay_command::Kind::UpgradeTownHall(m) => {
+            let tier_code = u8::try_from(m.target_tier)
+                .map_err(|_| overflow_error("target_tier", m.target_tier))?;
+            let target_tier = TownHallTier::from_code(tier_code).ok_or_else(|| {
+                NetError::Malformed(format!("unknown town hall tier: code={tier_code}"))
+            })?;
+            GameplayCommandKind::UpgradeTownHall {
+                town_hall: entity_from_raw(m.town_hall),
+                town_hall_def: m.town_hall_def,
+                target_tier,
+                cancel: m.cancel,
+            }
+        }
     })
 }
 
@@ -582,7 +612,7 @@ mod tests {
         ]
     }
 
-    /// 覆盖全部 12 类玩法变体的样本（含 1 种 EffectKind 稳定码）；
+    /// 覆盖全部 13 类玩法变体的样本（含 1 种 EffectKind 稳定码）；
     /// 其余 3 种 EffectKind 稳定码由专门用例覆盖。
     fn sample_gameplay() -> Vec<GameplayCommand> {
         let caster = entity_from_raw(1);
@@ -685,6 +715,17 @@ mod tests {
                     hero: entity_from_raw(20),
                 },
             ),
+            GameplayCommand::new(
+                Frame::new(8),
+                1,
+                1,
+                GameplayCommandKind::UpgradeTownHall {
+                    town_hall: entity_from_raw(40),
+                    town_hall_def: 41,
+                    target_tier: TownHallTier::T2,
+                    cancel: false,
+                },
+            ),
         ]
     }
 
@@ -747,9 +788,9 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_gameplay_kinds_roundtrip() {
+    fn all_thirteen_gameplay_kinds_roundtrip() {
         let gameplay = sample_gameplay();
-        assert_eq!(gameplay.len(), 12, "sample must cover every gameplay kind");
+        assert_eq!(gameplay.len(), 13, "sample must cover every gameplay kind");
         let bytes = encode_commands(&[], &gameplay).unwrap();
         let (commands, decoded) = decode_commands(&bytes).unwrap();
         assert!(commands.is_empty());
@@ -1268,15 +1309,22 @@ mod tests {
     }
 
     #[test]
-    fn schema_appends_only_tags_33_and_34_and_preserves_reserved() {
+    fn schema_appends_only_tags_33_34_35_and_preserves_reserved() {
         let schema = include_str!("proto/w3net.proto");
         assert!(schema.contains("reserved 14 to 32;"));
         assert!(schema.contains("message GameplayReviveHero {"));
         assert!(schema.contains("message GameplayCancelRevive {"));
+        assert!(schema.contains("message GameplayUpgradeTownHall {"));
         assert!(schema.contains("uint64 hero = 1;"));
         assert!(schema.contains("uint64 altar = 2;"));
         assert!(schema.contains("uint32 altar_def = 3;"));
-        // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加 33 / 34。
+        assert!(schema.contains("uint64 town_hall = 1;"));
+        assert!(schema.contains("uint32 town_hall_def = 2;"));
+        assert!(schema.contains("uint32 target_tier = 3;"));
+        assert!(schema.contains("bool cancel = 4;"));
+        // R-2 硬边界：cancel 只是变体内字段，不存在第二个取消升级消息 / 变体。
+        assert!(!schema.contains("CancelUpgradeTownHall"));
+        // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加 33 / 34 / 35。
         let oneof = schema
             .split("oneof kind {")
             .nth(2)
@@ -1294,12 +1342,301 @@ mod tests {
             .collect();
         assert_eq!(
             tags,
-            vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34],
-            "oneof tags must be append-only (4-13 + 33/34)"
+            vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34, 35],
+            "oneof tags must be append-only (4-13 + 33/34/35)"
         );
         // 新消息尾部保留 reserved；既有编号段零改动。
+        assert!(schema.contains("reserved 5 to 8;"));
         assert!(schema.contains("reserved 4 to 8;"));
         assert!(schema.contains("reserved 2 to 8;"));
         assert!(schema.contains("reserved 11 to 16;"));
+    }
+
+    // ---- PROTOCOL_VERSION 5：UpgradeTownHall 变体的线格式回归 ----
+
+    /// 手工拼装 `GameplayUpgradeTownHall` 载荷（4 个定宽字段，仅测试用）。
+    fn upgrade_town_hall_payload(
+        town_hall: u64,
+        town_hall_def: u32,
+        target_tier: u32,
+        cancel: bool,
+    ) -> Vec<u8> {
+        let mut upgrade = Vec::new();
+        upgrade.extend(field_varint(1, town_hall));
+        upgrade.extend(field_varint(2, u64::from(town_hall_def)));
+        upgrade.extend(field_varint(3, u64::from(target_tier)));
+        upgrade.extend(field_varint(4, if cancel { 1 } else { 0 }));
+        upgrade
+    }
+
+    /// 手工拼装一条 `GameplayCommand`：oneof kind 落在指定 tag 上，载荷为
+    /// `GameplayUpgradeTownHall` 形状，供 tag 35 / reserved 段反例复用。
+    fn gameplay_command_with_upgrade_tag(tag: u32, upgrade: &[u8]) -> Vec<u8> {
+        let mut command = Vec::new();
+        command.extend(field_varint(1, 3)); // execute_frame = 3
+        command.extend(field_varint(2, 1)); // player_id = 1
+        command.extend(field_varint(3, 1)); // sequence = 1
+        command.extend(field_bytes(tag, upgrade));
+        command
+    }
+
+    #[test]
+    fn upgrade_town_hall_roundtrip_is_canonical() {
+        // 覆盖 3 种合法 tier、发起 / 取消两种 cancel、uint64 / uint32 边界值，
+        // 保证 4 个字段都进线格式且解码逐字段还原。
+        let gameplay = vec![
+            GameplayCommand::new(
+                Frame::new(3),
+                1,
+                1,
+                GameplayCommandKind::UpgradeTownHall {
+                    town_hall: entity_from_raw(20),
+                    town_hall_def: 21,
+                    target_tier: TownHallTier::T1,
+                    cancel: false,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(4),
+                2,
+                2,
+                GameplayCommandKind::UpgradeTownHall {
+                    town_hall: entity_from_raw(u64::MAX),
+                    town_hall_def: u32::MAX,
+                    target_tier: TownHallTier::T2,
+                    cancel: false,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(5),
+                1,
+                3,
+                GameplayCommandKind::UpgradeTownHall {
+                    town_hall: entity_from_raw(40),
+                    town_hall_def: 41,
+                    target_tier: TownHallTier::T3,
+                    cancel: true,
+                },
+            ),
+        ];
+        let first = encode_commands(&[], &gameplay).unwrap();
+        let second = encode_commands(&[], &gameplay).unwrap();
+        assert_eq!(first, second, "two encodes must be byte-identical");
+        let (commands, decoded) = decode_commands(&first).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            first,
+            "decode -> encode must be canonical"
+        );
+        // 逐条单独往返，避免批量编码掩盖某个字段的歧义映射。
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    #[test]
+    fn upgrade_town_hall_uses_wire_tag_35() {
+        // tag 35 / wire 2 -> key varint (35<<3)|2 = 282 -> [0x9a, 0x02]。
+        let bytes = encode_commands(
+            &[],
+            &[GameplayCommand::new(
+                Frame::new(3),
+                1,
+                1,
+                GameplayCommandKind::UpgradeTownHall {
+                    town_hall: entity_from_raw(5),
+                    town_hall_def: 6,
+                    target_tier: TownHallTier::T2,
+                    cancel: false,
+                },
+            )],
+        )
+        .unwrap();
+        assert!(
+            bytes.windows(2).any(|w| w == &[0x9a, 0x02][..]),
+            "UpgradeTownHall must be encoded on tag 35"
+        );
+    }
+
+    #[test]
+    fn upgrade_town_hall_invalid_tier_is_rejected() {
+        // 缺陷态：非法等级码（0 / 4 / 255 / u32::MAX）必须显式拒绝，
+        // 绝不静默降级为默认 tier、也不猜测成相邻等级。
+        for bad_tier in [0u32, 4, 255, u32::MAX] {
+            let bad = pb::CommandBatch {
+                commands: Vec::new(),
+                gameplay: Some(pb::GameplayCommandBatch {
+                    commands: vec![pb::GameplayCommand {
+                        execute_frame: 1,
+                        player_id: 1,
+                        sequence: 1,
+                        kind: Some(pb::gameplay_command::Kind::UpgradeTownHall(
+                            pb::GameplayUpgradeTownHall {
+                                town_hall: 5,
+                                town_hall_def: 6,
+                                target_tier: bad_tier,
+                                cancel: false,
+                            },
+                        )),
+                    }],
+                }),
+            };
+            assert!(
+                matches!(
+                    decode_commands(&bad.encode_to_vec()),
+                    Err(NetError::Malformed(_))
+                ),
+                "invalid tier must be rejected: code={bad_tier}"
+            );
+        }
+        // 元断言防退化：合法码 1 / 2 / 3 分别还原为 T1 / T2 / T3，
+        // 证明上面的拒绝确实来自等级校验，而非载荷形状畸形。
+        for (code, tier) in [
+            (1u32, TownHallTier::T1),
+            (2, TownHallTier::T2),
+            (3, TownHallTier::T3),
+        ] {
+            let good = pb::CommandBatch {
+                commands: Vec::new(),
+                gameplay: Some(pb::GameplayCommandBatch {
+                    commands: vec![pb::GameplayCommand {
+                        execute_frame: 1,
+                        player_id: 1,
+                        sequence: 1,
+                        kind: Some(pb::gameplay_command::Kind::UpgradeTownHall(
+                            pb::GameplayUpgradeTownHall {
+                                town_hall: 5,
+                                town_hall_def: 6,
+                                target_tier: code,
+                                cancel: false,
+                            },
+                        )),
+                    }],
+                }),
+            };
+            let (_, decoded) = decode_commands(&good.encode_to_vec()).unwrap();
+            assert_eq!(
+                decoded[0].kind,
+                GameplayCommandKind::UpgradeTownHall {
+                    town_hall: entity_from_raw(5),
+                    town_hall_def: 6,
+                    target_tier: tier,
+                    cancel: false,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn reserved_tag_rejects_upgrade_town_hall_payload() {
+        let upgrade = upgrade_town_hall_payload(5, 6, 2, false);
+        // 缺陷态：把 UpgradeTownHall 载荷错放进 reserved 14 to 32 段的 tag 14 / 32。
+        // prost 视作 unknown field 丢弃，kind 变 None，解码必须显式返回 Malformed。
+        for tag in [14, 32] {
+            let defect =
+                command_batch_with_gameplay(gameplay_command_with_upgrade_tag(tag, &upgrade));
+            assert!(
+                matches!(decode_commands(&defect), Err(NetError::Malformed(_))),
+                "reserved tag must be rejected: tag={tag}"
+            );
+        }
+        // 元断言防退化：同一载荷改回规范 tag 35 必须成功解码为 UpgradeTownHall。
+        let good = command_batch_with_gameplay(gameplay_command_with_upgrade_tag(35, &upgrade));
+        let (commands, gameplay) = decode_commands(&good).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 1);
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::UpgradeTownHall {
+                town_hall: entity_from_raw(5),
+                town_hall_def: 6,
+                target_tier: TownHallTier::T2,
+                cancel: false,
+            }
+        );
+    }
+
+    #[test]
+    fn upgrade_town_hall_non_canonical_varint_is_rejected_and_never_echoed() {
+        // 溢出型非规范 varint（10 个以上 continuation 字节）：明确转成 Malformed。
+        let mut overlong_cmd = vec![0x08]; // execute_frame field 1, wire type 0
+        overlong_cmd.extend_from_slice(&[0x80u8; 11]);
+        overlong_cmd.push(0x00);
+        overlong_cmd.extend(field_varint(2, 1));
+        overlong_cmd.extend(field_varint(3, 1));
+        overlong_cmd.extend(field_bytes(35, &upgrade_town_hall_payload(5, 6, 2, false)));
+        assert!(matches!(
+            decode_commands(&command_batch_with_gameplay(overlong_cmd)),
+            Err(NetError::Malformed(_))
+        ));
+
+        // overlong 但可解码的 varint：解码 -> 再编码必须产出规范最短字节，
+        // 绝不回显非规范字节（ADR 0005 §3 canonical 往返约束）。
+        let mut non_canonical = vec![0x08];
+        non_canonical.extend_from_slice(&[0x81, 0x00]); // execute_frame = 1（overlong）
+        non_canonical.extend(field_varint(2, 1)); // player_id = 1
+        non_canonical.extend(field_varint(3, 1)); // sequence = 1
+        non_canonical.extend(field_bytes(35, &upgrade_town_hall_payload(5, 6, 2, true)));
+        let bytes = command_batch_with_gameplay(non_canonical);
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        assert_eq!(gameplay.len(), 1);
+        assert!(matches!(
+            gameplay[0].kind,
+            GameplayCommandKind::UpgradeTownHall { cancel: true, .. }
+        ));
+        let reencoded = encode_commands(&commands, &gameplay).unwrap();
+        assert_ne!(reencoded, bytes, "non-canonical bytes must not be echoed");
+        assert!(
+            reencoded.windows(2).any(|w| w == &[0x08, 0x01][..]),
+            "re-encode must use minimal varint for execute_frame=1"
+        );
+        assert!(
+            !reencoded.windows(3).any(|w| w == &[0x08, 0x81, 0x00][..]),
+            "overlong varint must not survive re-encode"
+        );
+    }
+
+    #[test]
+    fn upgrade_town_hall_unknown_fields_are_dropped_not_echoed() {
+        let upgrade = vec![GameplayCommand::new(
+            Frame::new(3),
+            1,
+            1,
+            GameplayCommandKind::UpgradeTownHall {
+                town_hall: entity_from_raw(5),
+                town_hall_def: 6,
+                target_tier: TownHallTier::T2,
+                cancel: true,
+            },
+        )];
+        let mut bytes = encode_commands(&[], &upgrade).unwrap();
+        // 追加一个合法但未知字段（field 1000, varint 0）。
+        bytes.extend_from_slice(&[0xc0, 0x3e, 0x00]);
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        let reencoded = encode_commands(&commands, &gameplay).unwrap();
+        assert!(
+            !reencoded.ends_with(&[0xc0, 0x3e, 0x00]),
+            "unknown fields must not be echoed"
+        );
+        assert_eq!(reencoded, encode_commands(&[], &upgrade).unwrap());
+    }
+
+    #[test]
+    fn thirteen_variants_roundtrip_keeps_single_upgrade_variant() {
+        // 13 变体样本整体 canonical 往返（禁 map / 禁 float 由专门用例复核）。
+        let gameplay = sample_gameplay();
+        assert_eq!(gameplay.len(), 13, "sample must cover every gameplay kind");
+        let bytes = encode_commands(&[], &gameplay).unwrap();
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(encode_commands(&commands, &decoded).unwrap(), bytes);
+        // 变体内 cancel 字段确实是同一变体的字段，而非第二个命令变体。
+        let schema = include_str!("proto/w3net.proto");
+        assert!(schema.contains("bool cancel = 4;"));
+        assert!(!schema.contains("CancelUpgradeTownHall"));
     }
 }

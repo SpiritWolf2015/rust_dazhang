@@ -3,7 +3,7 @@
 //! 本模块只经 `w3-core` 既有公开 API 把玩法命令串成可玩闭环，**不新增任何
 //! 权威状态**、不改动 `w3-core`（ADR 0002）。所有类型标签、AI 脚本与内容
 //! 定义都是表现层 / 装配层数据，MUST NOT 进入 FNV-1a 状态哈希或
-//! `SNAPSHOT_VERSION`（当前 4）定义的快照。
+//! `SNAPSHOT_VERSION`（当前 5）定义的快照。
 
 pub mod ai;
 pub mod command_card;

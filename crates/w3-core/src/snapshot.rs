@@ -13,12 +13,18 @@
 //! 费用登记），并同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 4。旧 v3
 //! 快照因版本不匹配被明确拒绝（`SnapshotError::UnsupportedVersion`），
 //! 不提供跨版本迁移（ADR 0002 §7）。
+//!
+//! v5 由 P8.5b 引入：追加主城升级三组权威状态（等级 / 升级队列 /
+//! 费用登记），并同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 5。旧 v4
+//! 及更早快照按版本不匹配明确拒绝，不提供跨版本迁移（ADR 0002 §7 / Q1）。
 
 use crate::command::Command;
-use crate::gameplay::{FrozenDefinitions, HeroReviveState, UnitGameplayState, WorldGameplayState};
+use crate::gameplay::{
+    FrozenDefinitions, HeroReviveState, TownHallUpgradeState, UnitGameplayState, WorldGameplayState,
+};
 
-pub const SNAPSHOT_VERSION: u32 = 4;
-pub const SIM_VERSION: u32 = 4;
+pub const SNAPSHOT_VERSION: u32 = 5;
+pub const SIM_VERSION: u32 = 5;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -105,6 +111,10 @@ pub struct Snapshot {
     /// 帧 N 提交后的完整状态必须包含它们，恢复后从 N+1 继续不重复复活
     /// （ADR 0002 §7 / R12.4）。
     pub revive: HeroReviveState,
+    /// 主城升级三组权威状态（等级 / 升级队列 / 费用登记，v5 新增）。
+    /// 帧 N 提交后的完整状态必须包含它们，恢复后从 N+1 继续不残留 /
+    /// 不重复升级（ADR 0002 §7 / R12.4）。
+    pub town_hall: TownHallUpgradeState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -14,7 +14,7 @@
 //!   确定性外部 AI 命令源与既有 `ClientApp` 原样保留（玩法坐标 -96..96
 //!   落在真实地形范围内，相机 / 拾取 / `StaticWorld` 均无需改动）。
 //! - `w3-core` 零改动；真实导出坐标、`StaticMarker`、类型标签全部是表现层
-//!   数据，MUST NOT 进入权威状态、状态哈希或 `SNAPSHOT_VERSION`（当前 4）
+//!   数据，MUST NOT 进入权威状态、状态哈希或 `SNAPSHOT_VERSION`（当前 5）
 //!   定义的快照（ADR 0002）。
 //!
 //! 阶段 2 接入真实 BLP→PNG 地表贴图（CPU 采样进地形顶点色）与

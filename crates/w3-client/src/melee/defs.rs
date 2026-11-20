@@ -10,8 +10,10 @@
 //! `upgrades` / `items` 三个类别沿用类别内唯一 ID（`10` / `20` / `30`），
 //! 不纳入分段。既有 6 个 `UnitDef` 的 `DefId`（`1..=6`）保持原值，确保
 //! `DEFAULT_UNIT_DEF` / `SOLDIER` / `BARRACKS` 等既有入口行为不变。
-//! 分段差异只经既有 `defs_hash` 字段天然覆盖，不新增权威状态字段、
-//! 不改 `SNAPSHOT_VERSION`（当前 4）与快照头部布局（ADR 0002）。
+//! P8.5b 主城升级需求链另用独立 `8xxx` 段真实定义，不属于两族 / 中立分段，
+//! 也不改既有命令行为。分段差异只经既有 `defs_hash` 字段天然覆盖，
+//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 5）与快照头部布局
+//! （ADR 0002）。
 //!
 //! P8.1 人族完整化：在人族段 `1xx` 追加远程 / 反重甲 / 人口 / 祭坛 /
 //! 研发 / 英雄六类 `UnitDef`，以及类别内唯一 ID 的英雄主动技能与攻防升级。
@@ -25,7 +27,8 @@
 //! 常量，并补技能 / 升级 ID 按族查表。全部是合成 / 原创编译期整数常量，
 //! 数值差异只以常量相对大小表达、标 `[取舍]`、引用 R2 / R5，MUST NOT
 //! 冒充经典事实或参考项目结论（design D1 / D10 / C6）。新增定义仍是
-//! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3（P8.5a 起为 4）。
+//! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3（P8.5a 起为 4、
+//! P8.5b 起为 5；本行属历史沿革叙述，按先例保留并加夹注）。
 //!
 //! P8.5a 英雄复活接入：真实对局装配在 [`synthetic_definitions`] 内经纯链式
 //! [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与祭坛 / 英雄类别集合，
@@ -33,12 +36,25 @@
 //! 路径产出 `Some(HeroState)`。冻结常量段与类别集合经 `compute_defs_hash`
 //! 无条件进入 `defs_hash` / `content_hash()` 快照头部，故接入后内容哈希必变；
 //! 表现层只读派生 MUST NOT 反写权威状态或新增权威状态字段（ADR 0002 §5 / D2）。
+//!
+//! P8.5b 主城升级接入：真实对局装配在 [`synthetic_definitions`] 末尾再链式
+//! [`FrozenDefinitions::with_town_hall_upgrade`] 登记冻结常量、主城类别集合与
+//! 「T1→T2 最小闭环」tier 需求链。需求链采用合成 / 原创编译期整数 DefId
+//! `[待核]`（Q4：完整二线单位 / 科技清单留后续 change 待办），并同步注册为
+//! 真实 `UnitDef` / `UpgradeDef`，使 `complete_production` 能生成实体、
+//! `apply_upgrade` 能结算科技效果；MUST NOT 用建筑名字符串白名单或硬编码
+//! 经典 DefId（R1.2 / R13.3 / D2）。独立 `8xxx` 段不与任何既有可训练 /
+//! 可研发 DefId 重合，保证既有装配脚本的命令行为不变。冻结常量段、类别集合、
+//! 需求链与两条真实定义经 `compute_defs_hash` 无条件进入 `defs_hash` /
+//! `content_hash()` 快照头部，故接入后内容哈希必变；反向验证同源重建 MUST
+//! 同样登记，避免判别力被稀释（CODEBUDDY.md §5）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_core::{
     AbilityDef, DefId, EffectDef, EffectKind, FrozenDefinitions, ItemDef,
-    SYNTHETIC_REVIVE_CONSTANTS, SimFixed, UnitDef, UpgradeDef,
+    SYNTHETIC_REVIVE_CONSTANTS, SYNTHETIC_TOWN_HALL_CONSTANTS, SimFixed, TownHallTier, UnitDef,
+    UpgradeDef,
 };
 
 // 新类别槽位编号（表现层装配查表键，**不是** `EntityId`，MUST NOT 进入
@@ -153,6 +169,23 @@ pub const ORC_HERO: DefId = 210;
 pub const NEUTRAL_GOLD_MINE: DefId = 901;
 /// 中立 / 资源段：树木（两族共用）。
 pub const NEUTRAL_TREE: DefId = 902;
+
+// ---------------------------------------------------------------------------
+// 主城升级 tier 需求链 DefId（P8.5b / Q4「T1→T2 最小闭环」）
+//
+// 全部为合成 / 原创编译期整数常量 `[待核]`、零资产、刻意非经典命名，落在独立
+// `8xxx` 段，避开既有基线 / 两族 / 中立段与类别内唯一 ID。两条 DefId 同时注册
+// 进 `units` / `upgrades` 真实定义表：内核 `tier_requirement_met` 对登记 T2 需求
+// 但当前 tier 仍为 T1 的 `Train` / `Research` 显式拒绝，解锁后
+// `complete_production` / `apply_upgrade` 可查表生成实体 / 结算效果。既有 DefId
+// 一律不登记需求，保证既有装配脚本的命令行为不变。解锁判定由冻结需求链数据
+// 驱动，MUST NOT 用建筑名白名单或硬编码经典 DefId（R1.2 / R13.3 / D2）。
+// 完整二线清单留后续 change（Q4）。
+// ---------------------------------------------------------------------------
+/// 要求 T2 解锁的二线单位 DefId（合成原创 `[待核]`，注册为真实 `UnitDef`）。
+pub const TIER2_UNIT: DefId = 8101;
+/// 要求 T2 解锁的二线科技 DefId（合成原创 `[待核]`，注册为真实 `UpgradeDef`）。
+pub const TIER2_TECH: DefId = 8102;
 
 /// 开局选择的种族（定义层参数，纯表现层 / 装配层数据）。
 ///
@@ -371,7 +404,8 @@ fn unit_with_mana(
 }
 
 /// 合成冻结定义：既有 6 个基线单位 + 人族 / 兽族 / 中立资源分段单位 +
-/// P8.1 人族六类 + P8.2 兽族六类新单位 + 技能 / 升级 / 物品。
+/// P8.1 人族六类 + P8.2 兽族六类 + P8.5b 两条 T2 需求链真实定义 +
+/// 技能 / 升级 / 物品。
 ///
 /// 数值全为编译期整数常量、`[待核]`（以本机导出 SLK 核对、不入库）；主城
 /// 生命刻意压低，使一局能在合理帧数内打完。分段单位与基线单位同数值
@@ -382,9 +416,15 @@ fn unit_with_mana(
 /// **相对大小**表达、标 `[取舍]`，是本项目在 R2 / R5 / R5.1 / R5.3
 /// `[已核]` 框架下的原创取舍，不是参考项目得来的经典事实（design D1 / D10）。
 /// 新增定义只改变 `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），
-/// 不改 `SNAPSHOT_VERSION`（当前 4）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// 不改 `SNAPSHOT_VERSION`（当前 5）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5a 起额外经 [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与
 /// 两族祭坛 / 英雄类别集合，使真实对局的复活命令面可达（Q3 / D2 / R1.2）。
+/// P8.5b 起再经 [`FrozenDefinitions::with_town_hall_upgrade`] 登记主城升级冻结
+/// 常量、主城类别集合与 T1→T2 最小闭环 tier 需求链；`8xxx` 两条 DefId 同时
+/// 写进 `units` / `upgrades` 表，使 `Train` / `Research` 在 T1 被拒、T2 完成后
+/// 能生成实体 / 结算科技效果（Q3 / Q4 / D2 / R1.2）。新增定义只改变
+/// `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），不改
+/// `SNAPSHOT_VERSION`（当前 5）、状态哈希字段集合或命令排序键（ADR 0002）。
 pub fn synthetic_definitions() -> FrozenDefinitions {
     let units = vec![
         // 既有基线定义（1..=6），既有入口行为不变。
@@ -428,6 +468,9 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
         // 中立 / 资源段 9xx，两族共用。
         (NEUTRAL_GOLD_MINE, unit(500, 0, 0, 0, 0, 0)),
         (NEUTRAL_TREE, unit(200, 0, 0, 0, 0, 0)),
+        // P8.5b T2 需求链真实定义：`complete_production` 查表后生成二线单位实体。
+        // 数值为合成原创 `[待核]`，不与既有种族 / 中立段重合。
+        (TIER2_UNIT, unit(150, 4, 26, 300, 2, 8)),
     ];
     let abilities = vec![
         (
@@ -565,15 +608,46 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
                 research_frames: 24,
             },
         ),
+        // P8.5b T2 需求链真实定义：`apply_upgrade` 查表后结算攻击 / 生命修正。
+        // 数值为合成原创 `[待核]`，不是仅登记在需求链中的空 DefId。
+        (
+            TIER2_TECH,
+            UpgradeDef {
+                damage_mod: 3,
+                hp_mod: 6,
+                research_frames: 8,
+            },
+        ),
     ];
     // P8.5a：链式登记复活冻结常量与祭坛 / 英雄类别集合。类别由定义层
     // `BTreeSet<DefId>` 驱动，MUST NOT 用建筑名 / rawcode 白名单（R1.2 / R13.3 / D2）。
     // `FrozenDefinitions::new` 四参数签名保持不变，纯链式新增。
     let altar_defs: BTreeSet<DefId> = [HUMAN_ALTAR, ORC_ALTAR].into_iter().collect();
     let hero_defs: BTreeSet<DefId> = [HUMAN_HERO, ORC_HERO].into_iter().collect();
+    // P8.5b：链式登记主城升级冻结常量、两族主城类别集合与 tier 需求链。
+    // 类别集合登记两族主城 DefId（人族 `HUMAN_TOWN_HALL` / 兽族
+    // `ORC_TOWN_HALL`，另含基线 `TOWN_HALL` 以覆盖装配层默认关联）；
+    // 需求链只登记上述 `8xxx` 合成原创 DefId → T2，且两条 DefId 已注册为
+    // 真实 `UnitDef` / `UpgradeDef`，MUST NOT 复用既有可训练 / 可研发 DefId，
+    // 避免 `tier_requirement_met` 改变既有命令行为。判定只查冻结定义数据，
+    // 不查建筑名 / rawcode 白名单（R1.2 / R13.3 / D2）。
+    let town_hall_defs: BTreeSet<DefId> = [TOWN_HALL, HUMAN_TOWN_HALL, ORC_TOWN_HALL]
+        .into_iter()
+        .collect();
+    let tier_requirements: BTreeMap<DefId, TownHallTier> = [
+        (TIER2_UNIT, TownHallTier::T2),
+        (TIER2_TECH, TownHallTier::T2),
+    ]
+    .into_iter()
+    .collect();
     FrozenDefinitions::new(units, abilities, items, upgrades)
         .expect("melee defs: reason=invalid_synthetic_definitions")
         .with_hero_revive(SYNTHETIC_REVIVE_CONSTANTS, altar_defs, hero_defs)
+        .with_town_hall_upgrade(
+            SYNTHETIC_TOWN_HALL_CONSTANTS,
+            town_hall_defs,
+            tier_requirements,
+        )
 }
 
 /// 本机导出数据的可选来源（ADR 0001 / design D2）。
@@ -610,7 +684,7 @@ mod tests {
     use crate::input::derive_movability;
 
     /// `units` 类别定义编号全集（既有 6 个基线 + 分段 + P8.1 人族六类 +
-    /// P8.2 兽族六类）。
+    /// P8.2 兽族六类 + P8.5b T2 需求链单位）。
     fn all_unit_ids() -> Vec<DefId> {
         vec![
             PEASANT,
@@ -641,6 +715,7 @@ mod tests {
             ORC_HERO,
             NEUTRAL_GOLD_MINE,
             NEUTRAL_TREE,
+            TIER2_UNIT,
         ]
     }
 
@@ -665,14 +740,35 @@ mod tests {
     /// P8.2 兽族新增建筑（MUST `speed_raw == 0`，R1.4 / R13.6）。
     const ORC_NEW_BUILDING_IDS: [DefId; 3] = [ORC_FARM, ORC_ALTAR, ORC_SMITHY];
 
-    /// P8.2 兽族新增技能 / 升级（类别内唯一 ID，供内容敏感性回归复用）。
+    /// P8.2 兽族新增技能（类别内唯一 ID，供内容敏感性回归复用）。
     const ORC_NEW_ABILITY_IDS: [DefId; 1] = [ORC_HERO_ABILITY];
-    const ORC_NEW_UPGRADE_IDS: [DefId; 2] = [ORC_UPGRADE_WEAPONS, ORC_UPGRADE_ARMOR];
+
+    /// P8.5b T2 需求链真实单位（供内容敏感性回归复用）。
+    const TIER2_NEW_UNIT_IDS: [DefId; 1] = [TIER2_UNIT];
+
+    /// 新增升级定义编号全集（P8.1 / P8.2 + P8.5b T2 需求链科技）。
+    const NEW_UPGRADE_IDS: [DefId; 5] = [
+        UPGRADE_WEAPONS,
+        UPGRADE_ARMOR,
+        ORC_UPGRADE_WEAPONS,
+        ORC_UPGRADE_ARMOR,
+        TIER2_TECH,
+    ];
+
+    /// 新增 `UnitDef` 编号全集（P8.1 / P8.2 新类别 + P8.5b T2 需求链单位）。
+    fn new_unit_ids() -> Vec<DefId> {
+        HUMAN_NEW_UNIT_IDS
+            .iter()
+            .chain(ORC_NEW_UNIT_IDS.iter())
+            .chain(TIER2_NEW_UNIT_IDS.iter())
+            .copied()
+            .collect()
+    }
 
     #[test]
     fn definitions_cover_all_kinds_and_are_stable() {
         let defs = synthetic_definitions();
-        assert_eq!(defs.units().len(), 28, "reason=definition_count");
+        assert_eq!(defs.units().len(), 29, "reason=definition_count");
         assert!(defs.units().contains_key(&PEASANT));
         assert!(defs.units().contains_key(&SOLDIER));
         assert!(defs.units().contains_key(&TOWN_HALL));
@@ -691,6 +787,15 @@ mod tests {
                 "reason=missing_orc_new_unit id={id}"
             );
         }
+        assert!(defs.units().contains_key(&TIER2_UNIT));
+        let tier2_unit = defs
+            .units()
+            .get(&TIER2_UNIT)
+            .expect("reason=missing_tier2_unit_def");
+        assert!(
+            tier2_unit.train_frames > 1,
+            "reason=tier2_unit_train_frames"
+        );
         assert!(defs.abilities().contains_key(&ABILITY));
         assert!(defs.abilities().contains_key(&HERO_ABILITY));
         assert!(defs.abilities().contains_key(&ORC_HERO_ABILITY));
@@ -700,8 +805,17 @@ mod tests {
         assert!(defs.upgrades().contains_key(&UPGRADE_ARMOR));
         assert!(defs.upgrades().contains_key(&ORC_UPGRADE_WEAPONS));
         assert!(defs.upgrades().contains_key(&ORC_UPGRADE_ARMOR));
+        assert!(defs.upgrades().contains_key(&TIER2_TECH));
+        let tier2_tech = defs
+            .upgrades()
+            .get(&TIER2_TECH)
+            .expect("reason=missing_tier2_tech_def");
+        assert!(
+            tier2_tech.research_frames > 1 && tier2_tech.damage_mod > 0 && tier2_tech.hp_mod > 0,
+            "reason=tier2_tech_settles"
+        );
         assert_eq!(defs.abilities().len(), 3);
-        assert_eq!(defs.upgrades().len(), 5);
+        assert_eq!(defs.upgrades().len(), 6);
         assert_eq!(defs, synthetic_definitions());
     }
 
@@ -713,6 +827,7 @@ mod tests {
 
         // 分段只约束 units 类别：三个非 units 类别沿用类别内唯一 ID；
         // P8.1 / P8.2 新增技能 / 升级取类别内唯一 ID，不占 `1xx` / `2xx` 段位。
+        // P8.5b tier 需求链另用独立 `8xxx` 段真实定义，不与两族 / 中立段冲突。
         assert_eq!(ABILITY, 10);
         assert_eq!(HERO_ABILITY, 11);
         assert_eq!(ORC_HERO_ABILITY, 12);
@@ -732,6 +847,7 @@ mod tests {
             ORC_UPGRADE_WEAPONS,
             ORC_UPGRADE_ARMOR,
             ITEM,
+            TIER2_TECH,
         ];
         let category_unique: BTreeSet<DefId> = category_ids.into_iter().collect();
         assert_eq!(
@@ -742,6 +858,19 @@ mod tests {
 
         // 既有 6 个基线定义保持原值，分段常量不得与之冲突。
         let baseline: BTreeSet<DefId> = [1, 2, 3, 4, 5, 6].into_iter().collect();
+        // P8.5b 两条 T2 需求链真实定义落在独立 `8xxx` 段，且不与基线冲突。
+        assert!(
+            (8000..9000).contains(&TIER2_UNIT),
+            "reason=tier2_unit_independent_segment"
+        );
+        assert!(
+            (8000..9000).contains(&TIER2_TECH),
+            "reason=tier2_tech_independent_segment"
+        );
+        assert!(
+            !baseline.contains(&TIER2_UNIT) && !baseline.contains(&TIER2_TECH),
+            "reason=tier2_ids_not_baseline"
+        );
         let segmented = [
             HUMAN_PEASANT,
             HUMAN_SOLDIER,
@@ -838,10 +967,18 @@ mod tests {
         // P8.5a：反向验证的重建定义 MUST 与正式定义同源登记复活段，
         // 否则 `FrozenDefinitions::new` 的类别集合为空会让 `assert_ne!` 恒真、
         // 稀释「少一个单位即改哈希」的判别力（CODEBUDDY §5 / 不静默降级）。
+        // P8.5b：四张定义表均从 `a` 的公开 getter 克隆，新增 8101 / 8102
+        // 真实定义自动同源；再同源登记主城升级段，避免冻结常量 / 类别 / 需求链
+        // 差异让「少一个单位即改哈希」恒真、稀释反向验证判别力（CODEBUDDY §5）。
         .with_hero_revive(
             *a.revive_constants(),
             a.altar_defs().clone(),
             a.hero_defs().clone(),
+        )
+        .with_town_hall_upgrade(
+            *a.town_hall_constants(),
+            a.town_hall_defs().clone(),
+            a.tier_requirements().clone(),
         );
         assert_ne!(a.content_hash(), smaller.content_hash());
     }
@@ -875,6 +1012,9 @@ mod tests {
             .collect();
         // P8.5a：重建定义经公开 getter 同源登记复活段，使 `full` 与 `variant`
         // 的唯一差异就是被删除的条目，保住 `content_hash()` 反向验证判别力。
+        // P8.5b：四张定义表均从 `full` 的公开 getter 克隆，新增 8101 / 8102
+        // 真实定义自动同源；同理同源登记主城升级段（冻结常量 / 类别 / 需求链），
+        // 避免段差异让 `content_hash()` 反向验证判别力被稀释（CODEBUDDY §5）。
         FrozenDefinitions::new(units, abilities, items, upgrades)
             .expect("melee defs: reason=rebuild_definitions_failed")
             .with_hero_revive(
@@ -882,17 +1022,22 @@ mod tests {
                 full.altar_defs().clone(),
                 full.hero_defs().clone(),
             )
+            .with_town_hall_upgrade(
+                *full.town_hall_constants(),
+                full.town_hall_defs().clone(),
+                full.tier_requirements().clone(),
+            )
     }
 
     /// 退化哈希（缺陷态）：只散列 P8.0 基线 16 个 `UnitDef`，忽略全部
-    /// P8.1 / P8.2 新增单位 / 技能 / 升级，模拟 `compute_defs_hash` 漏接
-    /// 新定义的退化实现。仅用于反向验证，生产实现 MUST 用 `content_hash()`。
+    /// P8.1 / P8.2 / P8.5b 新增单位 / 技能 / 升级，模拟 `compute_defs_hash`
+    /// 漏接新定义的退化实现。仅用于反向验证，生产实现 MUST 用 `content_hash()`。
     ///
-    /// BASELINE 刻意**保持 P8.0 的 16 个**、不塞入兽族新 ID：它要模拟的正是
-    /// 「退化哈希完全不覆盖任何新定义」。若把兽族新 ID 加进 BASELINE，退化
-    /// 哈希就会对漏接兽族定义变敏感，`reverse_validation_..._degenerate_fails`
-    /// 的「缺陷态断言必失败」证据随即失真（退化实现反而能通过断言），
-    /// 对称于 P8.1 的处理方式。
+    /// BASELINE 刻意**保持 P8.0 的 16 个**、不塞入兽族新 ID 或 P8.5b 的
+    /// `8xxx` 真实定义：它要模拟的正是「退化哈希完全不覆盖任何新定义」。
+    /// 若把新 ID 加进 BASELINE，退化哈希就会对漏接新定义变敏感，
+    /// `reverse_validation_..._degenerate_fails` 的「缺陷态断言必失败」证据
+    /// 随即失真（退化实现反而能通过断言），对称于 P8.1 的处理方式。
     fn degenerate_hash_ignoring_new(defs: &FrozenDefinitions) -> u64 {
         const BASELINE: [DefId; 16] = [
             1, 2, 3, 4, 5, 6, 101, 102, 103, 104, 201, 202, 203, 204, 901, 902,
@@ -911,12 +1056,13 @@ mod tests {
     /// 正向回归：正式 `content_hash()` 对漏接的每一类新定义都敏感，
     /// 证明新增定义经既有 `compute_defs_hash` 进 `defs_hash` / `content_hash`
     /// 快照头部，而不是新增权威状态字段（ADR 0002 / C3）。P8.2 覆盖 6 个
-    /// 兽族 `UnitDef` + 1 个 `AbilityDef` + 2 个 `UpgradeDef`。
+    /// 兽族 `UnitDef` + 1 个 `AbilityDef` + 2 个 `UpgradeDef`；P8.5b 再覆盖
+    /// 8101 / 8102 两条 T2 需求链真实定义。
     #[test]
     fn defs_hash_detects_each_new_definition() {
         let full = synthetic_definitions();
-        for id in HUMAN_NEW_UNIT_IDS.iter().chain(ORC_NEW_UNIT_IDS.iter()) {
-            let variant = rebuild_definitions(Some(*id), None, None);
+        for id in new_unit_ids() {
+            let variant = rebuild_definitions(Some(id), None, None);
             assert_ne!(
                 full.content_hash(),
                 variant.content_hash(),
@@ -931,12 +1077,7 @@ mod tests {
                 "reason=content_hash_must_cover_new_ability id={id}"
             );
         }
-        for id in [
-            UPGRADE_WEAPONS,
-            UPGRADE_ARMOR,
-            ORC_UPGRADE_WEAPONS,
-            ORC_UPGRADE_ARMOR,
-        ] {
+        for id in NEW_UPGRADE_IDS {
             let variant = rebuild_definitions(None, None, Some(id));
             assert_ne!(
                 full.content_hash(),
@@ -948,11 +1089,12 @@ mod tests {
 
     /// 反向验证·修复态：正式实现（`content_hash()`）通过「少一个定义即改哈希」
     /// 断言。与下一条「缺陷态」构成 `CODEBUDDY.md` §5 的反例元断言证据对。
+    /// P8.5b 把 8101 / 8102 两条 T2 需求链真实定义也纳入同一断言。
     #[test]
     fn reverse_validation_defs_hash_formal_passes_the_assertion() {
         let full = synthetic_definitions();
-        for id in HUMAN_NEW_UNIT_IDS.iter().chain(ORC_NEW_UNIT_IDS.iter()) {
-            let variant = rebuild_definitions(Some(*id), None, None);
+        for id in new_unit_ids() {
+            let variant = rebuild_definitions(Some(id), None, None);
             assert!(
                 full.content_hash() != variant.content_hash(),
                 "reason=formal_hash_must_detect_missing_unit id={id}"
@@ -962,7 +1104,7 @@ mod tests {
             let no_ability = rebuild_definitions(None, Some(id), None);
             assert!(full.content_hash() != no_ability.content_hash());
         }
-        for id in ORC_NEW_UPGRADE_IDS {
+        for id in NEW_UPGRADE_IDS {
             let no_upgrade = rebuild_definitions(None, None, Some(id));
             assert!(full.content_hash() != no_upgrade.content_hash());
         }
@@ -971,13 +1113,14 @@ mod tests {
     /// 反向验证·缺陷态：退化哈希（只覆盖 P8.0 基线 16 个定义）对漏接的
     /// 任一新定义**不敏感**，故「少一个定义即改哈希」断言在退化实现下必然
     /// 失败；同时证明正式 `content_hash()` 能抓出同一缺陷（元断言防退化）。
-    /// 兽族新定义同样经真实 `FrozenDefinitions::new` 重建后喂给 `content_hash()`
-    /// 与退化哈希，不是旁路模拟（D9 / tasks 6.1）。
+    /// 兽族新定义与 P8.5b 两条 T2 需求链真实定义同样经真实
+    /// `FrozenDefinitions::new` 重建后喂给 `content_hash()` 与退化哈希，
+    /// 不是旁路模拟（D9 / tasks 6.1）。
     #[test]
     fn reverse_validation_defs_hash_degenerate_fails_the_same_assertion() {
         let full = synthetic_definitions();
-        for id in HUMAN_NEW_UNIT_IDS.iter().chain(ORC_NEW_UNIT_IDS.iter()) {
-            let variant = rebuild_definitions(Some(*id), None, None);
+        for id in new_unit_ids() {
+            let variant = rebuild_definitions(Some(id), None, None);
             assert_eq!(
                 degenerate_hash_ignoring_new(&full),
                 degenerate_hash_ignoring_new(&variant),
@@ -997,7 +1140,7 @@ mod tests {
             );
             assert!(full.content_hash() != no_ability.content_hash());
         }
-        for id in ORC_NEW_UPGRADE_IDS {
+        for id in NEW_UPGRADE_IDS {
             let no_upgrade = rebuild_definitions(None, None, Some(id));
             assert_eq!(
                 degenerate_hash_ignoring_new(&full),
@@ -1315,10 +1458,17 @@ mod tests {
         .expect("melee defs: reason=degenerate_mana_defs_invalid")
         // P8.5a：同源登记复活段，使缺陷态只差「mana 退化」这一项，
         // 避免类别集合差异让 `content_hash()` 断言失真（CODEBUDDY §5）。
+        // P8.5b：四张定义表均从 `full` 的公开 getter 克隆，新增 8101 / 8102
+        // 真实定义自动同源；同源登记主城升级段，使缺陷态仍只差「mana 退化」。
         .with_hero_revive(
             *full.revive_constants(),
             full.altar_defs().clone(),
             full.hero_defs().clone(),
+        )
+        .with_town_hall_upgrade(
+            *full.town_hall_constants(),
+            full.town_hall_defs().clone(),
+            full.tier_requirements().clone(),
         )
     }
 

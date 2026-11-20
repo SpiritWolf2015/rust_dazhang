@@ -449,7 +449,7 @@ fn client_app_all_immovable_keeps_state_hash_and_snapshot() {
     let mut movability = MovabilityMap::new();
     movability.insert(1, false);
     movability.insert(2, false);
-    assert_eq!(SNAPSHOT_VERSION, 4, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_unchanged");
 
     let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
     driver.submit_command(spawn(1, 0, 120)).unwrap();
@@ -906,7 +906,7 @@ fn human_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
     let movability = derive_movability(&defs, &entity_defs);
     assert_eq!(movability.get(&1), Some(&false));
     assert_eq!(movability.get(&2), Some(&false));
-    assert_eq!(SNAPSHOT_VERSION, 4, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_unchanged");
 
     let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
     driver.submit_command(spawn(1, 0, 120)).unwrap();
@@ -1311,7 +1311,7 @@ fn runtime_building_does_not_move_but_unit_and_peasant_do() {
         snapshot_before,
         "reason=apply_must_not_change_snapshot"
     );
-    assert_eq!(SNAPSHOT_VERSION, 4, "reason=snapshot_version_4");
+    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
     assert_eq!(snapshot_before.version, SNAPSHOT_VERSION);
     assert_eq!(snapshot_before.defs_hash, defs.content_hash());
     assert_eq!(snapshot_before.content_hash, defs.content_hash());
@@ -1319,7 +1319,7 @@ fn runtime_building_does_not_move_but_unit_and_peasant_do() {
 
 /// 等效脚本逐帧验收（tasks 5.1 / ADR 0002）：混合选中（含运行时建筑）过滤后
 /// 的命令与「只选中可移动单位」的等效脚本逐条相同；两个同构实例提交同一
-/// 脚本后逐帧状态哈希 / 快照 / 只读视图一致，运行时建筑位置不变，快照仍 v4。
+/// 脚本后逐帧状态哈希 / 快照 / 只读视图一致，运行时建筑位置不变，快照仍 v5。
 #[test]
 fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
     let (mut a, defs, view, mapper, assembly, ids) = runtime_fixture();
@@ -1377,7 +1377,7 @@ fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
             "reason=view_diverged frame={frame}"
         );
     }
-    // 运行时建筑未收到 Move，位置不变；快照仍为 v4。
+    // 运行时建筑未收到 Move，位置不变；快照仍为 v5。
     let after = a.read_view();
     let building_after = after
         .entities
@@ -1386,7 +1386,7 @@ fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
         .unwrap();
     assert_eq!(building_after.x, building_x, "reason=building_x_unchanged");
     assert_eq!(building_after.y, building_y, "reason=building_y_unchanged");
-    assert_eq!(SNAPSHOT_VERSION, 4, "reason=snapshot_version_4");
+    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
     let snapshot = a.capture_snapshot();
     assert_eq!(snapshot.version, SNAPSHOT_VERSION);
     assert_eq!(snapshot.defs_hash, defs.content_hash());
@@ -1953,7 +1953,7 @@ fn orc_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
     for id in [1u64, 2, 3] {
         assert_eq!(movability.get(&id), Some(&false));
     }
-    assert_eq!(SNAPSHOT_VERSION, 4, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_unchanged");
 
     let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
     driver.submit_command(spawn(1, 0, 240)).unwrap();

@@ -139,6 +139,135 @@ pub fn restore_by_percent(max_value: i64, percent: i64) -> i64 {
 }
 
 // ---------------------------------------------------------------------------
+// 主城升级冻结常量与等级枚举（P8.5b / Q3 / D2）
+// ---------------------------------------------------------------------------
+
+/// 主城等级（离散 T1 / T2 / T3，R4.1 可升级两次）。
+///
+/// 该类型是定义层 tier 需求链、顶层权威状态与升级命令共用的离散值，
+/// 全部以显式 [`TownHallTier::code`] 字节编码进入哈希 / 快照 / 命令编码，
+/// 不依赖枚举判别式的内存布局，保证跨平台确定性（ADR 0002 §6）。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum TownHallTier {
+    /// 初始等级。
+    T1,
+    /// 第二次等级（第一次升级后）。
+    T2,
+    /// 最高等级（第二次升级后）。
+    T3,
+}
+
+impl TownHallTier {
+    /// 稳定的小端无关单字节编码；值域固定为 1 / 2 / 3。
+    pub const fn code(self) -> u8 {
+        match self {
+            TownHallTier::T1 => 1,
+            TownHallTier::T2 => 2,
+            TownHallTier::T3 => 3,
+        }
+    }
+
+    /// 从显式编码还原等级；非法值返回 `None`。供线格式整数 ↔ 枚举对齐，
+    /// 避免下游各自硬编码判别式（ADR 0005 canonical 约束）。
+    pub const fn from_code(code: u8) -> Option<TownHallTier> {
+        match code {
+            1 => Some(TownHallTier::T1),
+            2 => Some(TownHallTier::T2),
+            3 => Some(TownHallTier::T3),
+            _ => None,
+        }
+    }
+
+    /// 下一级等级；T3 为顶，返回 `None`（逐级递进，禁止跳级）。
+    pub const fn successor(self) -> Option<TownHallTier> {
+        match self {
+            TownHallTier::T1 => Some(TownHallTier::T2),
+            TownHallTier::T2 => Some(TownHallTier::T3),
+            TownHallTier::T3 => None,
+        }
+    }
+}
+
+impl Default for TownHallTier {
+    fn default() -> Self {
+        TownHallTier::T1
+    }
+}
+
+/// 主城升级冻结常量集合（全为合成 / 原创编译期整数常量 `[待核]`）。
+///
+/// 费用按「T1→T2 基础费用 + T2→T3 差价」表驱动计算，MUST NOT 把导出
+/// 总价直接当升级扣款（`CLASSIC_RULES_BASELINE.md` 语义，只借机制不借值）。
+/// 时间为 30 Hz 整数帧，不含 `f64` / MPQ 派生 / 真实导出 JSON / 参考项目
+/// 单位名或 rawcode。改任一常量即改变 [`FrozenDefinitions::content_hash`]。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TownHallConstants {
+    /// T1→T2 升级黄金基础费用。
+    pub tier2_gold: i64,
+    /// T1→T2 升级木材基础费用。
+    pub tier2_lumber: i64,
+    /// T2→T3 相对 T1→T2 的黄金差价。
+    pub price_delta_gold: i64,
+    /// T2→T3 相对 T1→T2 的木材差价。
+    pub price_delta_lumber: i64,
+    /// 每级升级时间（30 Hz 整数帧）。
+    pub frames: u32,
+}
+
+/// 一次升级按目标等级确定性结算出的费用与时间（全整数）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TownHallCost {
+    pub gold: i64,
+    pub lumber: i64,
+    pub frames: u32,
+}
+
+impl TownHallConstants {
+    /// 按目标等级取费用 / 时间；T1 不是可升级目标，返回 `None`。
+    /// T3 采用「基础费用 + 差价」而非绝对总价，避免把导出总价当扣款。
+    pub fn cost(&self, target: TownHallTier) -> Option<TownHallCost> {
+        let frames = self.frames.max(1);
+        match target {
+            TownHallTier::T1 => None,
+            TownHallTier::T2 => Some(TownHallCost {
+                gold: self.tier2_gold,
+                lumber: self.tier2_lumber,
+                frames,
+            }),
+            TownHallTier::T3 => Some(TownHallCost {
+                gold: self.tier2_gold.saturating_add(self.price_delta_gold),
+                lumber: self.tier2_lumber.saturating_add(self.price_delta_lumber),
+                frames,
+            }),
+        }
+    }
+
+    /// 显式小端编码进定义哈希；任一常量变化都改变结果。
+    pub fn hash(&self, hasher: &mut StateHasher) {
+        hasher.write_i64(self.tier2_gold);
+        hasher.write_i64(self.tier2_lumber);
+        hasher.write_i64(self.price_delta_gold);
+        hasher.write_i64(self.price_delta_lumber);
+        hasher.write_u32(self.frames);
+    }
+}
+
+/// 合成 / 原创的主城升级冻结常量 `[待核]`；数值不冒充经典规则、不来自任何资产。
+pub const SYNTHETIC_TOWN_HALL_CONSTANTS: TownHallConstants = TownHallConstants {
+    tier2_gold: 150,
+    tier2_lumber: 100,
+    price_delta_gold: 100,
+    price_delta_lumber: 60,
+    frames: 60,
+};
+
+impl Default for TownHallConstants {
+    fn default() -> Self {
+        SYNTHETIC_TOWN_HALL_CONSTANTS
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 冻结内容定义
 // ---------------------------------------------------------------------------
 
@@ -202,11 +331,13 @@ pub struct UpgradeDef {
 /// 中按当前内容一次性计算，由于没有可变入口，缓存与内容始终一致。
 ///
 /// P8.5a 追加三个私有冻结字段：`revive` 为复活常量段，`altar_defs` /
-/// `hero_defs` 为定义层登记的祭坛 / 英雄类别 DefId 集合。三者都编入
-/// `compute_defs_hash`，改常量或改类别登记即改变 `content_hash()`（Q3）。
-/// 类别判定只查这两份定义层数据（数据驱动），MUST NOT 用建筑名字符串
-/// 白名单或硬编码 DefId；`hero_defs` 让英雄经既有 `Train` 生产路径产生，
-/// 使 `HeroState` 不再是死字段。
+/// `hero_defs` 为定义层登记的祭坛 / 英雄类别 DefId 集合。
+/// P8.5b 追加三个私有冻结字段：`town_hall` 为主城升级冻结常量段，
+/// `town_hall_defs` 为定义层登记的主城类别 DefId 集合，
+/// `tier_requirements` 为「二线单位 / 科技 DefId → 所需 tier」需求链。
+/// 全部编入 `compute_defs_hash`，改常量或改类别 / 需求链登记即改变
+/// `content_hash()`（Q3）。类别与解锁判定只查定义层数据（数据驱动），
+/// MUST NOT 用建筑名字符串白名单或硬编码 DefId。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenDefinitions {
     units: BTreeMap<DefId, UnitDef>,
@@ -216,6 +347,9 @@ pub struct FrozenDefinitions {
     revive: ReviveConstants,
     altar_defs: BTreeSet<DefId>,
     hero_defs: BTreeSet<DefId>,
+    town_hall: TownHallConstants,
+    town_hall_defs: BTreeSet<DefId>,
+    tier_requirements: BTreeMap<DefId, TownHallTier>,
     hash: u64,
 }
 
@@ -312,6 +446,18 @@ fn compute_defs_hash(defs: &FrozenDefinitions) -> u64 {
     for &id in &defs.hero_defs {
         hasher.write_u32(id);
     }
+    // P8.5b：主城升级冻结常量段、主城类别登记、tier 需求链编入定义哈希。
+    // 任一段变化都会改变 content_hash() 并进入快照头部（D2 / Q3）。
+    defs.town_hall.hash(&mut hasher);
+    hasher.write_u64(defs.town_hall_defs.len() as u64);
+    for &id in &defs.town_hall_defs {
+        hasher.write_u32(id);
+    }
+    hasher.write_u64(defs.tier_requirements.len() as u64);
+    for (&id, &tier) in &defs.tier_requirements {
+        hasher.write_u32(id);
+        hasher.write_u8(tier.code());
+    }
     hasher.finish()
 }
 
@@ -331,6 +477,9 @@ impl FrozenDefinitions {
             revive: ReviveConstants::default(),
             altar_defs: BTreeSet::new(),
             hero_defs: BTreeSet::new(),
+            town_hall: TownHallConstants::default(),
+            town_hall_defs: BTreeSet::new(),
+            tier_requirements: BTreeMap::new(),
             hash: 0,
         };
         insert_unique(&mut defs.units, units)?;
@@ -363,6 +512,51 @@ impl FrozenDefinitions {
         self.hero_defs = hero_defs;
         self.hash = compute_defs_hash(&self);
         self
+    }
+
+    /// 纯新增构造路径：注入主城升级冻结常量、主城类别集合与 tier 需求链，
+    /// 重算内容哈希。既有四参数签名不变，需要主城升级的装配层链式调用。
+    ///
+    /// 类别与需求链是定义层数据（数据驱动），判定与建筑名 / DefId 数值
+    /// 白名单无关（R1.2 / R13.3 / D2 / Q3）；改任一常量 / 类别 / 需求链
+    /// 即改变 `content_hash()` 并进入快照头部。
+    pub fn with_town_hall_upgrade(
+        mut self,
+        constants: TownHallConstants,
+        town_hall_defs: BTreeSet<DefId>,
+        tier_requirements: BTreeMap<DefId, TownHallTier>,
+    ) -> Self {
+        self.town_hall = constants;
+        self.town_hall_defs = town_hall_defs;
+        self.tier_requirements = tier_requirements;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 定义层类别驱动：该 DefId 是否被登记为主城（MUST NOT 用名字白名单）。
+    pub fn is_town_hall(&self, def_id: DefId) -> bool {
+        self.town_hall_defs.contains(&def_id)
+    }
+
+    /// 定义层需求链：该二线单位 / 科技 DefId 解锁所需的最低 tier；
+    /// `None` 表示无 tier 门槛（T1 即可）。按 tier 取需求（Warsmash 语义）。
+    pub fn tier_requirement(&self, def_id: DefId) -> Option<TownHallTier> {
+        self.tier_requirements.get(&def_id).copied()
+    }
+
+    /// 主城升级冻结常量（只读）。
+    pub fn town_hall_constants(&self) -> &TownHallConstants {
+        &self.town_hall
+    }
+
+    /// 已登记的主城 DefId 集合（只读，稳定顺序）。
+    pub fn town_hall_defs(&self) -> &BTreeSet<DefId> {
+        &self.town_hall_defs
+    }
+
+    /// tier 需求链（只读，稳定顺序）。
+    pub fn tier_requirements(&self) -> &BTreeMap<DefId, TownHallTier> {
+        &self.tier_requirements
     }
 
     /// 定义层类别驱动：该 DefId 是否被登记为祭坛，MUST NOT 用名字白名单。
@@ -679,6 +873,97 @@ impl HeroReviveState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 主城升级权威状态（P8.5b / D1 / D4 / Q1）
+// ---------------------------------------------------------------------------
+
+/// 主城升级队列项：目标主城实体 + 来源 / 目标等级 + 整数帧剩余时间 + 本次费用。
+///
+/// `remaining_frames` 是 30 Hz 整数帧剩余量，MUST NOT 使用墙钟 / 渲染帧率 /
+/// `f64`（ADR 0002 §2-3）；按稳定 `EntityId` 顺序登记在 `BTreeMap`。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TownHallUpgradeItem {
+    pub town_hall: EntityId,
+    pub town_hall_def: DefId,
+    pub owner: u8,
+    pub from_tier: TownHallTier,
+    pub target_tier: TownHallTier,
+    pub remaining_frames: u32,
+    pub total_frames: u32,
+    pub gold: i64,
+    pub lumber: i64,
+}
+
+/// 升级扣费登记：事务性退款的精确逆运算依据，与队列效果执行链分离。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TownHallUpgradeCharge {
+    pub owner: u8,
+    pub gold: i64,
+    pub lumber: i64,
+}
+
+/// 三组主城升级权威状态的唯一容器，全部按稳定 `EntityId` 顺序的 `BTreeMap`。
+///
+/// `tiers` 是离散等级 T1 / T2 / T3 的顶层权威状态（独立字段，MUST NOT 复用
+/// `PlayerEconomy.upgrades` 布尔科技旗标，C5）；`queue` 是升级进度；
+/// `charges` 是冻结扣费登记。三组 MUST 同时进入 FNV-1a 状态哈希、由
+/// `SNAPSHOT_VERSION` 定义的快照与 `first_difference()` 差异字段集合
+/// （ADR 0002 §6-8 / `CODEBUDDY.md §5`）。
+///
+/// 注意：tier **需求链**属定义层冻结常量（进 `defs_hash` / `content_hash`），
+/// 与本结构的 tier **权威状态**严格区分（D1 / D2）。
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct TownHallUpgradeState {
+    pub tiers: BTreeMap<EntityId, TownHallTier>,
+    pub queue: BTreeMap<EntityId, TownHallUpgradeItem>,
+    pub charges: BTreeMap<EntityId, TownHallUpgradeCharge>,
+}
+
+impl TownHallUpgradeState {
+    /// 三组状态显式小端编码进 FNV-1a；按稳定 `EntityId` 顺序遍历。
+    pub fn hash(&self, hasher: &mut StateHasher) {
+        hasher.write_u64(self.tiers.len() as u64);
+        for (&id, &tier) in &self.tiers {
+            hasher.write_u64(id.value());
+            hasher.write_u8(tier.code());
+        }
+        hasher.write_u64(self.queue.len() as u64);
+        for (&id, item) in &self.queue {
+            hasher.write_u64(id.value());
+            hasher.write_u64(item.town_hall.value());
+            hasher.write_u32(item.town_hall_def);
+            hasher.write_u8(item.owner);
+            hasher.write_u8(item.from_tier.code());
+            hasher.write_u8(item.target_tier.code());
+            hasher.write_u32(item.remaining_frames);
+            hasher.write_u32(item.total_frames);
+            hasher.write_i64(item.gold);
+            hasher.write_i64(item.lumber);
+        }
+        hasher.write_u64(self.charges.len() as u64);
+        for (&id, charge) in &self.charges {
+            hasher.write_u64(id.value());
+            hasher.write_u8(charge.owner);
+            hasher.write_i64(charge.gold);
+            hasher.write_i64(charge.lumber);
+        }
+    }
+
+    /// 按同一稳定顺序返回首个差异字段，便于 desync 诊断。
+    pub fn first_difference(&self, other: &Self) -> Option<&'static str> {
+        if self.tiers != other.tiers {
+            return Some("town_hall_tiers");
+        }
+        if self.queue != other.queue {
+            return Some("town_hall_queue");
+        }
+        if self.charges != other.charges {
+            return Some("town_hall_charges");
+        }
+        None
+    }
+}
+
 /// 生产 / 建造队列项。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ProductionItem {
@@ -874,6 +1159,19 @@ pub enum GameplayCommandKind {
     CancelRevive {
         hero: EntityId,
     },
+    /// 主城升级 / 取消升级（P8.5b / Q2 / R-2）。
+    ///
+    /// 单命令参数 `cancel` 区分两种动作：`false` 发起向 `target_tier`
+    /// 的升级（须为当前 tier 的下一级），`true` 取消该主城进行中的升级
+    /// 并事务性退款（此时 `target_tier` 被忽略）。这是 R-2 授权的
+    /// 「复用单命令参数表达」，MUST NOT 新增第二个 `CancelUpgradeTownHall`
+    /// 变体，以维持「1 个变体 / 码 13 / proto 只追加 1 个 tag」口径。
+    UpgradeTownHall {
+        town_hall: EntityId,
+        town_hall_def: DefId,
+        target_tier: TownHallTier,
+        cancel: bool,
+    },
 }
 
 /// 玩法命令。
@@ -1007,6 +1305,19 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u8(12);
             hasher.write_u64(hero.value());
         }
+        GameplayCommandKind::UpgradeTownHall {
+            town_hall,
+            town_hall_def,
+            target_tier,
+            cancel,
+        } => {
+            // P8.5b：追加唯一编码 13；target_tier 用显式 code，不依赖枚举布局。
+            hasher.write_u8(13);
+            hasher.write_u64(town_hall.value());
+            hasher.write_u32(town_hall_def);
+            hasher.write_u8(target_tier.code());
+            hasher.write_u8(u8::from(cancel));
+        }
     }
 }
 
@@ -1028,6 +1339,7 @@ pub(crate) fn validate_gameplay_entities(
             altar_def: _,
         } => hero == EntityId::NONE || altar == EntityId::NONE,
         GameplayCommandKind::CancelRevive { hero } => hero == EntityId::NONE,
+        GameplayCommandKind::UpgradeTownHall { town_hall, .. } => town_hall == EntityId::NONE,
         _ => false,
     };
     if invalid {

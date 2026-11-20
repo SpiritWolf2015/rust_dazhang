@@ -274,3 +274,87 @@ fn hero_revive_events_do_not_change_state_hash() {
         assert_eq!(view, plain.read_view());
     }
 }
+
+/// P8.5b：主城升级开始 / 完成 / 取消三个事实事件是纯表现层副作用。
+///
+/// 三个事件在 `apply_event` 里都是幂等 no-op（升级进度 / tier / 费用由
+/// `w3-core` 权威状态写入，HUD 只读派生），重复投递按 sequence 去重；
+/// 连续重绘、事件重复消费 MUST NOT 反写权威状态、不改
+/// `compute_state_hash()` / `capture_snapshot()` 字节（ADR 0002 §5 / tasks 6.1）。
+#[test]
+fn town_hall_upgrade_events_do_not_change_state_hash() {
+    let mut rendered = build_match();
+    let mut plain = build_match();
+    submit_move(&mut rendered);
+    submit_move(&mut plain);
+    let mut library = ModelLibrary::default();
+    library.insert("default", Model::from_json(MODEL_DOC).unwrap());
+    let mut scene = Scene::default();
+    let terrain = simple_terrain();
+
+    for _ in 0..16 {
+        rendered.step();
+        plain.step();
+        let view = rendered.read_view();
+        let _events = rendered.drain_events();
+        let _ = plain.drain_events();
+
+        // 只读视图先建实例；随后投递三个主城升级事实事件，并重复投递
+        // 同一批次（幂等：按 sequence 去重）。三个分支均为纯表现层 no-op。
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        let upgrade_events = vec![
+            Event {
+                frame: view.tick,
+                sequence: 20_001,
+                entity: 1,
+                kind: EventKind::TownHallUpgradeStarted,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 20_002,
+                entity: 1,
+                kind: EventKind::TownHallUpgradeCompleted,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 20_003,
+                entity: 1,
+                kind: EventKind::TownHallUpgradeCancelled,
+            },
+        ];
+        for _ in 0..3 {
+            scene.consume(
+                FrameInput {
+                    view: &view,
+                    events: &upgrade_events,
+                },
+                &library,
+            );
+        }
+        scene.interpolate_all(0.5);
+        let _vertices = scene.build_vertices(&terrain);
+
+        assert_eq!(
+            scene.applied_events(),
+            upgrade_events.len() as u64,
+            "主城升级事实事件应被 sequence 去重"
+        );
+        assert_eq!(
+            rendered.compute_state_hash(),
+            plain.compute_state_hash(),
+            "主城升级事件消费改变了状态哈希"
+        );
+        assert_eq!(
+            rendered.capture_snapshot(),
+            plain.capture_snapshot(),
+            "主城升级事件消费改变了快照字节"
+        );
+        assert_eq!(view, plain.read_view());
+    }
+}

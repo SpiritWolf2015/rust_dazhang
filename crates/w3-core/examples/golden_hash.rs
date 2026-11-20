@@ -9,18 +9,27 @@
 //! - 末尾有且仅有一行汇总 `frames=<N> final_hash=0x<016x> schema=<编译期常量>`；
 //! - 所有行以 LF 结束，不含时间戳、路径、主机名或工具链探测值等平台相关信息。
 //!
-//! P8.5a 基线重取（Q1 / tasks 7.3）：新增英雄复活三组权威状态进入
-//! `compute_state_hash()`、复活冻结常量段进入 `compute_defs_hash()`，逐帧哈希
-//! 布局实质变化，故基线必变。本文件输出格式未变，`GOLDEN_SCHEMA` 仍为
-//! `golden-hash/1`；记录值仅作人工比对留档，不作自动断言。
+//! P8.5a 基线：新增英雄复活三组权威状态进入 `compute_state_hash()`、复活
+//! 冻结常量段进入 `compute_defs_hash()`，逐帧哈希布局实质变化，故基线必变。
+//! 当时的 Windows 侧取值为 `final_hash=0xada6506e1da36c11`、整份文本 sha256
+//! `8b48b8f2035bd7dc3df4b37c8e21c9d896cdc6caa2a367c5dc23f3df04fc99a3`
+//! （41 行 / 1371 字节）。
+//!
+//! P8.5b 基线重取（Q1 / Q7 / tasks 7.3）：新增主城升级三组权威状态进入
+//! `compute_state_hash()`、主城升级冻结常量段 + 类别 / tier 需求链进入
+//! `compute_defs_hash()`，`SNAPSHOT_VERSION` / `SIM_VERSION` bump 4→5，
+//! 逐帧哈希布局再次实质变化，故基线必变、不沿用 P8.5a v4 值、不声称逐字节
+//! 不变。本文件输出格式未变，`GOLDEN_SCHEMA` 仍为 `golden-hash/1`；记录值
+//! 仅作人工比对留档，不作自动断言。
 //!
 //! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按新实现重取：
-//! - 41 行 / 1371 字节，`final_hash=0xada6506e1da36c11`；
-//! - 整份文本 sha256 `8b48b8f2035bd7dc3df4b37c8e21c9d896cdc6caa2a367c5dc23f3df04fc99a3`。
-//! ADR 0002 复核记录的旧值（`final_hash=0x3d7e4312f63844e5`、
-//! sha256 `c6dc62b4…3775`）已失效，不沿用、不声称逐字节不变。
-//! Debian 12 x86_64 侧离线逐字节比对待人工 / VM 执行；macOS、其它 CPU 架构
-//! 与其它 rustc 版本仍属待验证项，不得据本记录声称跨平台确定性已达成。
+//! - 41 行 / 1371 字节，`final_hash=0xce89a7baf4d711ec`；
+//! - 整份文本 sha256 `202b7490f94cbc059a266c1663fc21e847e55ebb2c3620750f4346855475742c`。
+//! ADR 0002 复核记录与 P8.5a 的旧值（`final_hash=0x3d7e4312f63844e5` /
+//! `0xada6506e1da36c11`）已失效，不沿用、不声称逐字节不变。
+//! **Debian 12 x86_64 侧 v4 / v5 离线逐字节比对仍待人工 / VM 执行；macOS、
+//! 其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项**，不得据本记录
+//! 声称跨平台确定性已达成或本 change 有新验证（Q7）。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

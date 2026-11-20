@@ -17,6 +17,7 @@ use crate::gameplay::{
     AuraState, BehaviorSpec, CastRuntime, DefId, EffectDef, EffectKind, EffectOutcome,
     FrozenDefinitions, GameplayCommand, GameplayCommandError, GameplayCommandKind, HeroDeathRecord,
     HeroReviveState, HeroState, ProductionItem, ReviveCharge, ReviveQueueItem, Settlement,
+    TownHallTier, TownHallUpgradeCharge, TownHallUpgradeItem, TownHallUpgradeState,
     UnitGameplayState, VictoryState, Vitals, WaveState, WorldGameplayState, resolve_effects,
     restore_by_percent, validate_gameplay_entities,
 };
@@ -175,6 +176,12 @@ pub enum EventKind {
     HeroDied,
     /// P8.5a 英雄复活完成事实事件。
     Revived,
+    /// P8.5b 主城升级开始事实事件（已扣费、队列项建立，供只读表现层消费）。
+    TownHallUpgradeStarted,
+    /// P8.5b 主城升级完成事实事件（tier 递进、解锁立即生效）。
+    TownHallUpgradeCompleted,
+    /// P8.5b 主城升级取消 / 中止事实事件（事务性退款，供只读表现层消费）。
+    TownHallUpgradeCancelled,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -227,6 +234,10 @@ pub struct RtsMatch {
     /// P8.5a 英雄复活三组权威状态（死亡登记 / 复活队列 / 费用登记）。
     /// 字段私有，仅本结构可写；同时进入状态哈希、快照与差异诊断。
     revive: HeroReviveState,
+    /// P8.5b 主城升级三组权威状态（等级 / 升级队列 / 费用登记）。
+    /// 独立字段，MUST NOT 复用 `PlayerEconomy.upgrades` 布尔旗标；
+    /// 同时进入状态哈希、快照与差异诊断（ADR 0002 §6-8 / C5）。
+    town_hall: TownHallUpgradeState,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -416,6 +427,7 @@ impl RtsMatch {
             defs: FrozenDefinitions::empty(),
             gameplay: WorldGameplayState::default(),
             revive: HeroReviveState::default(),
+            town_hall: TownHallUpgradeState::default(),
         }
     }
 
@@ -518,6 +530,10 @@ impl RtsMatch {
         // 8b. 推进祭坛复活队列效果链（费用提交事务在阶段 7 已完成，此处仅执行
         //     剩余帧递减 / 事务性退款 / 恢复本体，两者分离见主 gameplay-systems/spec.md:19）。
         self.advance_revive_queue(frame);
+
+        // 8c. 推进主城升级队列效果链（费用提交事务同样在阶段 7 完成，此处仅执行
+        //     剩余帧递减 / 事务性退款 / tier 递进，两者分离见主 gameplay-systems/spec.md:19）。
+        self.advance_town_hall_queue(frame);
 
         // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
         self.resolve_victory(frame);
@@ -1111,6 +1127,11 @@ impl RtsMatch {
         if !self.is_actionable(producer, player) {
             return;
         }
+        // P8.5b：冻结 tier 需求链前置判据，未达 tier 显式拒绝、不生成队列项、
+        // 不扣资源、不改变权威状态（MUST NOT 沿用「全量可训练」旧行为，C4）。
+        if !self.tier_requirement_met(player, unit_def) {
+            return;
+        }
         let frames = self
             .defs
             .units()
@@ -1137,6 +1158,11 @@ impl RtsMatch {
     }
 
     fn research(&mut self, player: u8, upgrade: DefId) {
+        // P8.5b：冻结 tier 需求链前置判据，未达 tier 显式拒绝、不生成研究队列项、
+        // 不改变权威状态（R4.4 / C4 / D4）。
+        if !self.tier_requirement_met(player, upgrade) {
+            return;
+        }
         let frames = self
             .defs
             .upgrades()
@@ -1236,6 +1262,19 @@ impl RtsMatch {
                 altar_def,
             } => self.submit_revive(hero, altar, altar_def, player),
             GameplayCommandKind::CancelRevive { hero } => self.cancel_revive(hero, player),
+            GameplayCommandKind::UpgradeTownHall {
+                town_hall,
+                town_hall_def,
+                target_tier,
+                cancel,
+            } => self.apply_town_hall_upgrade(
+                town_hall,
+                town_hall_def,
+                target_tier,
+                cancel,
+                player,
+                frame,
+            ),
         }
     }
 
@@ -1424,6 +1463,212 @@ impl RtsMatch {
         unit.blocked_frames = 0;
         unit.group = 0;
         self.push_event(frame, hero, EventKind::Revived);
+    }
+
+    // -----------------------------------------------------------------------
+    // P8.5b 主城升级（D1 / D4 / Q2 / R-2）
+    // -----------------------------------------------------------------------
+
+    /// 玩家当前主城等级：按稳定 `EntityId` 顺序取本人存活主城实体的最高 tier，
+    /// 未登记任何主城 tiers 时视为 T1。只读定义层类别 + tier 权威状态，
+    /// 不查建筑名字符串 / 硬编码 DefId（R1.2 / R13.3 / D2）。
+    fn current_town_hall_tier(&self, player: u8) -> TownHallTier {
+        let mut best = TownHallTier::T1;
+        for (&entity, &tier) in &self.town_hall.tiers {
+            if tier > best
+                && self
+                    .units
+                    .get(&entity)
+                    .is_some_and(|unit| unit.alive && unit.owner == player)
+            {
+                best = tier;
+            }
+        }
+        best
+    }
+
+    /// 定义层 tier 需求链前置判据：某单位 / 科技 DefId 是否被当前主城等级解锁。
+    /// 无需求登记（`None`）视为 T1 即可训练 / 研发；有需求则须当前 tier ≥ 需求。
+    fn tier_requirement_met(&self, player: u8, def_id: DefId) -> bool {
+        match self.defs.tier_requirement(def_id) {
+            Some(required) => self.current_town_hall_tier(player) >= required,
+            None => true,
+        }
+    }
+
+    /// 事务性退款：把冻结扣费登记精确回退到玩家经济，移除升级队列项与登记，
+    /// 不产生半升级实体、不重复扣费。退款与扣费同样经 `PlayerEconomy` 与
+    /// 三组权威状态进入哈希 / 快照（D4）。
+    fn refund_town_hall_upgrade(&mut self, town_hall: EntityId) {
+        if let Some(charge) = self.town_hall.charges.remove(&town_hall) {
+            let economy = self.gameplay.players.entry(charge.owner).or_default();
+            economy.gold = economy.gold.saturating_add(charge.gold);
+            economy.lumber = economy.lumber.saturating_add(charge.lumber);
+        }
+        self.town_hall.queue.remove(&town_hall);
+    }
+
+    /// 升级 / 取消升级命令面：按 `cancel` 分流两种动作（R-2 单命令参数表达）。
+    /// 费用提交事务在本阶段完成，队列效果执行链在 `advance_town_hall_queue`
+    /// 分离处理（主 gameplay-systems/spec.md:19）。
+    fn apply_town_hall_upgrade(
+        &mut self,
+        town_hall: EntityId,
+        town_hall_def: DefId,
+        target_tier: TownHallTier,
+        cancel: bool,
+        player: u8,
+        frame: Frame,
+    ) {
+        if cancel {
+            // 玩家主动取消：校验队列项归属后事务性退款并发事实事件。
+            let owner_matches = self
+                .town_hall
+                .queue
+                .get(&town_hall)
+                .is_some_and(|item| item.owner == player);
+            if owner_matches {
+                self.refund_town_hall_upgrade(town_hall);
+                self.push_event(frame, town_hall, EventKind::TownHallUpgradeCancelled);
+            }
+            return;
+        }
+        self.submit_town_hall_upgrade(town_hall, town_hall_def, target_tier, player, frame);
+    }
+
+    /// 升级费用提交事务：校验定义层主城类别、实体存活 / 归属、逐级递进、
+    /// 无进行中升级、资源充足；确定性扣减 gold / lumber、冻结扣费登记并入队。
+    /// 任一校验不通过即显式拒绝（no-op），MUST NOT 静默降级为免费升级。
+    fn submit_town_hall_upgrade(
+        &mut self,
+        town_hall: EntityId,
+        town_hall_def: DefId,
+        target_tier: TownHallTier,
+        player: u8,
+        frame: Frame,
+    ) {
+        // 定义层类别驱动：只查登记的类别集合，MUST NOT 用名字白名单 / 硬编码 id。
+        if !self.defs.is_town_hall(town_hall_def) {
+            return;
+        }
+        // 主城实体存活且归属本族。
+        if !self
+            .units
+            .get(&town_hall)
+            .is_some_and(|unit| unit.alive && unit.owner == player)
+        {
+            return;
+        }
+        // 无进行中升级（不重复扣费）。
+        if self.town_hall.queue.contains_key(&town_hall) {
+            return;
+        }
+        // 逐级递进：目标必须是当前登记 tier 的下一级（T1→T2→T3，禁止跳级）。
+        let current = self
+            .town_hall
+            .tiers
+            .get(&town_hall)
+            .copied()
+            .unwrap_or(TownHallTier::T1);
+        if current.successor() != Some(target_tier) {
+            return;
+        }
+        let Some(cost) = self.defs.town_hall_constants().cost(target_tier) else {
+            return;
+        };
+        // 资源不足显式拒绝：先用只读 get 校验，绝不 `entry().or_default()`
+        // 隐式创建玩家记录，确保「显式失败不产生权威状态漂移」。
+        let affordable = self
+            .gameplay
+            .players
+            .get(&player)
+            .is_some_and(|economy| economy.gold >= cost.gold && economy.lumber >= cost.lumber);
+        if !affordable {
+            return;
+        }
+        {
+            // 冻结扣费：确定性扣减，退款以 charges 登记为精确逆运算依据。
+            let economy = self
+                .gameplay
+                .players
+                .get_mut(&player)
+                .expect("town_hall: reason=player_present_after_affordability_check");
+            economy.gold -= cost.gold;
+            economy.lumber -= cost.lumber;
+        }
+        self.town_hall.charges.insert(
+            town_hall,
+            TownHallUpgradeCharge {
+                owner: player,
+                gold: cost.gold,
+                lumber: cost.lumber,
+            },
+        );
+        let frames = cost.frames.max(1);
+        self.town_hall.queue.insert(
+            town_hall,
+            TownHallUpgradeItem {
+                town_hall,
+                town_hall_def,
+                owner: player,
+                from_tier: current,
+                target_tier,
+                remaining_frames: frames,
+                total_frames: frames,
+                gold: cost.gold,
+                lumber: cost.lumber,
+            },
+        );
+        self.push_event(frame, town_hall, EventKind::TownHallUpgradeStarted);
+    }
+
+    /// 升级队列效果执行链（与费用提交事务分离）：按稳定 `EntityId` 顺序递减
+    /// 剩余整数帧；主城被毁 / 对局失败 / 玩家失活 / 登记丢失则事务性退款；
+    /// 到 0 完成 tier 递进，不生成半升级实体（D4）。
+    fn advance_town_hall_queue(&mut self, frame: Frame) {
+        let ids: Vec<EntityId> = self.town_hall.queue.keys().copied().collect();
+        for town_hall in ids {
+            let Some(item) = self.town_hall.queue.get(&town_hall).cloned() else {
+                continue;
+            };
+            let town_hall_ok = self
+                .units
+                .get(&town_hall)
+                .is_some_and(|unit| unit.alive && unit.owner == item.owner);
+            let player_active = self
+                .gameplay
+                .players
+                .get(&item.owner)
+                .map(|economy| economy.active)
+                .unwrap_or(true);
+            let charged = self.town_hall.charges.contains_key(&town_hall);
+            if !town_hall_ok || !player_active || !charged || self.gameplay.victory.resolved {
+                self.refund_town_hall_upgrade(town_hall);
+                self.push_event(frame, town_hall, EventKind::TownHallUpgradeCancelled);
+                continue;
+            }
+            let remaining = item.remaining_frames.saturating_sub(1);
+            if remaining == 0 {
+                self.complete_town_hall_upgrade(town_hall, &item, frame);
+            } else if let Some(queue_item) = self.town_hall.queue.get_mut(&town_hall) {
+                queue_item.remaining_frames = remaining;
+            }
+        }
+    }
+
+    /// 升级完成：同一主城实体的 tier 递进（MUST NOT `spawn` 新实体），
+    /// 费用已消耗故移除扣费登记（不退款、不重复扣费），发完成事实事件。
+    /// 解锁在同一确定性命令面立即生效（下一次 `Train` / `Research` 读新 tier）。
+    fn complete_town_hall_upgrade(
+        &mut self,
+        town_hall: EntityId,
+        item: &TownHallUpgradeItem,
+        frame: Frame,
+    ) {
+        self.town_hall.queue.remove(&town_hall);
+        self.town_hall.charges.remove(&town_hall);
+        self.town_hall.tiers.insert(town_hall, item.target_tier);
+        self.push_event(frame, town_hall, EventKind::TownHallUpgradeCompleted);
     }
 
     /// 推进全部可保存运行态；完成项在稳定顺序下统一提交。
@@ -1734,6 +1979,8 @@ impl RtsMatch {
         self.gameplay.hash(&mut hasher);
         // P8.5a：英雄复活三组权威状态（死亡登记 / 队列 / 费用）必须进入哈希。
         self.revive.hash(&mut hasher);
+        // P8.5b：主城升级三组权威状态（等级 / 升级队列 / 费用登记）必须进入哈希。
+        self.town_hall.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -1792,6 +2039,10 @@ impl RtsMatch {
         }
         // P8.5a：三组复活权威状态按同一稳定顺序定位首个差异字段。
         if let Some(field) = self.revive.first_difference(&other.revive) {
+            return Some(field);
+        }
+        // P8.5b：三组主城升级权威状态按同一稳定顺序定位首个差异字段。
+        if let Some(field) = self.town_hall.first_difference(&other.town_hall) {
             return Some(field);
         }
         None
@@ -1876,6 +2127,7 @@ impl RtsMatch {
             defs: self.defs.clone(),
             gameplay: self.gameplay.clone(),
             revive: self.revive.clone(),
+            town_hall: self.town_hall.clone(),
         }
     }
 
@@ -2026,6 +2278,7 @@ impl RtsMatch {
             defs: snapshot.defs.clone(),
             gameplay: snapshot.gameplay.clone(),
             revive: snapshot.revive.clone(),
+            town_hall: snapshot.town_hall.clone(),
         })
     }
 }
@@ -2362,11 +2615,12 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本为 4（P8.5a 新增权威状态），只读视图消费与快照往返均不改变权威状态。
+    /// 快照版本为 5（P8.5b 新增主城升级权威状态），只读视图消费与快照往返均不
+    /// 改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 4, "snapshot version must be 4");
-        assert_eq!(SIM_VERSION, 4, "sim version must be 4");
+        assert_eq!(SNAPSHOT_VERSION, 5, "snapshot version must be 5");
+        assert_eq!(SIM_VERSION, 5, "sim version must be 5");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -2440,9 +2694,9 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 4"
+            "snapshot version must stay 5"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 4");
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 5");
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

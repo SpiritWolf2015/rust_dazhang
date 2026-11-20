@@ -12,14 +12,14 @@
 //!   不冒充原版、不照搬 Warsmash rawcode / 暴雪 abilId / 参考项目原创单位名。
 //! - 按钮标识 `def_id` 是表现层装配用的合成整数命名空间（避开冻结定义的
 //!   `1xx` / `2xx` / `9xx` 段与类别内唯一 ID），**不是权威 `DefId`**，
-//!   MUST NOT 进入权威状态 / FNV-1a 状态哈希 / `SNAPSHOT_VERSION`（当前 4）
+//!   MUST NOT 进入权威状态 / FNV-1a 状态哈希 / `SNAPSHOT_VERSION`（当前 5）
 //!   快照；命令卡 12 格、键→action 表、子菜单栈全是 HUD 只读派生。
 //! - 第二键列表由定义表记录驱动，MUST NOT 用建筑名字符串硬编码白名单
 //!   （R1.2 / R13.3）；人族六类新单位 / 建筑各有定义表条目。
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use w3_core::DefId;
+use w3_core::{DefId, FrozenDefinitions, TownHallTier};
 
 use super::defs::{
     BARRACKS, GOLD_MINE, HUMAN_ALTAR, HUMAN_BARRACKS, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT,
@@ -685,6 +685,46 @@ impl Default for CommandCatalog {
     fn default() -> Self {
         Self::standard()
     }
+}
+
+/// 主城升级命令卡格位的只读派生（P8.5b / D6 / Q6）。
+///
+/// 格位出现与否只由冻结定义数据驱动：查 `FrozenDefinitions::is_town_hall`
+/// 类别登记与 `tier_requirements()` 需求链，MUST NOT 用建筑名字符串白名单或
+/// 硬编码 DefId（R1.2 / R13.3 / R13.7 / C15）。以非经典命名的主城 DefId 只要
+/// 登记进定义层类别集合，仍按需求链判定显示格位。
+///
+/// 具体 `U` 键 / 命令卡第二键绑定属 B 类 `[待核]`、本期不冻结、不入库（Q6），
+/// 故本函数只描述「格位是否应出现 + 目标等级」，不产出键位字母。纯只读派生，
+/// MUST NOT 反写权威状态、进状态哈希 / 快照 / `first_difference()`（ADR 0002 §5）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UpgradeSlot {
+    /// 选中主城实体的 DefId（来自装配层只读关联）。
+    pub town_hall_def: DefId,
+    /// 需求链推导的下一目标等级。
+    pub target_tier: TownHallTier,
+}
+
+/// 由冻结定义只读派生主城升级格位；非主城或需求链为空返回 `None`。
+///
+/// 判据只查定义层类别登记与需求链：先 `is_town_hall` 确认选中实体是主城，
+/// 再从 `tier_requirements()` 取高于 T1 的最小需求等级作为目标（按 tier 取需求，
+/// Warsmash 语义），MUST NOT 按建筑名 / 硬编码 id 判定（R1.2 / R13.3）。
+/// `BTreeMap` 稳定顺序遍历，无 `HashMap` 迭代顺序 / 墙钟 / 全局静态字典。
+pub fn derive_upgrade_slot(defs: &FrozenDefinitions, town_hall_def: DefId) -> Option<UpgradeSlot> {
+    if !defs.is_town_hall(town_hall_def) {
+        return None;
+    }
+    let target_tier = defs
+        .tier_requirements()
+        .values()
+        .copied()
+        .filter(|required| *required > TownHallTier::T1)
+        .min()?;
+    Some(UpgradeSlot {
+        town_hall_def,
+        target_tier,
+    })
 }
 
 #[cfg(test)]

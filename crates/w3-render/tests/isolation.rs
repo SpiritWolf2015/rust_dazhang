@@ -358,3 +358,109 @@ fn town_hall_upgrade_events_do_not_change_state_hash() {
         assert_eq!(view, plain.read_view());
     }
 }
+
+/// P8.5c：野怪营地 / leash / 死亡 / 掉落六类事实事件是纯表现层副作用。
+///
+/// 六个事件在 `apply_event` 里都是幂等 no-op（营地 / 掉落 / 收益 / 随机码
+/// 由 `w3-core` 权威状态写入，HUD 只读派生），重复投递按 sequence 去重；
+/// 连续 16 帧重绘、事件重复消费 MUST NOT 反写权威状态、不改
+/// `compute_state_hash()` / `capture_snapshot()` 字节（ADR 0002 §5 / tasks 7.1）。
+#[test]
+fn creep_camp_events_do_not_change_state_hash() {
+    let mut rendered = build_match();
+    let mut plain = build_match();
+    submit_move(&mut rendered);
+    submit_move(&mut plain);
+    let mut library = ModelLibrary::default();
+    library.insert("default", Model::from_json(MODEL_DOC).unwrap());
+    let mut scene = Scene::default();
+    let terrain = simple_terrain();
+
+    for _ in 0..16 {
+        rendered.step();
+        plain.step();
+        let view = rendered.read_view();
+        let _events = rendered.drain_events();
+        let _ = plain.drain_events();
+
+        // 只读视图先建实例；随后投递六类野怪事实事件，并重复投递同一批次
+        // （幂等：按 sequence 去重）。六个分支均为纯表现层 no-op。
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        let creep_events = vec![
+            Event {
+                frame: view.tick,
+                sequence: 30_001,
+                entity: 1,
+                kind: EventKind::CreepCampSeeded,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 30_002,
+                entity: 1,
+                kind: EventKind::CreepEngaged,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 30_003,
+                entity: 1,
+                kind: EventKind::CreepLeashReturning,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 30_004,
+                entity: 1,
+                kind: EventKind::CreepLeashReturned,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 30_005,
+                entity: 1,
+                kind: EventKind::CreepDied,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 30_006,
+                entity: 1,
+                kind: EventKind::ItemDropped,
+            },
+        ];
+        for _ in 0..3 {
+            scene.consume(
+                FrameInput {
+                    view: &view,
+                    events: &creep_events,
+                },
+                &library,
+            );
+        }
+        scene.interpolate_all(0.5);
+        let _vertices = scene.build_vertices(&terrain);
+
+        assert_eq!(
+            scene.applied_events(),
+            creep_events.len() as u64,
+            "reason=creep_events_are_deduplicated"
+        );
+        assert_eq!(
+            rendered.compute_state_hash(),
+            plain.compute_state_hash(),
+            "reason=creep_event_consumption_keeps_state_hash"
+        );
+        assert_eq!(
+            rendered.capture_snapshot(),
+            plain.capture_snapshot(),
+            "reason=creep_event_consumption_keeps_snapshot"
+        );
+        assert_eq!(
+            view,
+            plain.read_view(),
+            "reason=creep_event_consumption_keeps_read_view"
+        );
+    }
+}

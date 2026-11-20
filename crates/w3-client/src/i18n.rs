@@ -88,6 +88,40 @@ pub struct Texts {
     pub town_hall_cancelled: &'static str,
     /// 已登记主城等级条数标签。
     pub town_hall_tier_count: &'static str,
+    /// 野怪营地 HUD 标题 / 计数标签（P8.5c / tasks 7.2）。
+    pub creep_camps: &'static str,
+    /// 无野怪营地数据提示。
+    pub creep_empty: &'static str,
+    /// 已全清营地标签。
+    pub creep_cleared: &'static str,
+    /// 存活野怪标签。
+    pub creep_alive: &'static str,
+    /// 野怪血条标签。
+    pub creep_hp: &'static str,
+    /// leash 阶段标签。
+    pub creep_phase: &'static str,
+    /// 掉落标记标签。
+    pub creep_drops: &'static str,
+    /// 击杀收益标签。
+    pub creep_rewards: &'static str,
+    /// 经验收益标签。
+    pub creep_xp: &'static str,
+    /// 金币收益标签。
+    pub creep_gold: &'static str,
+    /// 事实事件计数标签。
+    pub creep_events: &'static str,
+    /// 营地装配事实事件标签。
+    pub creep_seeded: &'static str,
+    /// 野怪索敌事实事件标签。
+    pub creep_engaged: &'static str,
+    /// 野怪归巢开始事实事件标签。
+    pub creep_leash_returning: &'static str,
+    /// 野怪归巢完成事实事件标签。
+    pub creep_leash_returned: &'static str,
+    /// 野怪死亡事实事件标签。
+    pub creep_died: &'static str,
+    /// 道具掉落事实事件标签。
+    pub item_dropped: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
@@ -139,4 +173,21 @@ pub const ZH: Texts = Texts {
     town_hall_completed: "Completed",
     town_hall_cancelled: "Cancelled",
     town_hall_tier_count: "Tiers",
+    creep_camps: "Creep Camps",
+    creep_empty: "no camp data",
+    creep_cleared: "Cleared",
+    creep_alive: "Alive",
+    creep_hp: "Creep",
+    creep_phase: "Phase",
+    creep_drops: "Drops",
+    creep_rewards: "Rewards",
+    creep_xp: "XP",
+    creep_gold: "Gold",
+    creep_events: "Draws",
+    creep_seeded: "Seeded",
+    creep_engaged: "Engaged",
+    creep_leash_returning: "Returning",
+    creep_leash_returned: "Returned",
+    creep_died: "Died",
+    item_dropped: "Dropped",
 };

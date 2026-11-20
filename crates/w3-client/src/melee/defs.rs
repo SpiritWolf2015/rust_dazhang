@@ -12,7 +12,7 @@
 //! `DEFAULT_UNIT_DEF` / `SOLDIER` / `BARRACKS` 等既有入口行为不变。
 //! P8.5b 主城升级需求链另用独立 `8xxx` 段真实定义，不属于两族 / 中立分段，
 //! 也不改既有命令行为。分段差异只经既有 `defs_hash` 字段天然覆盖，
-//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 5）与快照头部布局
+//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 6）与快照头部布局
 //! （ADR 0002）。
 //!
 //! P8.1 人族完整化：在人族段 `1xx` 追加远程 / 反重甲 / 人口 / 祭坛 /
@@ -28,7 +28,7 @@
 //! 数值差异只以常量相对大小表达、标 `[取舍]`、引用 R2 / R5，MUST NOT
 //! 冒充经典事实或参考项目结论（design D1 / D10 / C6）。新增定义仍是
 //! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3（P8.5a 起为 4、
-//! P8.5b 起为 5；本行属历史沿革叙述，按先例保留并加夹注）。
+//! P8.5b 起为 5、P8.5c 起为 6；本行属历史沿革叙述，按先例保留并加夹注）。
 //!
 //! P8.5a 英雄复活接入：真实对局装配在 [`synthetic_definitions`] 内经纯链式
 //! [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与祭坛 / 英雄类别集合，
@@ -48,13 +48,23 @@
 //! 需求链与两条真实定义经 `compute_defs_hash` 无条件进入 `defs_hash` /
 //! `content_hash()` 快照头部，故接入后内容哈希必变；反向验证同源重建 MUST
 //! 同样登记，避免判别力被稀释（CODEBUDDY.md §5）。
+//!
+//! P8.5c 野怪营地接入：真实对局装配在 [`synthetic_definitions`] 末尾再链式
+//! [`FrozenDefinitions::with_creep_camps`] 登记野怪冻结常量、营地脚本、掉落表
+//! 与中立类别。全部是合成 / 原创编译期整数 `[待核]`，营地脚本引用的野怪
+//! DefId 注册为真实 `UnitDef` 且由定义层类别判定，掉落表只用既有 `EffectDef`
+//! 组合；MUST NOT 新增真实 glTF 模型键或读取本机资产（ADR 0001 / Q8）。
+//! 四段冻结定义经 `compute_defs_hash` 无条件进入 `defs_hash` /
+//! `content_hash()` 快照头部，故 client 装配层内容哈希必变；上层 golden hash
+//! 示例不依赖本装配，二者层次 MUST NOT 混淆（R-k）。反向验证同源重建 MUST
+//! 同步登记野怪段，避免段差异稀释既有 A-B 断言（CODEBUDDY.md §5）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_core::{
-    AbilityDef, DefId, EffectDef, EffectKind, FrozenDefinitions, ItemDef,
-    SYNTHETIC_REVIVE_CONSTANTS, SYNTHETIC_TOWN_HALL_CONSTANTS, SimFixed, TownHallTier, UnitDef,
-    UpgradeDef,
+    AbilityDef, CampScript, DefId, DropSet, DropTable, EffectDef, EffectKind, FrozenDefinitions,
+    ItemDef, NeutralCategory, SCALE, SYNTHETIC_CREEP_CONSTANTS, SYNTHETIC_REVIVE_CONSTANTS,
+    SYNTHETIC_TOWN_HALL_CONSTANTS, SimFixed, TownHallTier, UnitDef, UpgradeDef,
 };
 
 // 新类别槽位编号（表现层装配查表键，**不是** `EntityId`，MUST NOT 进入
@@ -186,6 +196,40 @@ pub const NEUTRAL_TREE: DefId = 902;
 pub const TIER2_UNIT: DefId = 8101;
 /// 要求 T2 解锁的二线科技 DefId（合成原创 `[待核]`，注册为真实 `UpgradeDef`）。
 pub const TIER2_TECH: DefId = 8102;
+
+// ---------------------------------------------------------------------------
+// 野怪营地 / 掉落冻结段 DefId（P8.5c / Q8「最小闭环」）
+//
+// 全部为合成 / 原创编译期整数 `[待核]`、零资产、刻意非经典命名，落在独立
+// `9xxx` 段，避开既有基线 / 两族 / 中立资源 / P8.5b `8xxx` 段与
+// `town_hall_upgrade_hud.rs` 已占用的 `9_101` 测试常量。野怪 DefId 同时注册
+// 为真实 `UnitDef` 与 `CreepHostile` 类别；两个道具 DefId 只登记地面物品
+// 类别与掉落表效果，不新增真实 glTF 模型键或本机导出数据。
+// ---------------------------------------------------------------------------
+/// 合成野怪单位 DefId（`CreepHostile` 类别，`[待核]`）。
+pub const CREEP_UNIT: DefId = 9301;
+/// 必定掉落的合成道具 DefId（`GroundItemOwnerless` 类别，`[待核]`）。
+pub const CREEP_ITEM_ALWAYS: DefId = 9401;
+/// 互斥组二选一的合成道具 DefId（`GroundItemOwnerless` 类别，`[待核]`）。
+pub const CREEP_ITEM_CHOICE: DefId = 9402;
+/// 合成营地编号（真实装配回归使用，`[待核]`）。
+pub const CREEP_CAMP_ID: u32 = 7;
+/// 合成营地脚本编号（`[待核]`）。
+pub const CREEP_CAMP_SCRIPT: u32 = 41;
+/// 合成掉落表编号（`[待核]`）。
+pub const CREEP_DROP_TABLE: u32 = 91;
+/// 必定掉落互斥组编号（`[待核]`）。
+pub const CREEP_DROP_SET_ALWAYS: u32 = 1;
+/// 二选一互斥组编号（`[待核]`）。
+pub const CREEP_DROP_SET_CHOICE: u32 = 2;
+/// 营地 home 锚点 x（Q47.16 raw，合成整数 `[待核]`）。
+pub const CREEP_HOME_X: i64 = 2 * SCALE;
+/// 营地 home 锚点 y（Q47.16 raw，合成整数 `[待核]`）。
+pub const CREEP_HOME_Y: i64 = 2 * SCALE;
+/// 单个野怪击杀经验（合成整数 `[待核]`）。
+pub const CREEP_XP: i64 = 24;
+/// 单个野怪击杀金币（合成整数 `[待核]`）。
+pub const CREEP_GOLD: i64 = 12;
 
 /// 开局选择的种族（定义层参数，纯表现层 / 装配层数据）。
 ///
@@ -416,7 +460,7 @@ fn unit_with_mana(
 /// **相对大小**表达、标 `[取舍]`，是本项目在 R2 / R5 / R5.1 / R5.3
 /// `[已核]` 框架下的原创取舍，不是参考项目得来的经典事实（design D1 / D10）。
 /// 新增定义只改变 `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），
-/// 不改 `SNAPSHOT_VERSION`（当前 5）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// 不改 `SNAPSHOT_VERSION`（当前 6）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5a 起额外经 [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与
 /// 两族祭坛 / 英雄类别集合，使真实对局的复活命令面可达（Q3 / D2 / R1.2）。
 /// P8.5b 起再经 [`FrozenDefinitions::with_town_hall_upgrade`] 登记主城升级冻结
@@ -424,7 +468,12 @@ fn unit_with_mana(
 /// 写进 `units` / `upgrades` 表，使 `Train` / `Research` 在 T1 被拒、T2 完成后
 /// 能生成实体 / 结算科技效果（Q3 / Q4 / D2 / R1.2）。新增定义只改变
 /// `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），不改
-/// `SNAPSHOT_VERSION`（当前 5）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// `SNAPSHOT_VERSION`（当前 6）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// P8.5c 起再经 [`FrozenDefinitions::with_creep_camps`] 登记野怪冻结常量、
+/// 营地脚本、掉落表与中立类别；`9301` 野怪 DefId 同时写进 `units` 表，
+/// `9401` / `9402` 只作为掉落表与类别登记的道具 DefId，不新增资产 / 模型键。
+/// 这些段只改变 client 装配层 `content_hash()`；内核 `golden_hash.rs` 示例
+/// 使用独立固定配置，不依赖本函数，MUST NOT 声称其 golden hash 随之改变。
 pub fn synthetic_definitions() -> FrozenDefinitions {
     let units = vec![
         // 既有基线定义（1..=6），既有入口行为不变。
@@ -471,6 +520,9 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
         // P8.5b T2 需求链真实定义：`complete_production` 查表后生成二线单位实体。
         // 数值为合成原创 `[待核]`，不与既有种族 / 中立段重合。
         (TIER2_UNIT, unit(150, 4, 26, 300, 2, 8)),
+        // P8.5c 合成野怪单位：生命刻意压低，便于真实装配 CPU 回归经既有
+        // `Attack` 命令面稳定清野；数值同样为原创 `[待核]`、零资产。
+        (CREEP_UNIT, unit(50, 6, 5, 2, 0, 1)),
     ];
     let abilities = vec![
         (
@@ -640,6 +692,76 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
     ]
     .into_iter()
     .collect();
+    // P8.5c：营地脚本 / 掉落表 / 中立类别全为合成原创编译期整数 `[待核]`。
+    // 营地脚本只引用已注册为真实 `UnitDef` 的野怪 DefId；掉落表走
+    // 「表 → 互斥 set → 概率条目」分层与既有 `EffectDef` 组合，MUST NOT
+    // 引入 JASS VM、本机资产或真实 glTF 模型键（R7.6 / Q8 / ADR 0001）。
+    let camp_scripts: BTreeMap<u32, CampScript> = [(
+        CREEP_CAMP_SCRIPT,
+        CampScript {
+            tier: 1,
+            xp: CREEP_XP,
+            gold: CREEP_GOLD,
+            home_x: CREEP_HOME_X,
+            home_y: CREEP_HOME_Y,
+            drop_table: CREEP_DROP_TABLE,
+            creep_defs: vec![CREEP_UNIT, CREEP_UNIT],
+        },
+    )]
+    .into_iter()
+    .collect();
+    let drop_tables: BTreeMap<u32, DropTable> = [(
+        CREEP_DROP_TABLE,
+        DropTable {
+            sets: [
+                (
+                    CREEP_DROP_SET_ALWAYS,
+                    DropSet {
+                        entries: [(CREEP_ITEM_ALWAYS, 100u32)].into_iter().collect(),
+                    },
+                ),
+                (
+                    CREEP_DROP_SET_CHOICE,
+                    DropSet {
+                        entries: [(CREEP_ITEM_ALWAYS, 60u32), (CREEP_ITEM_CHOICE, 40u32)]
+                            .into_iter()
+                            .collect(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            effects: [
+                (
+                    CREEP_ITEM_ALWAYS,
+                    EffectDef {
+                        kind: EffectKind::BuffStat,
+                        amount: 2,
+                        duration_frames: 10,
+                    },
+                ),
+                (
+                    CREEP_ITEM_CHOICE,
+                    EffectDef {
+                        kind: EffectKind::Heal,
+                        amount: 5,
+                        duration_frames: 0,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        },
+    )]
+    .into_iter()
+    .collect();
+    let neutral_categories: BTreeMap<DefId, NeutralCategory> = [
+        (CREEP_UNIT, NeutralCategory::CreepHostile),
+        (CREEP_ITEM_ALWAYS, NeutralCategory::GroundItemOwnerless),
+        (CREEP_ITEM_CHOICE, NeutralCategory::GroundItemOwnerless),
+    ]
+    .into_iter()
+    .collect();
     FrozenDefinitions::new(units, abilities, items, upgrades)
         .expect("melee defs: reason=invalid_synthetic_definitions")
         .with_hero_revive(SYNTHETIC_REVIVE_CONSTANTS, altar_defs, hero_defs)
@@ -647,6 +769,12 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
             SYNTHETIC_TOWN_HALL_CONSTANTS,
             town_hall_defs,
             tier_requirements,
+        )
+        .with_creep_camps(
+            SYNTHETIC_CREEP_CONSTANTS,
+            camp_scripts,
+            drop_tables,
+            neutral_categories,
         )
 }
 
@@ -684,7 +812,7 @@ mod tests {
     use crate::input::derive_movability;
 
     /// `units` 类别定义编号全集（既有 6 个基线 + 分段 + P8.1 人族六类 +
-    /// P8.2 兽族六类 + P8.5b T2 需求链单位）。
+    /// P8.2 兽族六类 + P8.5b T2 需求链单位 + P8.5c 合成野怪单位）。
     fn all_unit_ids() -> Vec<DefId> {
         vec![
             PEASANT,
@@ -716,6 +844,7 @@ mod tests {
             NEUTRAL_GOLD_MINE,
             NEUTRAL_TREE,
             TIER2_UNIT,
+            CREEP_UNIT,
         ]
     }
 
@@ -746,6 +875,9 @@ mod tests {
     /// P8.5b T2 需求链真实单位（供内容敏感性回归复用）。
     const TIER2_NEW_UNIT_IDS: [DefId; 1] = [TIER2_UNIT];
 
+    /// P8.5c 合成野怪单位（供内容敏感性回归复用）。
+    const CREEP_NEW_UNIT_IDS: [DefId; 1] = [CREEP_UNIT];
+
     /// 新增升级定义编号全集（P8.1 / P8.2 + P8.5b T2 需求链科技）。
     const NEW_UPGRADE_IDS: [DefId; 5] = [
         UPGRADE_WEAPONS,
@@ -755,12 +887,14 @@ mod tests {
         TIER2_TECH,
     ];
 
-    /// 新增 `UnitDef` 编号全集（P8.1 / P8.2 新类别 + P8.5b T2 需求链单位）。
+    /// 新增 `UnitDef` 编号全集（P8.1 / P8.2 新类别 + P8.5b T2 需求链单位 +
+    /// P8.5c 合成野怪单位）。
     fn new_unit_ids() -> Vec<DefId> {
         HUMAN_NEW_UNIT_IDS
             .iter()
             .chain(ORC_NEW_UNIT_IDS.iter())
             .chain(TIER2_NEW_UNIT_IDS.iter())
+            .chain(CREEP_NEW_UNIT_IDS.iter())
             .copied()
             .collect()
     }
@@ -768,7 +902,7 @@ mod tests {
     #[test]
     fn definitions_cover_all_kinds_and_are_stable() {
         let defs = synthetic_definitions();
-        assert_eq!(defs.units().len(), 29, "reason=definition_count");
+        assert_eq!(defs.units().len(), 30, "reason=definition_count");
         assert!(defs.units().contains_key(&PEASANT));
         assert!(defs.units().contains_key(&SOLDIER));
         assert!(defs.units().contains_key(&TOWN_HALL));
@@ -788,6 +922,27 @@ mod tests {
             );
         }
         assert!(defs.units().contains_key(&TIER2_UNIT));
+        assert!(defs.units().contains_key(&CREEP_UNIT));
+        assert!(
+            defs.is_creep(CREEP_UNIT),
+            "reason=creep_category_registered"
+        );
+        assert!(
+            defs.is_ground_item(CREEP_ITEM_ALWAYS),
+            "reason=always_drop_category_registered"
+        );
+        assert!(
+            defs.is_ground_item(CREEP_ITEM_CHOICE),
+            "reason=choice_drop_category_registered"
+        );
+        assert!(
+            defs.camp_script(CREEP_CAMP_SCRIPT).is_some(),
+            "reason=camp_script_registered"
+        );
+        assert!(
+            defs.drop_table(CREEP_DROP_TABLE).is_some(),
+            "reason=drop_table_registered"
+        );
         let tier2_unit = defs
             .units()
             .get(&TIER2_UNIT)
@@ -827,7 +982,8 @@ mod tests {
 
         // 分段只约束 units 类别：三个非 units 类别沿用类别内唯一 ID；
         // P8.1 / P8.2 新增技能 / 升级取类别内唯一 ID，不占 `1xx` / `2xx` 段位。
-        // P8.5b tier 需求链另用独立 `8xxx` 段真实定义，不与两族 / 中立段冲突。
+        // P8.5b tier 需求链另用独立 `8xxx` 段真实定义，P8.5c 野怪 / 道具
+        // 再用 `9xxx` 段，均不与两族 / 中立资源段冲突。
         assert_eq!(ABILITY, 10);
         assert_eq!(HERO_ABILITY, 11);
         assert_eq!(ORC_HERO_ABILITY, 12);
@@ -848,6 +1004,8 @@ mod tests {
             ORC_UPGRADE_ARMOR,
             ITEM,
             TIER2_TECH,
+            CREEP_ITEM_ALWAYS,
+            CREEP_ITEM_CHOICE,
         ];
         let category_unique: BTreeSet<DefId> = category_ids.into_iter().collect();
         assert_eq!(
@@ -870,6 +1028,21 @@ mod tests {
         assert!(
             !baseline.contains(&TIER2_UNIT) && !baseline.contains(&TIER2_TECH),
             "reason=tier2_ids_not_baseline"
+        );
+        // P8.5c 野怪 / 道具 DefId 落在独立 `9xxx` 段，不与基线 / `8xxx` /
+        // `9_101` 测试常量重合；道具只登记类别与掉落表，不属于 units 类别。
+        assert!(
+            (9000..10_000).contains(&CREEP_UNIT),
+            "reason=creep_unit_independent_segment"
+        );
+        assert!(
+            (9000..10_000).contains(&CREEP_ITEM_ALWAYS)
+                && (9000..10_000).contains(&CREEP_ITEM_CHOICE),
+            "reason=drop_defs_independent_segment"
+        );
+        assert!(
+            !baseline.contains(&CREEP_UNIT),
+            "reason=creep_id_not_baseline"
         );
         let segmented = [
             HUMAN_PEASANT,
@@ -894,6 +1067,7 @@ mod tests {
             ORC_HERO,
             NEUTRAL_GOLD_MINE,
             NEUTRAL_TREE,
+            CREEP_UNIT,
         ];
         assert!(
             segmented.iter().all(|id| !baseline.contains(id)),
@@ -970,6 +1144,7 @@ mod tests {
         // P8.5b：四张定义表均从 `a` 的公开 getter 克隆，新增 8101 / 8102
         // 真实定义自动同源；再同源登记主城升级段，避免冻结常量 / 类别 / 需求链
         // 差异让「少一个单位即改哈希」恒真、稀释反向验证判别力（CODEBUDDY §5）。
+        // P8.5c：野怪营地段同样同源登记，使缺陷态仍只差「少一个单位」。
         .with_hero_revive(
             *a.revive_constants(),
             a.altar_defs().clone(),
@@ -979,6 +1154,12 @@ mod tests {
             *a.town_hall_constants(),
             a.town_hall_defs().clone(),
             a.tier_requirements().clone(),
+        )
+        .with_creep_camps(
+            *a.creep_constants(),
+            a.camp_scripts().clone(),
+            a.drop_tables().clone(),
+            a.neutral_categories().clone(),
         );
         assert_ne!(a.content_hash(), smaller.content_hash());
     }
@@ -1015,6 +1196,7 @@ mod tests {
         // P8.5b：四张定义表均从 `full` 的公开 getter 克隆，新增 8101 / 8102
         // 真实定义自动同源；同理同源登记主城升级段（冻结常量 / 类别 / 需求链），
         // 避免段差异让 `content_hash()` 反向验证判别力被稀释（CODEBUDDY §5）。
+        // P8.5c：再同源登记野怪营地段，使每个反例只差被删除的条目。
         FrozenDefinitions::new(units, abilities, items, upgrades)
             .expect("melee defs: reason=rebuild_definitions_failed")
             .with_hero_revive(
@@ -1027,14 +1209,22 @@ mod tests {
                 full.town_hall_defs().clone(),
                 full.tier_requirements().clone(),
             )
+            .with_creep_camps(
+                *full.creep_constants(),
+                full.camp_scripts().clone(),
+                full.drop_tables().clone(),
+                full.neutral_categories().clone(),
+            )
     }
 
     /// 退化哈希（缺陷态）：只散列 P8.0 基线 16 个 `UnitDef`，忽略全部
-    /// P8.1 / P8.2 / P8.5b 新增单位 / 技能 / 升级，模拟 `compute_defs_hash`
-    /// 漏接新定义的退化实现。仅用于反向验证，生产实现 MUST 用 `content_hash()`。
+    /// P8.1 / P8.2 / P8.5b / P8.5c 新增单位 / 技能 / 升级，模拟
+    /// `compute_defs_hash` 漏接新定义的退化实现。仅用于反向验证，生产实现
+    /// MUST 用 `content_hash()`。
     ///
-    /// BASELINE 刻意**保持 P8.0 的 16 个**、不塞入兽族新 ID 或 P8.5b 的
-    /// `8xxx` 真实定义：它要模拟的正是「退化哈希完全不覆盖任何新定义」。
+    /// BASELINE 刻意**保持 P8.0 的 16 个**、不塞入兽族新 ID、P8.5b 的
+    /// `8xxx` 真实定义或 P8.5c 的 `9301` 野怪定义：它要模拟的正是
+    /// 「退化哈希完全不覆盖任何新定义」。
     /// 若把新 ID 加进 BASELINE，退化哈希就会对漏接新定义变敏感，
     /// `reverse_validation_..._degenerate_fails` 的「缺陷态断言必失败」证据
     /// 随即失真（退化实现反而能通过断言），对称于 P8.1 的处理方式。
@@ -1057,7 +1247,7 @@ mod tests {
     /// 证明新增定义经既有 `compute_defs_hash` 进 `defs_hash` / `content_hash`
     /// 快照头部，而不是新增权威状态字段（ADR 0002 / C3）。P8.2 覆盖 6 个
     /// 兽族 `UnitDef` + 1 个 `AbilityDef` + 2 个 `UpgradeDef`；P8.5b 再覆盖
-    /// 8101 / 8102 两条 T2 需求链真实定义。
+    /// 8101 / 8102 两条 T2 需求链真实定义，P8.5c 再覆盖 `9301` 野怪单位。
     #[test]
     fn defs_hash_detects_each_new_definition() {
         let full = synthetic_definitions();
@@ -1089,7 +1279,8 @@ mod tests {
 
     /// 反向验证·修复态：正式实现（`content_hash()`）通过「少一个定义即改哈希」
     /// 断言。与下一条「缺陷态」构成 `CODEBUDDY.md` §5 的反例元断言证据对。
-    /// P8.5b 把 8101 / 8102 两条 T2 需求链真实定义也纳入同一断言。
+    /// P8.5b 把 8101 / 8102 两条 T2 需求链真实定义、P8.5c 把 `9301`
+    /// 野怪单位也纳入同一断言。
     #[test]
     fn reverse_validation_defs_hash_formal_passes_the_assertion() {
         let full = synthetic_definitions();
@@ -1113,7 +1304,7 @@ mod tests {
     /// 反向验证·缺陷态：退化哈希（只覆盖 P8.0 基线 16 个定义）对漏接的
     /// 任一新定义**不敏感**，故「少一个定义即改哈希」断言在退化实现下必然
     /// 失败；同时证明正式 `content_hash()` 能抓出同一缺陷（元断言防退化）。
-    /// 兽族新定义与 P8.5b 两条 T2 需求链真实定义同样经真实
+    /// 兽族新定义、P8.5b 两条 T2 需求链真实定义与 P8.5c 野怪单位同样经真实
     /// `FrozenDefinitions::new` 重建后喂给 `content_hash()` 与退化哈希，
     /// 不是旁路模拟（D9 / tasks 6.1）。
     #[test]
@@ -1460,6 +1651,8 @@ mod tests {
         // 避免类别集合差异让 `content_hash()` 断言失真（CODEBUDDY §5）。
         // P8.5b：四张定义表均从 `full` 的公开 getter 克隆，新增 8101 / 8102
         // 真实定义自动同源；同源登记主城升级段，使缺陷态仍只差「mana 退化」。
+        // P8.5c：同源登记野怪营地段，避免新冻结段差异稀释该缺陷态的
+        // `content_hash()` 判别力（CODEBUDDY §5）。
         .with_hero_revive(
             *full.revive_constants(),
             full.altar_defs().clone(),
@@ -1469,6 +1662,12 @@ mod tests {
             *full.town_hall_constants(),
             full.town_hall_defs().clone(),
             full.tier_requirements().clone(),
+        )
+        .with_creep_camps(
+            *full.creep_constants(),
+            full.camp_scripts().clone(),
+            full.drop_tables().clone(),
+            full.neutral_categories().clone(),
         )
     }
 

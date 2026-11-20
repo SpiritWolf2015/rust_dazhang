@@ -6,12 +6,17 @@
 //! P2 竖切：订单、寻路、动态占地与群体规划全部由本模块独占，并同时进入
 //! 状态哈希、快照与 `first_difference()`（见 ADR 0002 / 0004）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::angle::{Angle, slope_speed_scale};
 use crate::command::{Command, CommandError, CommandKind, CommandQueue};
+use crate::creep::{
+    CREEP_RNG_SALT, CampState, CreepCampState, CreepDeathNotice, CreepState, GROUND_ITEM_ID_BASE,
+    GroundItemState, ItemInstanceState, KillReward, LeashPhase, NEUTRAL_OWNER, NeutralCategory,
+    RngDraw,
+};
 use crate::entity::{EntityId, EntityStore};
-use crate::fixed::{SimFixed, isqrt};
+use crate::fixed::{SCALE, SimFixed, isqrt};
 use crate::frame::{Frame, FrameClock};
 use crate::gameplay::{
     AuraState, BehaviorSpec, CastRuntime, DefId, EffectDef, EffectKind, EffectOutcome,
@@ -182,8 +187,29 @@ pub enum EventKind {
     TownHallUpgradeCompleted,
     /// P8.5b 主城升级取消 / 中止事实事件（事务性退款，供只读表现层消费）。
     TownHallUpgradeCancelled,
+    /// P8.5c 野怪营地按冻结脚本初始化完成（frame-0 系统级命令的事实事件）。
+    /// `Event.entity` 携带营地实例 id；野怪实体逐个发既有 `Spawned`。
+    CreepCampSeeded,
+    /// P8.5c 野怪进入 ENGAGED 追击（供只读表现层消费，不进权威状态）。
+    CreepEngaged,
+    /// P8.5c 野怪切 RETURNING 归巢（leash 越界，MUST NOT 无限追出营地）。
+    CreepLeashReturning,
+    /// P8.5c 野怪归巢到 home 阈值内恢复 IDLE（R8.5）。
+    CreepLeashReturned,
+    /// P8.5c 野怪被击杀（共享结算服务的幂等死亡通知，Q6 / R8.3 / R8.6）。
+    CreepDied,
+    /// P8.5c 地面物品掉落事实事件（无主，`Event.entity` 为地面物品 id）。
+    ItemDropped,
 }
 
+/// 只读事实事件（`drain_events()` 返回 owned 拷贝，序号不重置）。
+///
+/// P8.5c 不新增 payload 字段：按 D6「扩展只读事实事件」，新增
+/// `EventKind` 变体即可；`Event.entity` 携带营地 id / 野怪 `EntityId` /
+/// 地面物品 id，表现层由 owned `Snapshot.creep_camps` 与
+/// [`RtsMatch::creep_camps`] 只读投影查表得到「掉什么 / 给谁经验」
+/// 等全部事实（复用 P8.5a `ReviveHudModel::derive(snapshot, events)` 范式）。
+/// 历史事件不进入状态哈希 / 快照 / `first_difference()`（ADR 0002 §5-6）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Event {
     pub frame: u64,
@@ -238,6 +264,10 @@ pub struct RtsMatch {
     /// 独立字段，MUST NOT 复用 `PlayerEconomy.upgrades` 布尔旗标；
     /// 同时进入状态哈希、快照与差异诊断（ADR 0002 §6-8 / C5）。
     town_hall: TownHallUpgradeState,
+    /// P8.5c 野怪营地与掉落全部权威状态（Q1 / D1 / D5）。
+    /// 字段私有，仅本结构可写；全部落 `BTreeMap` / `BTreeSet`
+    /// 确定性有序容器，同时进入状态哈希、快照与差异诊断。
+    creep_camps: CreepCampState,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -412,6 +442,12 @@ impl RtsMatch {
 
     /// 由 app 层注入冻结地图数据；`w3-core` 不读取文件、不依赖内容层。
     pub fn create_with_world(config: MatchConfig, world: StaticWorld) -> Self {
+        // P8.5c：事件驱动掉落流由 `seed` 经同一整数 LCG 域分隔派生（Q6）。
+        // 主流 `rng` 仍每帧恰好消耗一次（ADR 0002 §4），掉落流只在死亡
+        // 事件按稳定 `EntityId` 顺序消费，流状态随快照恢复。
+        let mut creep_camps = CreepCampState::default();
+        creep_camps.rng_state = next_rng(config.seed ^ CREEP_RNG_SALT);
+        creep_camps.next_ground_item_id = GROUND_ITEM_ID_BASE;
         Self {
             config,
             clock: FrameClock::new(config.logic_fps),
@@ -428,6 +464,7 @@ impl RtsMatch {
             gameplay: WorldGameplayState::default(),
             revive: HeroReviveState::default(),
             town_hall: TownHallUpgradeState::default(),
+            creep_camps,
         }
     }
 
@@ -515,8 +552,17 @@ impl RtsMatch {
         // 5. 移动积分（转向 / 坡度 / 到达 / 拥堵）。
         self.advance_motions(frame);
 
+        // 5b. P8.5c 野怪 leash / 归巢 AI：复用既有 `Attack` / `Move` 命令面与
+        //     `run_ai` 确定性重算框架，内部命令不写回队列、不注入重放，
+        //     产出的攻击对汇入本帧同一结算序列（R8.5 / D3）。
+        self.run_creep_ai(frame, &mut attacks);
+
         // 6. 同帧攻击结算，按稳定顺序、带存活复核。
         self.resolve_attacks(frame, &attacks);
+
+        // 6b. P8.5c 共享结算服务：按稳定 `EntityId` 顺序只结算一次击杀收益
+        //     与掉落（R6.1 / R6.5 / R8.3 / R7.2 / R8.6）。
+        self.settle_creep_deaths(frame);
 
         // 7. 冻结本帧玩法命令并执行（费用事务提交 + 效果链，统一结算）。
         let due_gameplay = self.gameplay.commands.freeze_frame(frame);
@@ -535,13 +581,17 @@ impl RtsMatch {
         //     剩余帧递减 / 事务性退款 / tier 递进，两者分离见主 gameplay-systems/spec.md:19）。
         self.advance_town_hall_queue(frame);
 
+        // 8d. P8.5c 地面物品实例冷却逐帧推进（R7.5 独立状态，位置不变）。
+        self.advance_ground_items();
+
         // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
         self.resolve_victory(frame);
 
         // 10. 确定性 AI：每帧重算，内部命令不写回命令队列、不注入重放。
         self.run_ai(frame);
 
-        // 11. 每帧消耗一次随机流；该流属于权威状态。
+        // 11. 每帧消耗一次随机流；该流属于权威状态（主 LCG 主流，
+        //     与事件驱动掉落流 `creep_camps.rng_state` 分离，ADR 0002 §4）。
         self.rng = next_rng(self.rng);
 
         // 12. 提交本帧。
@@ -621,16 +671,9 @@ impl RtsMatch {
                 if !self.is_actionable(attacker, command.player_id) || !self.is_alive(target) {
                     return;
                 }
-                if let Some(unit) = self.units.get_mut(&attacker) {
-                    unit.pending.clear();
-                    unit.order = Order::Attack { target };
-                    unit.goal = None;
-                    unit.path.clear();
-                    unit.path_index = 0;
-                    unit.blocked_frames = 0;
-                    unit.group = 0;
-                }
-                attacks.push((attacker, target));
+                // P8.5c：玩家命令与野怪 AI 共用同一订单赋值路径（复用既有
+                // `Attack` 命令面，不新设 AI × lockstep 架构，D3）。
+                self.order_attack(attacker, target, attacks);
             }
             CommandKind::SetObstacle { id, x, y, w, h } => {
                 let area = GridArea { x, y, w, h };
@@ -653,7 +696,16 @@ impl RtsMatch {
     }
 
     /// 可操作校验：存活、归属匹配，且未被眩晕（`Stun` Buff 仍在生效）。
+    ///
+    /// P8.5c：中立登记的野怪 / 地面物品 MUST NOT 响应任何玩家命令
+    /// （R1.4 / R8.1 / Q7，消除 `player_id == 0` 旁路）。野怪 AI 走
+    /// `run_creep_ai` 复用的 `order_attack` / `assign_move` 内部路径，
+    /// 不经 `is_actionable`。地面物品不是 `EntityStore` 实体，天然不
+    /// 出现在 `Move` 生成集合、位置不变。
     fn is_actionable(&self, entity: EntityId, player_id: u8) -> bool {
+        if self.creep_camps.neutral.contains_key(&entity) {
+            return false;
+        }
         self.entities.contains(entity)
             && self.units.get(&entity).is_some_and(|unit| {
                 unit.alive
@@ -1007,6 +1059,16 @@ impl RtsMatch {
                 if let Some((gameplay, owner, max_hp)) = hero_snapshot {
                     self.register_hero_death(target, frame, gameplay, owner, max_hp);
                 }
+                // P8.5c：野怪死亡通知进共享结算服务（幂等，Q6 / tasks 4.2）。
+                // 击杀方 owner 用于 R8.3 金币结算；MUST NOT 由表现层反写。
+                if self.creep_camps.creeps.contains_key(&target) {
+                    let killer_owner = self
+                        .units
+                        .get(&attacker)
+                        .map(|unit| unit.owner)
+                        .unwrap_or(NEUTRAL_OWNER);
+                    self.notify_creep_death(target, attacker, killer_owner);
+                }
             }
             if outcome == EffectOutcome::Applied {
                 self.push_event(frame, target, EventKind::AttackHit);
@@ -1017,11 +1079,36 @@ impl RtsMatch {
         }
     }
 
+    /// 既有 `Attack` 命令面的内部订单赋值，供 `apply` 与野怪 AI 共用（D3）。
+    fn order_attack(
+        &mut self,
+        attacker: EntityId,
+        target: EntityId,
+        attacks: &mut Vec<(EntityId, EntityId)>,
+    ) {
+        if let Some(unit) = self.units.get_mut(&attacker) {
+            unit.pending.clear();
+            unit.order = Order::Attack { target };
+            unit.goal = None;
+            unit.path.clear();
+            unit.path_index = 0;
+            unit.blocked_frames = 0;
+            unit.group = 0;
+        }
+        attacks.push((attacker, target));
+    }
+
     fn push_event(&mut self, frame: Frame, entity: EntityId, kind: EventKind) {
+        self.push_event_raw(frame, entity.value(), kind);
+    }
+
+    /// 供营地 id / 地面物品 id 这类非 `EntityStore` 实体发只读事实事件
+    /// （`Event.entity` 是 `u64`，营地实例 id 与地面物品稳定 ID 段直接用）。
+    fn push_event_raw(&mut self, frame: Frame, entity: u64, kind: EventKind) {
         self.events.push(Event {
             frame: frame.value(),
             sequence: self.next_event_seq,
-            entity: entity.value(),
+            entity,
             kind,
         });
         self.next_event_seq += 1;
@@ -1275,6 +1362,11 @@ impl RtsMatch {
                 player,
                 frame,
             ),
+            // P8.5c：frame-0 系统级营地装配命令（Q5 / D6），与击杀 / 掉落
+            // 的 `step()` 内部被动系统解耦；同源校验在 `seed_creep_camp`。
+            GameplayCommandKind::SeedCreepCamp { camp, script } => {
+                self.seed_creep_camp(camp, script, player, frame)
+            }
         }
     }
 
@@ -1891,6 +1983,491 @@ impl RtsMatch {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // P8.5c 野怪营地与掉落（Q1 / Q6 / Q7 / D1–D4 / R8.1–R8.6）
+    // -----------------------------------------------------------------------
+
+    /// 只读 owned 拷贝：野怪营地与掉落的全部权威状态（ADR 0002 §5）。
+    /// 表现层可由本视图 + 事实事件 + `Snapshot.creep_camps` 派生 HUD，
+    /// MUST NOT 反写。`Event` 不新增 payload 字段以免破坏下游字面量构造，
+    /// `Event.entity` 携带营地 / 野怪 / 地面物品 id 供查表（Q5 / D6 / C9）。
+    pub fn creep_camps(&self) -> CreepCampState {
+        self.creep_camps.clone()
+    }
+
+    /// 共享结算服务的死亡通知入口（Q6 / tasks 4.2，幂等）。
+    /// 同一野怪重复投递只登记一次，返回是否首次登记；使用当前整数逻辑
+    /// 帧号，MUST NOT 接受外部帧号 / 墙钟 / 表现层随机源（ADR 0002 §2-4）。
+    pub fn notify_creep_death(
+        &mut self,
+        creep: EntityId,
+        killer: EntityId,
+        killer_owner: u8,
+    ) -> bool {
+        if !self.creep_camps.creeps.contains_key(&creep) {
+            return false;
+        }
+        if self.creep_camps.death_processed.contains(&creep)
+            || self.creep_camps.pending_deaths.contains_key(&creep)
+        {
+            return false;
+        }
+        let frame = self.clock.current();
+        self.creep_camps.pending_deaths.insert(
+            creep,
+            CreepDeathNotice {
+                killer,
+                killer_owner,
+                frame: frame.value(),
+            },
+        );
+        self.push_event(frame, creep, EventKind::CreepDied);
+        true
+    }
+
+    /// frame-0 系统级确定性命令：按冻结 `CampScript` 装配营地与野怪（Q5 / Q7）。
+    /// 同源校验：只接受 `NEUTRAL_OWNER`；冻结脚本 / 中立类别 / 掉落表数据
+    /// 驱动，MUST NOT 用名字白名单或硬编码 DefId（R1.2 / R13.3 / tasks 2.3）。
+    /// 野怪 MUST NOT 挂现有玩家 owner 下 spawn（R8.1 / Q7）。
+    fn seed_creep_camp(&mut self, camp: u32, script_id: u32, player: u8, frame: Frame) {
+        if player != NEUTRAL_OWNER || camp == 0 || script_id == 0 {
+            return;
+        }
+        // 幂等：重放 / 重复提交 MUST NOT 双重注入（R12.4 / tasks 6.1）。
+        if self.creep_camps.camps.contains_key(&camp) {
+            return;
+        }
+        let Some(script) = self.defs.camp_script(script_id).cloned() else {
+            return;
+        };
+        if self.defs.drop_table(script.drop_table).is_none() {
+            return;
+        }
+        // 定义层类别驱动：每个野怪 DefId 都必须登记为中立敌对且有单位定义。
+        let mut spawn_defs = Vec::new();
+        for &def_id in &script.creep_defs {
+            let Some(def) = self.defs.units().get(&def_id).copied() else {
+                return;
+            };
+            if !self.defs.is_creep(def_id) {
+                return;
+            }
+            spawn_defs.push((def_id, def));
+        }
+
+        let mut members = BTreeSet::new();
+        for (index, &(def_id, def)) in spawn_defs.iter().enumerate() {
+            let (ox, oy) = FORMATION_OFFSETS[index % FORMATION_OFFSETS.len()];
+            let x = SimFixed::from_raw(script.home_x.saturating_add(ox.saturating_mul(SCALE)));
+            let y = SimFixed::from_raw(script.home_y.saturating_add(oy.saturating_mul(SCALE)));
+            let id = self.entities.spawn();
+            let mut unit = UnitState::new(
+                x,
+                y,
+                NEUTRAL_OWNER,
+                def.hp,
+                SimFixed::from_raw(def.speed_raw),
+                def.damage,
+                SimFixed::from_raw(def.range_raw),
+            );
+            unit.gameplay.mana = def.mana;
+            unit.gameplay.max_mana = def.mana;
+            self.units.insert(id, unit);
+            self.creep_camps.creeps.insert(
+                id,
+                CreepState {
+                    camp,
+                    def_id,
+                    home_x: script.home_x,
+                    home_y: script.home_y,
+                    phase: LeashPhase::Idle,
+                    target: None,
+                },
+            );
+            self.creep_camps
+                .neutral
+                .insert(id, NeutralCategory::CreepHostile);
+            members.insert(id);
+            self.push_event(frame, id, EventKind::Spawned);
+        }
+        self.creep_camps.camps.insert(
+            camp,
+            CampState {
+                script: script_id,
+                tier: script.tier,
+                home_x: script.home_x,
+                home_y: script.home_y,
+                members,
+                cleared: false,
+            },
+        );
+        self.push_event_raw(frame, u64::from(camp), EventKind::CreepCampSeeded);
+    }
+
+    /// 按稳定 `EntityId` 顺序找 home 锚点 `acquisitionRange` 内最近的玩家
+    /// 单位（R8.1 对所有玩家敌对）。中性登记实体（其它野怪 / 地面物品）
+    /// 不是目标，MUST NOT 依赖名字白名单（R1.2 / R13.3）。
+    fn nearest_creep_target(
+        &self,
+        creep: EntityId,
+        home_x: i64,
+        home_y: i64,
+        range: i64,
+    ) -> Option<EntityId> {
+        let mut best: Option<(EntityId, i128)> = None;
+        for (&id, unit) in &self.units {
+            if id == creep || !unit.alive || self.creep_camps.neutral.contains_key(&id) {
+                continue;
+            }
+            let dx = unit.x.raw().saturating_sub(home_x) as i128;
+            let dy = unit.y.raw().saturating_sub(home_y) as i128;
+            let distance = isqrt(dx * dx + dy * dy);
+            if distance > range as i128 {
+                continue;
+            }
+            let better = match best {
+                None => true,
+                Some((_, best_distance)) => distance < best_distance,
+            };
+            if better {
+                best = Some((id, distance));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
+    /// 野怪 leash / 归巢 `IDLE / ENGAGED / RETURNING` 确定性重算（R8.5 / D3）。
+    /// 复用既有 `Attack` 订单面（`order_attack`）与 `Move` 订单面（`assign_move`）
+    /// 及 `run_ai` 每帧重算框架：内部命令不写回队列、不注入重放；
+    /// `RETURNING` 途中不索敌 / 不反击，MUST NOT 无限追出营地（R8.5）。
+    fn run_creep_ai(&mut self, frame: Frame, attacks: &mut Vec<(EntityId, EntityId)>) {
+        let constants = *self.defs.creep_constants();
+        let period = u64::from(constants.ai_decision_period.max(1));
+        // 稳定 `EntityId` 顺序重算（BTreeMap 键序，ADR 0002 §3）。
+        let ids: Vec<EntityId> = self.creep_camps.creeps.keys().copied().collect();
+        for id in ids {
+            let Some(state) = self.creep_camps.creeps.get(&id).cloned() else {
+                continue;
+            };
+            if !self.is_alive(id) {
+                continue;
+            }
+            let Some((cx, cy)) = self.units.get(&id).map(|unit| (unit.x.raw(), unit.y.raw()))
+            else {
+                continue;
+            };
+            let dx = cx.saturating_sub(state.home_x) as i128;
+            let dy = cy.saturating_sub(state.home_y) as i128;
+            let home_distance = isqrt(dx * dx + dy * dy);
+
+            // 决策点：与 `run_ai` 同构，只在整数帧周期重算路径，
+            // 其余帧沿用既有订单，不写回命令队列、不注入重放。
+            let decision = frame.value() % period == 0;
+            match state.phase {
+                LeashPhase::Idle => {
+                    let found = self.nearest_creep_target(
+                        id,
+                        state.home_x,
+                        state.home_y,
+                        constants.acquisition_range_raw,
+                    );
+                    if let Some(target) = found {
+                        if let Some(creep) = self.creep_camps.creeps.get_mut(&id) {
+                            creep.phase = LeashPhase::Engaged;
+                            creep.target = Some(target);
+                        }
+                        // 追击复用既有 `Move` 命令面，攻击复用既有
+                        // `resolve_attacks` 结算面（`attacks` 队列）。
+                        if decision {
+                            self.chase_target(id, target);
+                        }
+                        attacks.push((id, target));
+                        self.push_event(frame, id, EventKind::CreepEngaged);
+                    }
+                }
+                LeashPhase::Engaged => {
+                    let leash_exceeded = home_distance > constants.leash_radius_raw as i128;
+                    let target_ok = state.target.is_some_and(|target| {
+                        self.is_alive(target) && !self.creep_camps.neutral.contains_key(&target)
+                    });
+                    if leash_exceeded || !target_ok {
+                        // 越界或目标失效：停止追击，切 RETURNING 归巢。
+                        if let Some(creep) = self.creep_camps.creeps.get_mut(&id) {
+                            creep.phase = LeashPhase::Returning;
+                            creep.target = None;
+                        }
+                        self.assign_move(
+                            id,
+                            SimFixed::from_raw(state.home_x),
+                            SimFixed::from_raw(state.home_y),
+                            0,
+                        );
+                        self.push_event(frame, id, EventKind::CreepLeashReturning);
+                    } else if let Some(target) = state.target {
+                        // 每帧确定性重算：决策点重算追击路径，攻击对汇入
+                        // 本帧同一结算序列（不新设 AI × lockstep 架构）。
+                        if decision {
+                            self.chase_target(id, target);
+                        }
+                        attacks.push((id, target));
+                    }
+                }
+                LeashPhase::Returning => {
+                    if home_distance <= constants.return_threshold_raw as i128 {
+                        if let Some(creep) = self.creep_camps.creeps.get_mut(&id) {
+                            creep.phase = LeashPhase::Idle;
+                            creep.target = None;
+                        }
+                        self.stop_unit(id);
+                        self.push_event(frame, id, EventKind::CreepLeashReturned);
+                    } else if frame.value() % period == 0 {
+                        // 归巢途中不索敌 / 不反击，只确定性重算路径。
+                        self.assign_move(
+                            id,
+                            SimFixed::from_raw(state.home_x),
+                            SimFixed::from_raw(state.home_y),
+                            0,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// 追击：复用既有 `Move` 命令面（`assign_move`）向目标重算路径（D3）。
+    fn chase_target(&mut self, creep: EntityId, target: EntityId) {
+        let Some((x, y)) = self.units.get(&target).map(|unit| (unit.x, unit.y)) else {
+            return;
+        };
+        self.assign_move(creep, x, y, 0);
+    }
+
+    /// 共享结算服务：按稳定 `EntityId` 顺序只结算一次击杀收益与掉落
+    /// （R6.1 经验 / R6.5 分摊两环节 / R8.3 金币 / R7.2 掉落 / R8.6 随机码）。
+    /// 掉落随机码复用 match-owned 整数 LCG（独立事件驱动流，由 `seed` 派生），
+    /// 每个互斥 set 恰好消费一次、至多掉一件；消费序列显式进权威状态
+    /// （Q6 / tasks 4.1-4.3 / D2 / D4）。
+    fn settle_creep_deaths(&mut self, frame: Frame) {
+        // 自动巡检：法术击杀 / 直接置死的野怪也进幂等登记（稳定 ID 顺序）。
+        let creep_ids: Vec<EntityId> = self.creep_camps.creeps.keys().copied().collect();
+        for id in creep_ids {
+            if !self.is_alive(id)
+                && !self.creep_camps.death_processed.contains(&id)
+                && !self.creep_camps.pending_deaths.contains_key(&id)
+            {
+                let current = self.clock.current();
+                self.creep_camps.pending_deaths.insert(
+                    id,
+                    CreepDeathNotice {
+                        killer: EntityId::NONE,
+                        killer_owner: NEUTRAL_OWNER,
+                        frame: current.value(),
+                    },
+                );
+                // 法术击杀 / 生命值直接归零也发同一事实事件，供只读表现层
+                // 消费（以 `CreepDied` 解耦掉落服务，tasks 4.2）。
+                self.push_event(frame, id, EventKind::CreepDied);
+            }
+        }
+
+        // 按稳定 `EntityId` 顺序消费（BTreeMap 键序）。
+        let pending: Vec<(EntityId, CreepDeathNotice)> = self
+            .creep_camps
+            .pending_deaths
+            .iter()
+            .map(|(&id, &notice)| (id, notice))
+            .collect();
+        for (creep, notice) in pending {
+            if self.creep_camps.death_processed.contains(&creep) {
+                self.creep_camps.pending_deaths.remove(&creep);
+                continue;
+            }
+            self.creep_camps.death_processed.insert(creep);
+
+            let Some(state) = self.creep_camps.creeps.get(&creep).cloned() else {
+                self.creep_camps.pending_deaths.remove(&creep);
+                continue;
+            };
+            let Some(camp) = self.creep_camps.camps.get(&state.camp).cloned() else {
+                self.creep_camps.pending_deaths.remove(&creep);
+                continue;
+            };
+            let Some(script) = self.defs.camp_script(camp.script).cloned() else {
+                self.creep_camps.pending_deaths.remove(&creep);
+                continue;
+            };
+            let constants = *self.defs.creep_constants();
+            let table = self.defs.drop_table(script.drop_table).cloned();
+            let (death_x, death_y) = self
+                .units
+                .get(&creep)
+                .map(|unit| (unit.x.raw(), unit.y.raw()))
+                .unwrap_or((camp.home_x, camp.home_y));
+
+            // R6.5 第一环节：进入分摊集合（范围 + 存活 + 己方英雄，稳定顺序）。
+            let mut xp_candidates = BTreeSet::new();
+            for (&id, unit) in &self.units {
+                if !unit.alive || unit.owner != notice.killer_owner || unit.gameplay.hero.is_none()
+                {
+                    continue;
+                }
+                let dx = unit.x.raw().saturating_sub(death_x) as i128;
+                let dy = unit.y.raw().saturating_sub(death_y) as i128;
+                if isqrt(dx * dx + dy * dy) <= constants.xp_share_radius_raw as i128 {
+                    xp_candidates.insert(id);
+                }
+            }
+            // R6.5 第二环节：实际入账（整数分摊 + 等级因子，不反写表现层）。
+            // 满级英雄是否参与分摊 `[待核]`：本期不冻结该规则，所有集合内
+            // 英雄统一入账（§14 / R6.5）。
+            let mut xp_credited = BTreeMap::new();
+            let count = xp_candidates.len() as i64;
+            if count > 0 {
+                let total = script.xp.saturating_mul(constants.hero_level_xp_factor) / 100;
+                let share = total / count;
+                for &hero in &xp_candidates {
+                    if let Some(unit) = self.units.get_mut(&hero) {
+                        if let Some(state) = unit.gameplay.hero.as_mut() {
+                            state.xp = state.xp.saturating_add(share);
+                        }
+                    }
+                    xp_credited.insert(hero, share);
+                }
+            }
+
+            // R8.3 金币给击杀方（MUST NOT 由表现层反写 `PlayerEconomy.gold`）。
+            let gold = if notice.killer_owner == NEUTRAL_OWNER {
+                0
+            } else {
+                script.gold
+            };
+            if gold != 0 {
+                let economy = self
+                    .gameplay
+                    .players
+                    .entry(notice.killer_owner)
+                    .or_default();
+                economy.gold = economy.gold.saturating_add(gold);
+            }
+
+            // R7.2 / R8.6 掉落：每个互斥 set 恰好一次随机码消费、至多一件。
+            let mut drops = Vec::new();
+            if let Some(table) = table {
+                for (&set_id, set) in &table.sets {
+                    let total_weight = set.total_weight();
+                    let rng_before = self.creep_camps.rng_state;
+                    let rng_after = next_rng(rng_before);
+                    self.creep_camps.rng_state = rng_after;
+                    let roll = if total_weight == 0 {
+                        0
+                    } else {
+                        rng_after % total_weight
+                    };
+                    let mut picked = None;
+                    let mut cumulative = 0u64;
+                    for (&item_def, &weight) in &set.entries {
+                        cumulative = cumulative.saturating_add(u64::from(weight));
+                        if roll < cumulative && self.defs.is_ground_item(item_def) {
+                            picked = Some(item_def);
+                            break;
+                        }
+                    }
+                    let seq = self.creep_camps.next_rng_seq;
+                    self.creep_camps.next_rng_seq = seq.saturating_add(1);
+                    if let Some(item_def) = picked {
+                        let ground_id = self.creep_camps.next_ground_item_id;
+                        self.creep_camps.next_ground_item_id = ground_id.saturating_add(1);
+                        let instance = EntityId::new(ground_id).unwrap_or(EntityId::NONE);
+                        let effect = table.effects.get(&item_def).copied().unwrap_or(EffectDef {
+                            kind: EffectKind::BuffStat,
+                            amount: 0,
+                            duration_frames: 0,
+                        });
+                        self.creep_camps.ground_items.insert(
+                            instance,
+                            GroundItemState {
+                                item_def,
+                                camp: state.camp,
+                                x: death_x,
+                                y: death_y,
+                                instance,
+                            },
+                        );
+                        // R7.5：同名道具每个实例独立充能 / 冷却；R7.6：效果
+                        // 走既有 `EffectDef`，MUST NOT 引入 JASS VM。
+                        self.creep_camps.item_instances.insert(
+                            instance,
+                            ItemInstanceState {
+                                item_def,
+                                charges: constants.item_charges,
+                                cooldown_frames: constants
+                                    .item_cooldown_frames
+                                    .saturating_add((roll % 4) as u32),
+                                effect,
+                            },
+                        );
+                        self.creep_camps
+                            .neutral
+                            .insert(instance, NeutralCategory::GroundItemOwnerless);
+                        self.push_event_raw(frame, ground_id, EventKind::ItemDropped);
+                        drops.push(instance);
+                    }
+                    self.creep_camps.rng_draws.insert(
+                        seq,
+                        RngDraw {
+                            seq,
+                            frame: frame.value(),
+                            creep,
+                            table: script.drop_table,
+                            set: set_id,
+                            rng_before,
+                            rng_after,
+                            roll,
+                            picked,
+                        },
+                    );
+                }
+            }
+
+            self.creep_camps.kill_rewards.insert(
+                creep,
+                KillReward {
+                    creep,
+                    camp: state.camp,
+                    frame: frame.value(),
+                    killer: notice.killer,
+                    killer_owner: notice.killer_owner,
+                    xp_candidates,
+                    xp_credited,
+                    gold,
+                    drops,
+                },
+            );
+            self.creep_camps.pending_deaths.remove(&creep);
+        }
+
+        // 营地全清标记（R11.5 / R12.4 重开无残留的正向判据）。
+        let camp_ids: Vec<u32> = self.creep_camps.camps.keys().copied().collect();
+        for camp_id in camp_ids {
+            let all_dead = self
+                .creep_camps
+                .camps
+                .get(&camp_id)
+                .is_some_and(|camp| camp.members.iter().all(|id| !self.is_alive(*id)));
+            if let Some(camp) = self.creep_camps.camps.get_mut(&camp_id) {
+                camp.cleared = all_dead;
+            }
+        }
+    }
+
+    /// 地面物品实例冷却按稳定 `EntityId` 顺序逐帧推进（R7.5 独立状态）。
+    /// 位置永不变化（R1.4），且地面物品不是 `EntityStore` 实体。
+    fn advance_ground_items(&mut self) {
+        for instance in self.creep_camps.item_instances.values_mut() {
+            instance.cooldown_frames = instance.cooldown_frames.saturating_sub(1);
+        }
+    }
+
     pub fn read_view(&self) -> WorldView {
         let units = &self.units;
         WorldView {
@@ -1981,6 +2558,9 @@ impl RtsMatch {
         self.revive.hash(&mut hasher);
         // P8.5b：主城升级三组权威状态（等级 / 升级队列 / 费用登记）必须进入哈希。
         self.town_hall.hash(&mut hasher);
+        // P8.5c：野怪 / 营地 / 中立归属 / 地面物品 / 实例 / 收益 /
+        // 确定性随机码消费序列全部权威状态必须进入哈希（Q1 / D5）。
+        self.creep_camps.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -2043,6 +2623,10 @@ impl RtsMatch {
         }
         // P8.5b：三组主城升级权威状态按同一稳定顺序定位首个差异字段。
         if let Some(field) = self.town_hall.first_difference(&other.town_hall) {
+            return Some(field);
+        }
+        // P8.5c：野怪营地与掉落全部权威状态按同一稳定顺序定位首个差异字段。
+        if let Some(field) = self.creep_camps.first_difference(&other.creep_camps) {
             return Some(field);
         }
         None
@@ -2128,6 +2712,9 @@ impl RtsMatch {
             gameplay: self.gameplay.clone(),
             revive: self.revive.clone(),
             town_hall: self.town_hall.clone(),
+            // P8.5c：帧 N 提交后的完整状态必须含野怪营地与掉落权威状态
+            // （含事件驱动随机流状态与消费序列，ADR 0002 §6-8 / Q6）。
+            creep_camps: self.creep_camps.clone(),
         }
     }
 
@@ -2279,6 +2866,7 @@ impl RtsMatch {
             gameplay: snapshot.gameplay.clone(),
             revive: snapshot.revive.clone(),
             town_hall: snapshot.town_hall.clone(),
+            creep_camps: snapshot.creep_camps.clone(),
         })
     }
 }
@@ -2615,12 +3203,12 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本为 5（P8.5b 新增主城升级权威状态），只读视图消费与快照往返均不
+    /// 快照版本为 6（P8.5c 新增野怪营地与掉落权威状态），只读视图消费与快照往返均不
     /// 改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 5, "snapshot version must be 5");
-        assert_eq!(SIM_VERSION, 5, "sim version must be 5");
+        assert_eq!(SNAPSHOT_VERSION, 6, "snapshot version must be 6");
+        assert_eq!(SIM_VERSION, 6, "sim version must be 6");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -2694,9 +3282,9 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 5"
+            "snapshot version must stay 6"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 5");
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 6");
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

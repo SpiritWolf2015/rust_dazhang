@@ -19,6 +19,7 @@
 
 pub mod angle;
 pub mod command;
+pub mod creep;
 pub mod entity;
 pub mod fixed;
 pub mod frame;
@@ -31,6 +32,11 @@ pub mod world;
 
 pub use angle::{ANGLE_SCALE, Angle, slope_speed_scale};
 pub use command::{Command, CommandError, CommandKind, CommandQueue};
+pub use creep::{
+    CREEP_RNG_SALT, CampScript, CampState, CreepCampState, CreepConstants, CreepDeathNotice,
+    CreepState, DropSet, DropTable, GROUND_ITEM_ID_BASE, GroundItemState, ItemInstanceState,
+    KillReward, LeashPhase, NEUTRAL_OWNER, NeutralCategory, RngDraw, SYNTHETIC_CREEP_CONSTANTS,
+};
 pub use entity::{EntityId, EntityStore};
 pub use fixed::{FRACTIONAL_BITS, FixedError, SCALE, SimFixed, isqrt};
 pub use frame::{Frame, FrameClock};

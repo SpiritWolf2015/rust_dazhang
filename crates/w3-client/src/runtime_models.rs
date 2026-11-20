@@ -41,7 +41,7 @@
 //! `resolve_with_reason` 消费它 → `instance.model_key` 命中 `Scene` 注入的
 //! 真实 `BakedModel` → `Scene::expand_model` 展开真实 glTF 网格（Q3 链路）。
 //! 全程只读、确定性（同一 `WorldView` + 同一选族 → 同一键），MUST NOT 进
-//! 权威状态 / FNV-1a 状态哈希 / 由 `SNAPSHOT_VERSION`（当前 5）定义的快照
+//! 权威状态 / FNV-1a 状态哈希 / 由 `SNAPSHOT_VERSION`（当前 6）定义的快照
 //! / `first_difference()`（ADR 0002）。
 //!
 //! ## 未覆盖的部分（如实登记，交 leader 判断是否需回到用户拍板）

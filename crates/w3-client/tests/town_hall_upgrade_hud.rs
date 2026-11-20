@@ -67,6 +67,7 @@ fn spawn(x: i64, y: i64, hp: i64, sequence: u32) -> Command {
 /// P8.5b：四张定义表均从 `full` 的公开 getter 克隆，新增 8101 / 8102
 /// 真实定义自动同源；缺陷态仍**故意不登记**主城升级段，使 A-B 对照只差
 /// 该段（`with_town_hall_upgrade`），不误伤反向验证设计意图。
+/// P8.5c：同源登记野怪营地段，使缺陷态仍只差「主城升级段」。
 fn degenerate_definitions() -> FrozenDefinitions {
     let full = synthetic_definitions();
     let units: Vec<(DefId, UnitDef)> = full.units().iter().map(|(&id, &def)| (id, def)).collect();
@@ -88,6 +89,12 @@ fn degenerate_definitions() -> FrozenDefinitions {
             *full.revive_constants(),
             full.altar_defs().clone(),
             full.hero_defs().clone(),
+        )
+        .with_creep_camps(
+            *full.creep_constants(),
+            full.camp_scripts().clone(),
+            full.drop_tables().clone(),
+            full.neutral_categories().clone(),
         )
 }
 
@@ -112,7 +119,7 @@ fn upgrade_fixture() -> (RtsMatch, FrozenDefinitions, StaticWorld, u64, EntityId
     sim.step();
 
     let mut snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v5");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
     let economy = snapshot.gameplay.players.entry(PLAYER).or_default();
     economy.gold = 100_000;
     economy.lumber = 100_000;
@@ -172,7 +179,7 @@ fn tier_gate_fixture_with_defs(
     sim.step();
 
     let mut snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v5");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
     {
         let hall = snapshot
             .positions
@@ -620,9 +627,9 @@ fn upgrade_command_is_accepted_in_real_assembly_and_builds_state() {
     sim.step();
 
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v5");
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
-    // `Some(TownHallUpgradeState)`：v5 快照携带已填充的顶层权威状态。
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
+    // `Some(TownHallUpgradeState)`：v6 快照携带已填充的顶层权威状态。
     let state: TownHallUpgradeState = snapshot.town_hall.clone();
     let item = state
         .queue
@@ -902,7 +909,7 @@ fn hud_redraw_keeps_state_hash_and_snapshot_bytes() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=snapshot_version_5 frame={frame}"
+            "reason=snapshot_version_6 frame={frame}"
         );
     }
 }
@@ -986,6 +993,12 @@ fn upgrade_slot_is_definition_driven_not_name_whitelist() {
             [(TIER2_UNIT, TownHallTier::T2)]
                 .into_iter()
                 .collect::<BTreeMap<DefId, TownHallTier>>(),
+        )
+        .with_creep_camps(
+            *defs.creep_constants(),
+            defs.camp_scripts().clone(),
+            defs.drop_tables().clone(),
+            defs.neutral_categories().clone(),
         );
     assert!(
         alt_defs.is_town_hall(non_classic),
@@ -1150,7 +1163,7 @@ fn real_assembly_t2_accepts_tier2_train_research_and_settles_effects() {
     advance_until_tier2_effects_dual(&mut primary, &mut replay, producer_a, before_alive);
 
     let snapshot = primary.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v5");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
     assert_eq!(
         snapshot.defs_hash,
         defs.content_hash(),

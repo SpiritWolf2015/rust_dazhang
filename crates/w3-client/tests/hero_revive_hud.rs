@@ -59,7 +59,8 @@ fn spawn(x: i64, y: i64, hp: i64, sequence: u32) -> Command {
 /// P8.5b：四张定义表均从 `full` 的公开 getter 克隆，新增 8101 / 8102
 /// 真实定义自动同源；再同源登记主城升级段，使缺陷态仍只差「未登记复活段」
 /// 这一项，避免 `content_hash()` 判别力被新增段差异稀释
-/// （CODEBUDDY §5 / 不静默降级）。
+/// （CODEBUDDY §5 / 不静默降级）。P8.5c：同源登记野怪营地段，保持该
+/// 缺陷态仍只差「未登记复活段」，不让新冻结段稀释判别力。
 fn degenerate_definitions() -> FrozenDefinitions {
     let full = synthetic_definitions();
     let units: Vec<(DefId, UnitDef)> = full.units().iter().map(|(&id, &def)| (id, def)).collect();
@@ -80,6 +81,12 @@ fn degenerate_definitions() -> FrozenDefinitions {
             *full.town_hall_constants(),
             full.town_hall_defs().clone(),
             full.tier_requirements().clone(),
+        )
+        .with_creep_camps(
+            *full.creep_constants(),
+            full.camp_scripts().clone(),
+            full.drop_tables().clone(),
+            full.neutral_categories().clone(),
         )
 }
 
@@ -313,8 +320,8 @@ fn revive_command_is_accepted_in_real_assembly() {
     sim.step();
 
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v5");
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
     let item = snapshot
         .revive
         .queue
@@ -520,7 +527,7 @@ fn hud_redraw_keeps_state_hash_and_snapshot_bytes() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=snapshot_version_5 frame={frame}"
+            "reason=snapshot_version_6 frame={frame}"
         );
     }
 }

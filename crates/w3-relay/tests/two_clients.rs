@@ -3,17 +3,18 @@
 //! 两个 `RtsMatch` 经自建 relay 的权威帧命令流推进，只传输入命令、
 //! 不传状态；逐帧比对 `compute_state_hash()`、`read_view()`、
 //! `first_difference()` 与双方 checksum 交换结果。权威帧批轮转携带全部
-//! 13 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
-//! `CancelRevive` 与 PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`），
-//! 验证联机与本地行为一致、联机唯一推进点仍是 `w3_net::apply_frame`。
+//! 14 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
+//! `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall` 与
+//! PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`），验证联机与本地
+//! 行为一致、联机唯一推进点仍是 `w3_net::apply_frame`。
 //! 注意：此处两个客户端实例跑在内存回环总线上；真实 UDP 双进程实机
 //! 验收另见 `vera20k-mapping.md`，对应 tasks.md 的人工验收项。
 
 use w3_core::{
     Command, CommandKind, EffectDef, EffectKind, EntityId, Frame, GameplayCommand,
-    GameplayCommandKind, MatchConfig, RtsMatch, SimFixed, StaticWorld, TownHallTier,
+    GameplayCommandKind, MatchConfig, NEUTRAL_OWNER, RtsMatch, SimFixed, StaticWorld, TownHallTier,
 };
-use w3_net::packet::{Packet, PacketKind};
+use w3_net::packet::{Packet, PacketKind, encode_commands, parse_reject};
 use w3_net::transport::{Endpoint, LoopbackBus, LoopbackTransport, SharedBus, Transport};
 use w3_net::{ClientSession, apply_frame};
 use w3_relay::Relay;
@@ -70,15 +71,17 @@ fn commands_for(frame: u64, player: u8) -> Vec<Command> {
     )]
 }
 
-/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 13 类
+/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 14 类
 /// `GameplayCommandKind`（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
-/// `CancelRevive` 与 PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`），
+/// `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall` 与
+/// PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`），
 /// 且 `execute_frame` 落在原定帧，验证玩法命令仍在原定 `ExecuteFrame`
 /// 执行一次、不改变帧序、两端逐帧哈希一致。
 fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
     let entity = EntityId::new(u64::from(player)).unwrap();
     let altar = EntityId::new(u64::from(player) + 100).unwrap();
-    let kind = match frame % 13 {
+    let slot = frame % 14;
+    let kind = match slot {
         0 => GameplayCommandKind::Cast {
             caster: entity,
             ability: 10,
@@ -118,16 +121,25 @@ fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
         11 => GameplayCommandKind::CancelRevive { hero: entity },
         // 12：PROTOCOL_VERSION 5 新增的独立主城升级命令（cancel 为变体内
         // 字段，false 发起 / true 取消，二者共用同一变体、同一 tag 35）。
-        _ => GameplayCommandKind::UpgradeTownHall {
+        12 => GameplayCommandKind::UpgradeTownHall {
             town_hall: entity,
             town_hall_def: 17,
             target_tier: TownHallTier::T2,
             cancel: false,
         },
+        // 13：PROTOCOL_VERSION 6 新增的系统级营地装配命令（单一变体、
+        // tag 36）。camp / script 为冻结定义层的营地实例 id / 脚本 id，
+        // player_id 必须是 NEUTRAL_OWNER(0)，由 w3-core 同源校验。
+        _ => GameplayCommandKind::SeedCreepCamp {
+            camp: 90 + u32::from(player),
+            script: 41,
+        },
     };
+    // 系统级命令由中立归属提交；其余 13 类沿用玩家 id，保证两端一致。
+    let command_player = if slot == 13 { NEUTRAL_OWNER } else { player };
     vec![GameplayCommand::new(
         Frame::new(frame),
-        player,
+        command_player,
         (frame as u32) + 1000,
         kind,
     )]
@@ -267,6 +279,47 @@ fn two_clients_stay_bit_identical_every_frame_with_gameplay_commands() {
     );
     assert_eq!(harness.sim1.drain_events(), harness.sim2.drain_events());
     assert_eq!(harness.bus.borrow().faults.dropped, 0);
+}
+
+#[test]
+fn relay_rejects_version_five_carrying_seed_creep_camp() {
+    // 对应 P8.5b `relay_rejects_version_four_carrying_new_variant` 范式：
+    // 伪装成旧 v5 的 Input 包，载荷携带 PROTOCOL_VERSION 6 新增的
+    // SeedCreepCamp 玩法命令（tag 36）；v6 relay 必须在解码 payload
+    // 之前回 Reject("protocol version mismatch")，玩法命令字段绝不
+    // 被静默当作 unknown field 丢弃后进入权威命令流。
+    let bus = LoopbackBus::shared();
+    let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+    let mut client = LoopbackTransport::new(1, &bus);
+
+    let gameplay = GameplayCommand::new(
+        Frame::new(0),
+        NEUTRAL_OWNER,
+        1,
+        GameplayCommandKind::SeedCreepCamp {
+            camp: 91,
+            script: 41,
+        },
+    );
+    let payload = encode_commands(&[], &[gameplay]).unwrap();
+    let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+        .encode()
+        .unwrap();
+    stale[4] = 5;
+
+    client.send(&Endpoint::Loopback(0), &stale).unwrap();
+    relay.poll().unwrap();
+    let (_, bytes) = client.recv().unwrap().unwrap();
+    let reject = Packet::decode(&bytes).unwrap();
+    assert_eq!(reject.kind, PacketKind::Reject);
+    assert_eq!(
+        parse_reject(&reject.payload).unwrap(),
+        "protocol version mismatch"
+    );
+    assert!(
+        relay.log().is_empty(),
+        "stale payload must not enter command stream"
+    );
 }
 
 #[test]

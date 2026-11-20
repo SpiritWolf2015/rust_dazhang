@@ -156,3 +156,34 @@
 - 拍板结果与四件套收敛口径一致，四件套零改动、指纹 `022531ee…` 不变、不重走门、不触发规格解锁；`status: pending` fail-closed 期间未绕过门禁、不改门禁、不 self-approve、不拿沉默当授权。
 - 规格锁定后按 `CODEBUDDY.md §9` 进入 `/opsx:apply`（`sim-owner` → `net-owner` → `client-owner` → `spec-steward` / `docs-owner` → `critic` 代码门），该阶段属用户本轮授权「直到规格门再请你拍板」之后的新阶段，须用户后续明确指令再启动。
 - 人工边界：本地 commit 由 AI（中文描述 + Conventional Commits 英文 type 前缀）；`push` / `fetch` / `pull` / `clone`、CI 双平台、真窗口人工验收、`/opsx:archive` 归档全部人工独占，本轮未执行；不冒充真窗口 / CI 通过、不声称跨平台 / 全平台已验证。
+
+## 应用阶段处置（2026-11-20，`/opsx:apply` 收尾，leader 回填）
+
+> 边界：本小节只写进 `decision-memo.md`（该文件不在 `spec_artifact_fingerprint` 哈希集合，`tools/verify_all.py:169-189`）；`proposal.md` / `specs/**` / `design.md` / `tasks.md` **正文一个字未改**，仅翻 `tasks.md` 复选框（归一化、不触发 `CODEBUDDY.md §8` 规格解锁），指纹保持 `022531ee69b9…`。用户续接指令「继续」满足规格门纪要 `:157`「须用户后续明确指令再启动」后，按 `CODEBUDDY.md §9` 进入本阶段。
+
+### 串行委派与代码门
+
+leader 串行委派 `sim-owner`（`w3-core` 唯一实现所有者，主 owner）→ `net-owner`（`w3-net` / `w3-relay`）→ `client-owner`（`w3-client` / `w3-render`）→ `spec-steward`（`openspec/` / `docs/decisions/`）→ `docs-owner`（`CODEBUDDY.md` / `CONTRIBUTING.md` / 路线图）→ `critic` 只读代码门。`critic` 一轮代码门：**`blocker: 0`、建议「批准（可转入 leader 收尾）」**，10 项复核清单逐项符合、B 类（须改四件套触发规格解锁）为零、无需退回任何 owner。
+
+### Q1–Q12 兑现与关键事实
+
+- **方向 A（Q1）**：真改 `w3-core` 内核，新增顶层权威状态 `creep_camps: CreepCampState`（12 组 `BTreeMap` / `BTreeSet`：野怪 / 营地 / 中立归属 / leash `IDLE/ENGAGED/RETURNING` 状态机与 home 锚点 / 击杀收益 / 地面物品 / 物品实例 / 确定性随机码消费序列），全部同步进 FNV-1a 状态哈希 / v6 `Snapshot.creep_camps` / `first_difference()`；掉落表 / 营地脚本 / 中立类别 / 野怪数值为 `FrozenDefinitions` 冻结常量、经 `compute_defs_hash` 进 `defs_hash` / `content_hash` 快照头部（与新增权威状态严格区分）。B「表现层只读派生、内核零改动」/ A′「混合」降级验收未采用。
+- **命令与事件（Q5）**：`GameplayCommandKind::SeedCreepCamp { camp: u32, script: u32 }`（`hash_gameplay_command` kind 码 14，frame-0 系统级命令、`player_id = NEUTRAL_OWNER(0)`）；6 个 `EventKind` 事实变体 `CreepCampSeeded` / `CreepEngaged` / `CreepLeashReturning` / `CreepLeashReturned` / `CreepDied` / `ItemDropped`（`Event` 结构不变、不新增 payload，避免下游 `Event { .. }` 字面量 E0063）；表现层经 `Snapshot.creep_camps` / `RtsMatch::creep_camps()` 只读投影 + 事实事件消费。
+- **版本链（Q4 / ADR 0005）**：`SNAPSHOT_VERSION = SIM_VERSION = 6`（旧 v5 按 `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本迁移）；`PROTOCOL_VERSION = 6`（proto 只追加 `GameplaySeedCreepCamp seed_creep_camp = 36;`、`reserved 14 to 32` 保持、tag 33/34/35 不动；旧版本 `VersionMismatch` / relay `Reject` 明确拒绝；canonical 约束保持；payload 13→14 变体双向穷尽映射）；两套版本号独立、全仓硬断言 5→6 零残留（含 `real_map_e2e.rs` 多行断言、`snapshot_v5` 措辞）。
+- **随机码 / 中立归属（Q6 / Q7）**：复用 match-owned 整数 LCG（主每帧流不变）+ `seed` 派生独立事件驱动流 `rng_state`，按死亡事件稳定 `EntityId` 顺序消费、`rng_draws` 消费序列显式编码进哈希 / 快照 / `first_difference()`；死亡幂等、互斥组不重复、同 seed 重放逐帧一致。`NEUTRAL_OWNER = 0` + 冻结定义 `NeutralCategory` 表达 R8.1「对所有玩家敌对」/ R1.1「无主地面物品」，`is_actionable` 拒绝中立登记实体、野怪 / 地面物品 MUST NOT 响应玩家 `Move`，野怪不挂现有玩家 owner 下 spawn。
+- **零资产 / 范围（Q2 / Q3 / Q8）**：全部数值为合成原创编译期整数 `[待核]`，干净环境零文件 IO、仓库零资产；拾取 / 六格背包 / 商店 / 回城卷轴留 P8.5d，R8.4 昼夜睡眠 / AI 玩家清野 / 迷雾下野怪可见性 / 中立建筑交互留后续，均如实登记范围外、不冒充已解决。
+- **反向验证（Q9）**：`CODEBUDDY.md §5` 形态①（测试内构造反例 + 元断言防退化），20 项成对 `formal_passes_*` / `degenerate_fails_the_same_assertion`，退化经 `restore_snapshot` / `create_with_definitions` / 公开命令入口 / `step()` 生产路径注入；覆盖哈希·快照漏接 / 墙钟非确定随机源 / 击杀无收益·表现层反写 / 消费序列漏接 / 命令编码漏接 五类 + 重开残留 / 无限追击 / defs_hash / 中立归属。**仅形态①、不冒充形态②**（缺陷态红 / 修复态绿两条命令输出留档）。
+- **回归与门禁**：`cargo test -p w3-core --test determinism`（26 项）全绿；正向玩法回归 20 项、反向验证 20 项；`cargo test --workspace`（**串行单实例**）全绿（`critic` 代码门复跑 653 passed / 0 failed）；`cargo fmt --all -- --check` / `check_encoding.py` 358 files / `check_source_conventions.py` 102 files / `git diff --check` / `openspec validate p8-creep-camps --strict` 零 warning / `verify_all.py`（`env -u PYTHONIOENCODING PYTHONUTF8=0` 复现 CI 真实 locale）→ `Verification OK` / `spec gate OK`；四件套指纹 `022531ee…` 未变、规格保持锁定。
+- **golden hash（R-k 层次）**：按新实现重取 Windows 侧基线 `final_hash=0xc802b63cd6c55b74` / sha256 `c5927605…` / 41 行 1371 字节（P8.5b v5 `0xce89a7baf4d711ec` 失效、不沿用、不声称逐字节不变）；`golden_hash.rs` 用 `FrozenDefinitions::empty()` / `create_with_world`、不依赖 `synthetic_definitions()`，client 装配层 `content_hash()` 变化属不同层次、不假称重取 / 不声称客户端快照逐字节不变；ADR 0002 复核记录追加 2 行、ADR 0005 修订记录追加 1 段（均纯追加、不删改 §1–§8 正文与历史条目）；`openspec/config.yaml:13,56` / `CODEBUDDY.md:50` / `CONTRIBUTING.md:35` / 路线图 `:138`「当前 5」→「当前 6」+ P8.5c bump 6 沿革。
+
+### 真实装配可达性（P8.5b 代码门 blocker 1 教训未重演）
+
+`client-owner` 把 `with_creep_camps(SYNTHETIC_CREEP_CONSTANTS, camp_scripts, drop_tables, neutral_categories)` 真实接进 `synthetic_definitions()`，`CREEP_UNIT = 9301` 注册为真实 `UnitDef` + `NeutralCategory::CreepHostile`（非 P8.5b 仅登记占位 DefId 导致 `tier_requirement_met()` 恒放行的不可达态）；新增 4 类真实装配 CPU 回归（`real_assembly_seeds_creep_camp_and_camps_are_non_empty` / `real_assembly_camp_clear_settles_rewards_drops_and_frame_hashes_match` / `real_assembly_unseeded_and_seeded_same_script_are_distinct` / `reverse_validation_missing_creep_segment_makes_seed_unreachable`），经 `synthetic_definitions()` → `create_with_definitions` → `submit_gameplay_command(SeedCreepCamp)` → `step()` 既有确定性生产路径证明清野 / 收益 / 掉落可达、逐帧哈希一致。`critic` 代码门第 3 项复核判「符合、未重演」。
+
+### 已知限制 / 人工边界（如实登记，不冒充通过）
+
+- **真窗口当前无 `SeedCreepCamp` frame-0 接线**：`setup.rs` / `melee.rs` 未注入系统级 `SeedCreepCamp`，野怪营地在真窗口 UI / AI 触发层不可达（Q2 / Q3 / Q6 / Q11 已拍板范围外承接，与 P8.5b 归档「`U` 键 / 命令卡升级格位 / AI 注入仍无接线」同款）。**CPU 回归层达成不等于真窗口人工验收通过**；`tasks.md` 8.1–8.6 全部保持 `- [ ]`「未执行 / 待人工」，不以离屏 / CPU 回归冒充，清单未勾前不得归档（豁免须用户明确拍板）。
+- **Q10 / residual**：其余 17 份主 specs 历史硬禁令（含 9 处「MUST NOT 新增权威状态 / `w3-core` 零改动 / `SNAPSHOT_VERSION` 仍 3」）、所有 `## Purpose` 概述残留（OpenSpec 1.17.0 delta 不合并）、R-a「15 / 17」措辞、R-e「野怪不响应 `Move`」未单列 ADDED Scenario（代码已由 `is_actionable` + 反例覆盖）、R-f / R-h / R-n / R-o、参考锚缩写路径、`>500 characters` warning、`model_index` 串行单实例门禁（R-j / R-m）、活文档 `WC3-MELEE-RULES.md` 附录旧行号 / 补锚、R-a～R-o 全部按用户规格门拍板「登记已知限制直接锁定」承接，由 `docs-owner` 后续独立 change 统一收口。
+- **6 份 MODIFIED delta 正文残留提案阶段措辞**：`spec-steward` tasks 7.7 复核发现 6 份 delta 正文保留「按推荐方向 A（待规格门 Q1 拍板）」「按 Q4 推荐（待规格门拍板）」等呈现性文字；规范性 THEN 已与方向 A 一致、不构成正面冲突，改任一正文会触发 `CODEBUDDY.md §8` 规格解锁重走门，故只登记不修订。
+- **跨平台 / CI（Q12）**：沿用 ADR 0002 复核记录 Windows / Debian 12 x86_64 / rustc 1.99.1（v3）已验证；**v4 / v5 / v6 的 Debian 12 侧逐字节比对仍待 VM / 人工**，macOS / ARM64 / 其它 rustc 待验证，不声称全平台达成或有新验证；CI 双平台 `verify_all.py` 本会话未运行、未收到 GitHub Action run 链接 / 成功确认，不冒充 CI 已绿。
+- **人工边界**：本地 `git add` / `commit` 由 AI（中文描述 + Conventional Commits 英文 type 前缀、首行 ≤ 72 字符、一个 change 一个 commit，四件套 + `decision-memo.md` + 5 个新测试文件一并纳入）；`push` / `fetch` / `pull` / `clone`、CI 双平台、真窗口人工验收、`/opsx:archive` 归档全部人工独占，本轮未执行。本地 commit 产生后仍待人工 push；不拿沉默当授权、不由实现方自行放行规格门。

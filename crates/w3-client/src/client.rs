@@ -4,7 +4,7 @@
 //! 本模块严格遵守 ADR 0002 §5：不持有 `&mut RtsMatch` 的字段写入路径、
 //! 不新增权威状态字段；命令只经 `submit_command` / `submit_gameplay_command`
 //! 提交，`step()` 只以无参形式调用。累加器余数、`alpha` 等全部是表现层
-//! 专属数据，不进入 FNV-1a 状态哈希与 `SNAPSHOT_VERSION`（当前 5）快照。
+//! 专属数据，不进入 FNV-1a 状态哈希与 `SNAPSHOT_VERSION`（当前 6）快照。
 
 use w3_core::{
     Command, CommandError, Event, GameplayCommand, GameplayCommandError, MatchConfig, RtsMatch,

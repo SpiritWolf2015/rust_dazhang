@@ -30,6 +30,21 @@
 //! **Debian 12 x86_64 侧 v4 / v5 离线逐字节比对仍待人工 / VM 执行；macOS、
 //! 其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项**，不得据本记录
 //! 声称跨平台确定性已达成或本 change 有新验证（Q7）。
+//!
+//! P8.5c 基线重取（Q4 / Q12 / tasks 7.5）：新增野怪 / 营地 / 中立归属 /
+//! leash 状态机 / 掉落事实 / 地面物品 / 物品实例 / 击杀收益登记 / 确定性
+//! 随机码消费序列等权威状态进入 `compute_state_hash()`，野怪冻结常量段 /
+//! 营地脚本 / 掉落表分层 / 中立类别登记进入 `compute_defs_hash()`，
+//! `SNAPSHOT_VERSION` / `SIM_VERSION` bump 5→6，逐帧哈希布局再次实质
+//! 变化，故基线必变、不沿用 P8.5b v5 值、不声称逐字节不变。
+//!
+//! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按 v6 实现重取：
+//! - 41 行 / 1371 字节，`final_hash=0xc802b63cd6c55b74`；
+//! - 整份文本 sha256 `c5927605d534348e4e92db6ecb4042a42abfa7cd9077fe70da5283717c4f7d7e`。
+//! 上文 P8.5b 的 `final_hash=0xce89a7baf4d711ec` 已失效，不沿用。
+//! **Debian 12 x86_64 侧 v4 / v5 / v6 逐字节离线比对仍待人工 / VM 执行；
+//! macOS、其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项**，
+//! 不得据本记录声称双平台 / 全平台确定性已验证或本 change 有新验证（Q12）。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

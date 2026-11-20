@@ -17,14 +17,21 @@
 //! v5 由 P8.5b 引入：追加主城升级三组权威状态（等级 / 升级队列 /
 //! 费用登记），并同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 5。旧 v4
 //! 及更早快照按版本不匹配明确拒绝，不提供跨版本迁移（ADR 0002 §7 / Q1）。
+//!
+//! v6 由 P8.5c 引入：追加野怪 / 营地 / 中立归属 / leash / home 状态机 /
+//! 掉落事实 / 地面物品 / 物品实例 / 击杀收益登记 / 确定性随机码消费序列
+//! 等权威状态，并同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 6。旧 v5
+//! 及更早快照按 `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝，
+//! 不提供跨版本迁移（ADR 0002 §7 / Q4）。
 
 use crate::command::Command;
+use crate::creep::CreepCampState;
 use crate::gameplay::{
     FrozenDefinitions, HeroReviveState, TownHallUpgradeState, UnitGameplayState, WorldGameplayState,
 };
 
-pub const SNAPSHOT_VERSION: u32 = 5;
-pub const SIM_VERSION: u32 = 5;
+pub const SNAPSHOT_VERSION: u32 = 6;
+pub const SIM_VERSION: u32 = 6;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -115,6 +122,11 @@ pub struct Snapshot {
     /// 帧 N 提交后的完整状态必须包含它们，恢复后从 N+1 继续不残留 /
     /// 不重复升级（ADR 0002 §7 / R12.4）。
     pub town_hall: TownHallUpgradeState,
+    /// 野怪营地与掉落全部权威状态（v6 新增，P8.5c / Q1 / D1）。
+    /// 帧 N 提交后的完整状态必须包含营地 / 野怪 / 中立归属 / 地面物品 /
+    /// 物品实例 / 死亡登记 / 收益登记 / 随机码消费序列，恢复后从 N+1
+    /// 继续不重复掉落、不残留上一局状态（ADR 0002 §6-8 / R12.4）。
+    pub creep_camps: CreepCampState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

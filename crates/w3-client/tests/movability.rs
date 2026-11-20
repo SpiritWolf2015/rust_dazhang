@@ -449,7 +449,7 @@ fn client_app_all_immovable_keeps_state_hash_and_snapshot() {
     let mut movability = MovabilityMap::new();
     movability.insert(1, false);
     movability.insert(2, false);
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_unchanged");
 
     let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
     driver.submit_command(spawn(1, 0, 120)).unwrap();
@@ -656,6 +656,7 @@ fn human_fixture() -> (WorldView, ScreenMapper, MovabilityMap, BTreeMap<u64, Def
 /// 退化定义（缺陷态）：把新增人口建筑 / 祭坛 / 研发建筑的 `speed_raw`
 /// 改成非 0，模拟「新定义未遵循 `speed_raw == 0`」的缺陷实现。
 /// 仅用于反向验证；生产实现 MUST 用 `synthetic_definitions()`。
+/// P8.5c：同源登记全部冻结段，使缺陷态只差 `speed_raw` 退化。
 fn degenerate_defs_with_movable_buildings() -> FrozenDefinitions {
     let defs = synthetic_definitions();
     let units: Vec<(DefId, UnitDef)> = defs
@@ -678,6 +679,22 @@ fn degenerate_defs_with_movable_buildings() -> FrozenDefinitions {
     let upgrades = defs.upgrades().iter().map(|(&id, &d)| (id, d)).collect();
     FrozenDefinitions::new(units, abilities, items, upgrades)
         .expect("movability: reason=degenerate_defs_rebuild_failed")
+        .with_hero_revive(
+            *defs.revive_constants(),
+            defs.altar_defs().clone(),
+            defs.hero_defs().clone(),
+        )
+        .with_town_hall_upgrade(
+            *defs.town_hall_constants(),
+            defs.town_hall_defs().clone(),
+            defs.tier_requirements().clone(),
+        )
+        .with_creep_camps(
+            *defs.creep_constants(),
+            defs.camp_scripts().clone(),
+            defs.drop_tables().clone(),
+            defs.neutral_categories().clone(),
+        )
 }
 
 /// 被反向验证的断言：混合集合只为可移动单位生成 `Move`（稳定 EntityId 顺序）。
@@ -906,7 +923,7 @@ fn human_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
     let movability = derive_movability(&defs, &entity_defs);
     assert_eq!(movability.get(&1), Some(&false));
     assert_eq!(movability.get(&2), Some(&false));
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_unchanged");
 
     let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
     driver.submit_command(spawn(1, 0, 120)).unwrap();
@@ -1311,7 +1328,7 @@ fn runtime_building_does_not_move_but_unit_and_peasant_do() {
         snapshot_before,
         "reason=apply_must_not_change_snapshot"
     );
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
     assert_eq!(snapshot_before.version, SNAPSHOT_VERSION);
     assert_eq!(snapshot_before.defs_hash, defs.content_hash());
     assert_eq!(snapshot_before.content_hash, defs.content_hash());
@@ -1319,7 +1336,7 @@ fn runtime_building_does_not_move_but_unit_and_peasant_do() {
 
 /// 等效脚本逐帧验收（tasks 5.1 / ADR 0002）：混合选中（含运行时建筑）过滤后
 /// 的命令与「只选中可移动单位」的等效脚本逐条相同；两个同构实例提交同一
-/// 脚本后逐帧状态哈希 / 快照 / 只读视图一致，运行时建筑位置不变，快照仍 v5。
+/// 脚本后逐帧状态哈希 / 快照 / 只读视图一致，运行时建筑位置不变，快照仍 v6。
 #[test]
 fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
     let (mut a, defs, view, mapper, assembly, ids) = runtime_fixture();
@@ -1377,7 +1394,7 @@ fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
             "reason=view_diverged frame={frame}"
         );
     }
-    // 运行时建筑未收到 Move，位置不变；快照仍为 v5。
+    // 运行时建筑未收到 Move，位置不变；快照仍为 v6。
     let after = a.read_view();
     let building_after = after
         .entities
@@ -1386,7 +1403,7 @@ fn runtime_move_filter_matches_movable_only_script_frame_by_frame() {
         .unwrap();
     assert_eq!(building_after.x, building_x, "reason=building_x_unchanged");
     assert_eq!(building_after.y, building_y, "reason=building_y_unchanged");
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
     let snapshot = a.capture_snapshot();
     assert_eq!(snapshot.version, SNAPSHOT_VERSION);
     assert_eq!(snapshot.defs_hash, defs.content_hash());
@@ -1708,6 +1725,7 @@ fn only_movable_orc_units_move(commands: &[ClientCommand]) -> bool {
 /// 退化定义（缺陷态）：把三类兽族新增建筑的 `speed_raw` 改成非 0，模拟
 /// 「新定义未遵循 `speed_raw == 0`」的缺陷实现。经真实
 /// `FrozenDefinitions::new` 重建、`derive_movability` 派生，不是旁路模拟。
+/// P8.5c：同源登记全部冻结段，使缺陷态只差 `speed_raw` 退化。
 fn degenerate_defs_with_movable_orc_buildings() -> FrozenDefinitions {
     let defs = synthetic_definitions();
     let units: Vec<(DefId, UnitDef)> = defs
@@ -1730,6 +1748,22 @@ fn degenerate_defs_with_movable_orc_buildings() -> FrozenDefinitions {
     let upgrades = defs.upgrades().iter().map(|(&id, &d)| (id, d)).collect();
     FrozenDefinitions::new(units, abilities, items, upgrades)
         .expect("movability: reason=degenerate_orc_defs_rebuild_failed")
+        .with_hero_revive(
+            *defs.revive_constants(),
+            defs.altar_defs().clone(),
+            defs.hero_defs().clone(),
+        )
+        .with_town_hall_upgrade(
+            *defs.town_hall_constants(),
+            defs.town_hall_defs().clone(),
+            defs.tier_requirements().clone(),
+        )
+        .with_creep_camps(
+            *defs.creep_constants(),
+            defs.camp_scripts().clone(),
+            defs.drop_tables().clone(),
+            defs.neutral_categories().clone(),
+        )
 }
 
 /// 兽族新增实体可移动性由定义层 `speed_raw` 派生（design D7 / R1.4）：远程 /
@@ -1953,7 +1987,7 @@ fn orc_new_buildings_all_immovable_keep_state_hash_and_snapshot() {
     for id in [1u64, 2, 3] {
         assert_eq!(movability.get(&id), Some(&false));
     }
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_unchanged");
 
     let mut driver = FixedStepClient::new(SEED, CONTENT_HASH, StaticWorld::default());
     driver.submit_command(spawn(1, 0, 240)).unwrap();

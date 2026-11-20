@@ -5,7 +5,7 @@
 //! - Q1 窗口内选族是表现层本地只读状态：确认后经既有
 //!   `MeleeSetup::with_races` 派生开局，本地 / AI 席位 `def_ids` 落所选族
 //!   段、中立恒 `9xx`，`Spawn` / `gameplay_commands` 逐字节不变，
-//!   `SNAPSHOT_VERSION == 5`、逐帧 `compute_state_hash()` /
+//!   `SNAPSHOT_VERSION == 6`、逐帧 `compute_state_hash()` /
 //!   `capture_snapshot()` 不变，AI 命令源按所选 `ai_race` 产出；
 //! - Q2 命令卡按本地族只读查表分派：兽族 Producer / Build / Train 卡
 //!   `TrainUnit { unit_def, .. }` 全落 `2xx`、无 `HUMAN_*`，人族装配
@@ -203,12 +203,12 @@ fn q1_default_selection_falls_back_to_new() {
     );
 }
 
-/// 选族是表现层本地只读状态：无新增权威状态字段、`SNAPSHOT_VERSION` 仍 5、
+/// 选族是表现层本地只读状态：无新增权威状态字段、`SNAPSHOT_VERSION` 仍 6、
 /// 逐帧 `compute_state_hash()` / `capture_snapshot()` 字节与基线一致
 /// （ADR 0002 / C1 / C2）。
 #[test]
 fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
     let defs = synthetic_definitions();
 
     // 两个不同选族装配的真实对局（Spawn 字节相同）逐帧哈希 / 快照一致。
@@ -230,7 +230,7 @@ fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
         );
         assert_eq!(
             snap_h.version, SNAPSHOT_VERSION,
-            "reason=snapshot_version_5"
+            "reason=snapshot_version_6"
         );
         assert_eq!(snap_h.defs_hash, defs.content_hash(), "reason=defs_hash");
         assert_eq!(snap_h.content_hash, CONTENT_HASH, "reason=content_hash");
@@ -274,7 +274,7 @@ fn q1_command_card_race_refresh_never_changes_hash_or_snapshot() {
         );
         assert_eq!(snapshot(&rendered).version, SNAPSHOT_VERSION);
     }
-    assert_eq!(SNAPSHOT_VERSION, 5, "reason=snapshot_version_5");
+    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
 }
 
 /// 选族后 AI 命令源按所选 `ai_race` 产出（P8.3 回归接新入口）：
@@ -1253,10 +1253,10 @@ fn q3_missing_asset_is_explicitly_diagnosable_with_clear_fallback() {
 
 /// 模型键 / 几何只读，不进权威状态 / FNV-1a 状态哈希 / 快照：
 /// 真实 `RtsMatch` 在「跑完整 Q3 呈现管线」与「不跑」两侧逐帧一致，
-/// `SNAPSHOT_VERSION == 5`（ADR 0002 / C1 / tasks 5.4）。
+/// `SNAPSHOT_VERSION == 6`（ADR 0002 / C1 / tasks 5.4）。
 #[test]
 fn q3_model_key_resolution_never_changes_hash_or_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 5);
+    assert_eq!(SNAPSHOT_VERSION, 6);
     let defs = synthetic_definitions();
     let setup = MeleeSetup::new();
     let mut rendered = build_sim(&setup, &defs);

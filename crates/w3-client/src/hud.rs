@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_content::RgbaImage;
-use w3_core::{DefId, Event, EventKind, SCALE, Snapshot, TownHallTier, WorldView};
+use w3_core::{DefId, Event, EventKind, LeashPhase, SCALE, Snapshot, TownHallTier, WorldView};
 use w3_render::{display_hints, team_color};
 
 use crate::faction::FactionSelection;
@@ -277,6 +277,164 @@ impl TownHallUpgradeHudModel {
     }
 }
 
+/// 单个野怪的只读血条投影（P8.5c / tasks 7.1）。
+///
+/// 全部字段来自只读 `Snapshot.creep_camps.creeps` 与 `Snapshot.positions`
+/// 的值拷贝，owned、纯表现层，MUST NOT 反写 `RtsMatch` 权威状态、进状态哈希 /
+/// 快照 / `first_difference()`。距离与生命均为整数，不引入 `f64`
+/// （ADR 0002 §5 / D7）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CreepHudBar {
+    pub entity: u64,
+    pub camp: u32,
+    pub hp: i64,
+    pub max_hp: i64,
+    pub alive: bool,
+    pub phase: LeashPhase,
+    pub home_x: i64,
+    pub home_y: i64,
+}
+
+/// 野怪营地 HUD 的只读投影模型（一帧，P8.5c / tasks 7.1）。
+///
+/// 只从只读 [`w3_core::Snapshot::creep_camps`] 与 `drain_events()` 的六类
+/// 事实事件拷贝派生：营地 / 野怪 / 地面物品 / 物品实例 / 击杀收益 / 随机码
+/// 消费序列都只是值拷贝，本结构不持有 `RtsMatch`，结构上无法反写模拟状态，
+/// 也不进入 FNV-1a 状态哈希 / 快照 / `first_difference()`。派生只走
+/// `BTreeMap` / `BTreeSet` 稳定顺序，不引入墙钟、全局静态字典、建筑名
+/// 白名单或 `f64`（ADR 0002 §5 / D7）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CreepCampHudModel {
+    /// 营地登记条数。
+    pub camp_count: usize,
+    /// 已全清营地条数。
+    pub cleared_camps: usize,
+    /// 野怪登记总数。
+    pub total_creeps: usize,
+    /// 只读视图中仍存活的野怪条数。
+    pub alive_creeps: usize,
+    /// 野怪血条（按稳定 `EntityId` 顺序）。
+    pub creep_bars: BTreeMap<u64, CreepHudBar>,
+    /// 地面掉落标记（按稳定 `EntityId` 顺序）。
+    pub drop_markers: BTreeSet<u64>,
+    /// 物品实例条数。
+    pub item_instances: usize,
+    /// 击杀收益登记条数。
+    pub reward_count: usize,
+    /// 经验入账累计（只读派生，仅用于 HUD 展示）。
+    pub reward_xp: i64,
+    /// 金币入账累计（只读派生，仅用于 HUD 展示）。
+    pub reward_gold: i64,
+    /// 确定性随机码消费登记条数。
+    pub rng_draws: usize,
+    /// 本批次 `CreepCampSeeded` 事实事件计数。
+    pub seeded_events: usize,
+    /// 本批次 `CreepEngaged` 事实事件计数。
+    pub engaged_events: usize,
+    /// 本批次 `CreepLeashReturning` 事实事件计数。
+    pub leash_returning_events: usize,
+    /// 本批次 `CreepLeashReturned` 事实事件计数。
+    pub leash_returned_events: usize,
+    /// 本批次 `CreepDied` 事实事件计数。
+    pub creep_died_events: usize,
+    /// 本批次 `ItemDropped` 事实事件计数。
+    pub item_dropped_events: usize,
+}
+
+impl CreepCampHudModel {
+    /// 从只读快照拷贝与事实事件拷贝派生 HUD 数据；纯只读、无副作用。
+    ///
+    /// `snapshot` 是 [`w3_core::Snapshot`] 的所有权副本（由
+    /// `StepDriver::snapshot` 提供），`events` 是 `drain_events()` 的事实事件
+    /// 拷贝。本函数只读取两者，不调用 `step()`、不提交命令、不改写任何权威
+    /// 状态字段；所有累计 / 计数均为整数，MUST NOT 引入墙钟或浮点
+    /// （ADR 0002 §5 / D7）。
+    pub fn derive(snapshot: &Snapshot, events: &[Event]) -> Self {
+        let creep_bars: BTreeMap<u64, CreepHudBar> = snapshot
+            .creep_camps
+            .creeps
+            .iter()
+            .map(|(&entity, creep)| {
+                let (hp, max_hp, alive) = snapshot
+                    .positions
+                    .iter()
+                    .find(|record| record.entity == entity.value())
+                    .map_or((0, 1, false), |record| {
+                        (record.hp, record.max_hp.max(1), record.alive)
+                    });
+                (
+                    entity.value(),
+                    CreepHudBar {
+                        entity: entity.value(),
+                        camp: creep.camp,
+                        hp,
+                        max_hp,
+                        alive,
+                        phase: creep.phase,
+                        home_x: creep.home_x,
+                        home_y: creep.home_y,
+                    },
+                )
+            })
+            .collect();
+        let drop_markers: BTreeSet<u64> = snapshot
+            .creep_camps
+            .ground_items
+            .keys()
+            .map(|entity| entity.value())
+            .collect();
+        let reward_xp = snapshot
+            .creep_camps
+            .kill_rewards
+            .values()
+            .flat_map(|reward| reward.xp_credited.values())
+            .copied()
+            .sum::<i64>();
+        let reward_gold = snapshot
+            .creep_camps
+            .kill_rewards
+            .values()
+            .map(|reward| reward.gold)
+            .sum::<i64>();
+        let mut model = Self {
+            camp_count: snapshot.creep_camps.camps.len(),
+            cleared_camps: snapshot
+                .creep_camps
+                .camps
+                .values()
+                .filter(|camp| camp.cleared)
+                .count(),
+            total_creeps: creep_bars.len(),
+            alive_creeps: creep_bars.values().filter(|bar| bar.alive).count(),
+            creep_bars,
+            drop_markers,
+            item_instances: snapshot.creep_camps.item_instances.len(),
+            reward_count: snapshot.creep_camps.kill_rewards.len(),
+            reward_xp,
+            reward_gold,
+            rng_draws: snapshot.creep_camps.rng_draws.len(),
+            seeded_events: 0,
+            engaged_events: 0,
+            leash_returning_events: 0,
+            leash_returned_events: 0,
+            creep_died_events: 0,
+            item_dropped_events: 0,
+        };
+        for event in events {
+            match event.kind {
+                EventKind::CreepCampSeeded => model.seeded_events += 1,
+                EventKind::CreepEngaged => model.engaged_events += 1,
+                EventKind::CreepLeashReturning => model.leash_returning_events += 1,
+                EventKind::CreepLeashReturned => model.leash_returned_events += 1,
+                EventKind::CreepDied => model.creep_died_events += 1,
+                EventKind::ItemDropped => model.item_dropped_events += 1,
+                _ => {}
+            }
+        }
+        model
+    }
+}
+
 /// 命令卡动作（由选中集合与实体类型只读派生）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandAction {
@@ -405,6 +563,10 @@ pub struct HudModel {
     /// 纯表现层派生，MUST NOT 反写权威状态、进状态哈希 / 快照 /
     /// `first_difference()`（ADR 0002 §5 / D6）。
     pub town_hall: TownHallUpgradeHudModel,
+    /// 野怪营地 / 掉落 / 击杀收益的只读 HUD 投影（P8.5c / tasks 7.1）；
+    /// 纯表现层派生，MUST NOT 反写权威状态、进状态哈希 / 快照 /
+    /// `first_difference()`（ADR 0002 §5 / D7）。
+    pub creep: CreepCampHudModel,
     pub selected_count: usize,
     pub event_count: usize,
     /// 本地玩家编号，用于按队伍区分 HUD 标记颜色。
@@ -640,6 +802,8 @@ impl HudModel {
             revive: ReviveHudModel::derive(snapshot, events),
             // 只读派生：只消费 `snapshot.town_hall` 与事实事件拷贝，不写回模拟状态。
             town_hall: TownHallUpgradeHudModel::derive(snapshot, events),
+            // 只读派生：只消费 `snapshot.creep_camps` 与事实事件拷贝，不写回模拟状态。
+            creep: CreepCampHudModel::derive(snapshot, events),
             selected_count: selection.len(),
             event_count: events.len(),
             local_player,
@@ -962,6 +1126,68 @@ pub fn draw_with_minimap(
             texts.town_hall_tier_count,
             model.town_hall.tiers.len(),
         ));
+        ui.separator();
+
+        // 野怪营地 HUD：血条 / 掉落标记 / 击杀收益 / 事实事件计数全部来自
+        // `CreepCampHudModel` 只读投影；文案全部走 i18n，MUST NOT 进日志 /
+        // 权威状态 / 状态哈希（ADR 0002 §5 / D7）。
+        ui.label(texts.creep_camps);
+        if model.creep.camp_count == 0
+            && model.creep.creep_bars.is_empty()
+            && model.creep.drop_markers.is_empty()
+        {
+            ui.label(texts.creep_empty);
+        } else {
+            ui.label(format!(
+                "{}: {} | {}: {} | {}: {}/{}",
+                texts.creep_camps,
+                model.creep.camp_count,
+                texts.creep_cleared,
+                model.creep.cleared_camps,
+                texts.creep_alive,
+                model.creep.alive_creeps,
+                model.creep.total_creeps,
+            ));
+            for bar in model.creep.creep_bars.values().take(4) {
+                ui.label(format!(
+                    "{} #{}: {} {}/{} | {} {}",
+                    texts.creep_hp,
+                    bar.entity,
+                    texts.hp,
+                    bar.hp,
+                    bar.max_hp,
+                    texts.creep_phase,
+                    bar.phase.code(),
+                ));
+            }
+            ui.label(format!(
+                "{}: {} | {}: {} {} / {} {} | {}: {}",
+                texts.creep_drops,
+                model.creep.drop_markers.len(),
+                texts.creep_rewards,
+                model.creep.reward_xp,
+                texts.creep_xp,
+                model.creep.reward_gold,
+                texts.creep_gold,
+                texts.creep_events,
+                model.creep.rng_draws,
+            ));
+            ui.label(format!(
+                "{}: {} | {}: {} | {}: {} | {}: {} | {}: {} | {}: {}",
+                texts.creep_seeded,
+                model.creep.seeded_events,
+                texts.creep_engaged,
+                model.creep.engaged_events,
+                texts.creep_leash_returning,
+                model.creep.leash_returning_events,
+                texts.creep_leash_returned,
+                model.creep.leash_returned_events,
+                texts.creep_died,
+                model.creep.creep_died_events,
+                texts.item_dropped,
+                model.creep.item_dropped_events,
+            ));
+        }
         ui.separator();
 
         // 小地图：只读实体点 + 相机视口框；点击只返回归一化坐标。

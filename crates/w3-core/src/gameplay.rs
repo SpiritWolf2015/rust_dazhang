@@ -14,6 +14,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::creep::{
+    CampScript, CreepConstants, DropTable, NeutralCategory, SYNTHETIC_CREEP_CONSTANTS,
+};
 use crate::entity::EntityId;
 use crate::frame::Frame;
 use crate::state_hash::StateHasher;
@@ -335,9 +338,14 @@ pub struct UpgradeDef {
 /// P8.5b 追加三个私有冻结字段：`town_hall` 为主城升级冻结常量段，
 /// `town_hall_defs` 为定义层登记的主城类别 DefId 集合，
 /// `tier_requirements` 为「二线单位 / 科技 DefId → 所需 tier」需求链。
-/// 全部编入 `compute_defs_hash`，改常量或改类别 / 需求链登记即改变
-/// `content_hash()`（Q3）。类别与解锁判定只查定义层数据（数据驱动），
-/// MUST NOT 用建筑名字符串白名单或硬编码 DefId。
+/// P8.5c 追加四个私有冻结字段：`creep` 为野怪冻结常量段，
+/// `camp_scripts` / `drop_tables` 为营地脚本与「表 → 互斥 set → 概率条目」
+/// 分层掉落表，`neutral_categories` 为中立类别 / 阵营标记登记（Q7 / Q8）。
+/// 全部编入 `compute_defs_hash`，改常量或改类别 / 脚本 / 概率条目登记即
+/// 改变 `content_hash()`（Q3 / Q8）。类别与解锁判定只查定义层数据
+/// （数据驱动），MUST NOT 用建筑名字符串白名单或硬编码 DefId（R1.2 / R13.3）。
+/// 注意：这些是**冻结定义层内容**，不是权威状态字段；野怪 / 营地 / 掉落 /
+/// 随机码消费序列的运行态在 `CreepCampState`（D1 / D4 / ADR 0002 §6-8）。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenDefinitions {
     units: BTreeMap<DefId, UnitDef>,
@@ -350,6 +358,10 @@ pub struct FrozenDefinitions {
     town_hall: TownHallConstants,
     town_hall_defs: BTreeSet<DefId>,
     tier_requirements: BTreeMap<DefId, TownHallTier>,
+    creep: CreepConstants,
+    camp_scripts: BTreeMap<u32, CampScript>,
+    drop_tables: BTreeMap<u32, DropTable>,
+    neutral_categories: BTreeMap<DefId, NeutralCategory>,
     hash: u64,
 }
 
@@ -458,6 +470,25 @@ fn compute_defs_hash(defs: &FrozenDefinitions) -> u64 {
         hasher.write_u32(id);
         hasher.write_u8(tier.code());
     }
+    // P8.5c：野怪冻结常量段、营地脚本、掉落表分层、中立类别登记编入
+    // 定义哈希。任一段（常量 / 脚本 / set / 概率条目 / 类别）变化都会
+    // 改变 content_hash() 并进入快照头部（Q8 / tasks 2.2 / D4）。
+    defs.creep.hash(&mut hasher);
+    hasher.write_u64(defs.camp_scripts.len() as u64);
+    for (&script_id, script) in &defs.camp_scripts {
+        hasher.write_u32(script_id);
+        script.hash(&mut hasher);
+    }
+    hasher.write_u64(defs.drop_tables.len() as u64);
+    for (&table_id, table) in &defs.drop_tables {
+        hasher.write_u32(table_id);
+        table.hash(&mut hasher);
+    }
+    hasher.write_u64(defs.neutral_categories.len() as u64);
+    for (&def_id, &category) in &defs.neutral_categories {
+        hasher.write_u32(def_id);
+        hasher.write_u8(category.code());
+    }
     hasher.finish()
 }
 
@@ -480,6 +511,10 @@ impl FrozenDefinitions {
             town_hall: TownHallConstants::default(),
             town_hall_defs: BTreeSet::new(),
             tier_requirements: BTreeMap::new(),
+            creep: CreepConstants::default(),
+            camp_scripts: BTreeMap::new(),
+            drop_tables: BTreeMap::new(),
+            neutral_categories: BTreeMap::new(),
             hash: 0,
         };
         insert_unique(&mut defs.units, units)?;
@@ -531,6 +566,78 @@ impl FrozenDefinitions {
         self.tier_requirements = tier_requirements;
         self.hash = compute_defs_hash(&self);
         self
+    }
+
+    /// 纯新增构造路径：注入 P8.5c 野怪 / 营地 / 掉落冻结常量段与中立类别
+    /// 登记，重算内容哈希。既有四参数签名不变，需要野怪营地的装配层链式
+    /// 调用；改任一常量 / 脚本 / 概率条目 / 类别即改变 `content_hash()`。
+    ///
+    /// 判定只查定义层类别与 set 数据（数据驱动），MUST NOT 用建筑名字符串
+    /// 白名单或硬编码 DefId；以非经典命名的 DefId 登记后仍可判定
+    /// （R1.2 / R13.3 / D4 / tasks 2.3）。
+    pub fn with_creep_camps(
+        mut self,
+        constants: CreepConstants,
+        camp_scripts: BTreeMap<u32, CampScript>,
+        drop_tables: BTreeMap<u32, DropTable>,
+        neutral_categories: BTreeMap<DefId, NeutralCategory>,
+    ) -> Self {
+        self.creep = constants;
+        self.camp_scripts = camp_scripts;
+        self.drop_tables = drop_tables;
+        self.neutral_categories = neutral_categories;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 野怪冻结常量（只读，Q8）。
+    pub fn creep_constants(&self) -> &CreepConstants {
+        &self.creep
+    }
+
+    /// 冻结营地脚本登记（只读，稳定脚本 id 顺序）。
+    pub fn camp_scripts(&self) -> &BTreeMap<u32, CampScript> {
+        &self.camp_scripts
+    }
+
+    /// 按冻结脚本标识查营地脚本（Q5 `SeedCreepCamp` 命令用）。
+    pub fn camp_script(&self, script_id: u32) -> Option<&CampScript> {
+        self.camp_scripts.get(&script_id)
+    }
+
+    /// 冻结掉落表（只读，稳定表 id 顺序）。
+    pub fn drop_tables(&self) -> &BTreeMap<u32, DropTable> {
+        &self.drop_tables
+    }
+
+    /// 按表 id 查冻结掉落表（表 → 互斥 set → 概率条目，R7.2 / R8.6）。
+    pub fn drop_table(&self, table_id: u32) -> Option<&DropTable> {
+        self.drop_tables.get(&table_id)
+    }
+
+    /// 定义层中立类别登记（只读，稳定 DefId 顺序，Q7）。
+    pub fn neutral_categories(&self) -> &BTreeMap<DefId, NeutralCategory> {
+        &self.neutral_categories
+    }
+
+    /// 该 DefId 的中立类别 / 阵营标记；`None` 表示玩家阵营普通实体。
+    pub fn neutral_category(&self, def_id: DefId) -> Option<NeutralCategory> {
+        self.neutral_categories.get(&def_id).copied()
+    }
+
+    /// 定义层类别驱动：该 DefId 是否被登记为中立敌对野怪（R8.1）。
+    pub fn is_creep(&self, def_id: DefId) -> bool {
+        self.neutral_category(def_id) == Some(NeutralCategory::CreepHostile)
+    }
+
+    /// 定义层类别驱动：该 DefId 是否被登记为无主地面物品（R1.1）。
+    pub fn is_ground_item(&self, def_id: DefId) -> bool {
+        self.neutral_category(def_id) == Some(NeutralCategory::GroundItemOwnerless)
+    }
+
+    /// 默认野怪冻结常量（供未显式注入的装配层使用，合成原创 `[待核]`）。
+    pub fn synthetic_creep_constants() -> CreepConstants {
+        SYNTHETIC_CREEP_CONSTANTS
     }
 
     /// 定义层类别驱动：该 DefId 是否被登记为主城（MUST NOT 用名字白名单）。
@@ -1172,6 +1279,20 @@ pub enum GameplayCommandKind {
         target_tier: TownHallTier,
         cancel: bool,
     },
+    /// P8.5c 系统级确定性命令：按冻结整数帧号初始化一个野怪营地（Q5 / D6）。
+    ///
+    /// 野怪 / 掉落是 `step()` 内部由 `seed` 驱动的被动系统，但营地 spawn
+    /// 必须由 lockstep 两端一致注入，因此做成 frame-0（或任意冻结帧）
+    /// 系统级命令：`camp` 是营地实例 id，`script` 是冻结
+    /// [`crate::creep::CampScript`] 标识。`player_id` MUST 为
+    /// [`crate::creep::NEUTRAL_OWNER`]（系统级，非玩家命令）；执行时重新
+    /// 校验冻结脚本 / 中立类别 / 掉落表与幂等，不挂任何玩家 owner。
+    /// 击杀 / 掉落仍是 `step()` 内部确定性事件，用新增 [`crate::sim_match::EventKind`]
+    /// 事实事件供表现层只读消费，不与本命令面的被动系统语义矛盾。
+    SeedCreepCamp {
+        camp: u32,
+        script: u32,
+    },
 }
 
 /// 玩法命令。
@@ -1318,6 +1439,13 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u8(target_tier.code());
             hasher.write_u8(u8::from(cancel));
         }
+        GameplayCommandKind::SeedCreepCamp { camp, script } => {
+            // P8.5c：追加唯一编码 14；camp / script 均显式小端编码，
+            // 不与既有 1–13 变体碰撞，且与校验 / 穷尽分发同步（Q5 / D6）。
+            hasher.write_u8(14);
+            hasher.write_u32(camp);
+            hasher.write_u32(script);
+        }
     }
 }
 
@@ -1340,6 +1468,9 @@ pub(crate) fn validate_gameplay_entities(
         } => hero == EntityId::NONE || altar == EntityId::NONE,
         GameplayCommandKind::CancelRevive { hero } => hero == EntityId::NONE,
         GameplayCommandKind::UpgradeTownHall { town_hall, .. } => town_hall == EntityId::NONE,
+        // P8.5c：营地 id / 冻结脚本 id 均不得为 0（系统级命令的实体合法性
+        // 校验），与 hash 编码 / 穷尽分发三处同步（Q5 / D6）。
+        GameplayCommandKind::SeedCreepCamp { camp, script } => camp == 0 || script == 0,
         _ => false,
     };
     if invalid {
@@ -1536,6 +1667,7 @@ pub fn resolve_effects(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::creep::DropSet;
 
     fn unit_def() -> UnitDef {
         UnitDef {
@@ -1596,5 +1728,233 @@ mod tests {
         let due = queue.freeze_frame(Frame::new(1));
         assert_eq!(due[0].player_id, 1);
         assert_eq!(due[1].player_id, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // P8.5c 定义层单元测试（tasks 2.2 / 2.3 / 6.2）
+    // -----------------------------------------------------------------------
+
+    /// 构造一份全合成 / 原创编译期整数的野怪冻结定义（零文件 IO、零资产）。
+    fn creep_fixture() -> (
+        CreepConstants,
+        BTreeMap<u32, CampScript>,
+        BTreeMap<u32, DropTable>,
+        BTreeMap<DefId, NeutralCategory>,
+    ) {
+        let mut constants = SYNTHETIC_CREEP_CONSTANTS;
+        constants.leash_radius_raw = 9 * (1 << 16);
+        let scripts = [(
+            41u32,
+            CampScript {
+                tier: 1,
+                xp: 25,
+                gold: 12,
+                home_x: 3 << 16,
+                home_y: 4 << 16,
+                drop_table: 91,
+                creep_defs: vec![9101, 9102],
+            },
+        )]
+        .into_iter()
+        .collect();
+        let tables = [(
+            91u32,
+            DropTable {
+                sets: [(
+                    7u32,
+                    DropSet {
+                        entries: [(9201u32, 60u32), (9202, 40)].into_iter().collect(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                effects: [
+                    (
+                        9201u32,
+                        EffectDef {
+                            kind: EffectKind::BuffStat,
+                            amount: 2,
+                            duration_frames: 10,
+                        },
+                    ),
+                    (
+                        9202,
+                        EffectDef {
+                            kind: EffectKind::Heal,
+                            amount: 5,
+                            duration_frames: 0,
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            },
+        )]
+        .into_iter()
+        .collect();
+        let categories = [
+            (9101, NeutralCategory::CreepHostile),
+            (9102, NeutralCategory::CreepHostile),
+            (9201, NeutralCategory::GroundItemOwnerless),
+            (9202, NeutralCategory::GroundItemOwnerless),
+        ]
+        .into_iter()
+        .collect();
+        (constants, scripts, tables, categories)
+    }
+
+    fn creep_defs() -> FrozenDefinitions {
+        let (constants, scripts, tables, categories) = creep_fixture();
+        FrozenDefinitions::new(vec![(9101, unit_def())], Vec::new(), Vec::new(), Vec::new())
+            .unwrap()
+            .with_creep_camps(constants, scripts, tables, categories)
+    }
+
+    /// tasks 2.2：冻结常量 / 营地脚本 / 掉落表（含互斥 set 与概率条目）/
+    /// 中立类别登记四段任一段改动都改变 `content_hash()`。
+    #[test]
+    fn creep_frozen_segments_all_change_content_hash() {
+        let base = creep_defs();
+        let (constants, scripts, tables, categories) = creep_fixture();
+
+        let mut changed_constants = constants;
+        changed_constants.leash_radius_raw += 1;
+        let a = FrozenDefinitions::new(vec![(9101, unit_def())], vec![], vec![], vec![])
+            .unwrap()
+            .with_creep_camps(
+                changed_constants,
+                scripts.clone(),
+                tables.clone(),
+                categories.clone(),
+            );
+        assert_ne!(base.content_hash(), a.content_hash(), "constants segment");
+
+        let mut changed_scripts = scripts.clone();
+        changed_scripts.get_mut(&41).unwrap().xp += 1;
+        let b = FrozenDefinitions::new(vec![(9101, unit_def())], vec![], vec![], vec![])
+            .unwrap()
+            .with_creep_camps(
+                constants,
+                changed_scripts,
+                tables.clone(),
+                categories.clone(),
+            );
+        assert_ne!(base.content_hash(), b.content_hash(), "camp script segment");
+
+        let mut changed_tables = tables.clone();
+        changed_tables
+            .get_mut(&91)
+            .unwrap()
+            .sets
+            .get_mut(&7)
+            .unwrap()
+            .entries
+            .insert(9201, 61);
+        let c = FrozenDefinitions::new(vec![(9101, unit_def())], vec![], vec![], vec![])
+            .unwrap()
+            .with_creep_camps(
+                constants,
+                scripts.clone(),
+                changed_tables,
+                categories.clone(),
+            );
+        assert_ne!(
+            base.content_hash(),
+            c.content_hash(),
+            "drop table probability segment"
+        );
+
+        let mut changed_categories = categories.clone();
+        changed_categories.insert(9999, NeutralCategory::CreepHostile);
+        let d = FrozenDefinitions::new(vec![(9101, unit_def())], vec![], vec![], vec![])
+            .unwrap()
+            .with_creep_camps(constants, scripts, tables, changed_categories);
+        assert_ne!(
+            base.content_hash(),
+            d.content_hash(),
+            "neutral category segment"
+        );
+
+        // 掉落表的 EffectDef 段（R7.6）同样进定义哈希。
+        let (c2, s2, mut t2, cat2) = creep_fixture();
+        if let Some(effect) = t2.get_mut(&91).unwrap().effects.get_mut(&9201) {
+            effect.amount += 1;
+        }
+        let e = FrozenDefinitions::new(vec![(9101, unit_def())], vec![], vec![], vec![])
+            .unwrap()
+            .with_creep_camps(c2, s2, t2, cat2);
+        assert_ne!(base.content_hash(), e.content_hash(), "effect def segment");
+    }
+
+    /// tasks 2.3：可用性与中立类别由定义层数据驱动；非经典命名的 DefId
+    /// 仍按冻结定义判定，MUST NOT 依赖建筑名白名单或硬编码 DefId。
+    #[test]
+    fn creep_categories_are_data_driven_for_non_classic_def_ids() {
+        let defs = creep_defs();
+        assert!(defs.is_creep(9101));
+        assert!(defs.is_creep(9102));
+        assert!(defs.is_ground_item(9201));
+        assert!(defs.is_ground_item(9202));
+        assert!(!defs.is_creep(9201));
+        assert!(!defs.is_ground_item(9101));
+        assert!(!defs.is_creep(1));
+        assert_eq!(
+            defs.neutral_category(9101),
+            Some(NeutralCategory::CreepHostile)
+        );
+        assert_eq!(
+            defs.neutral_category(9202),
+            Some(NeutralCategory::GroundItemOwnerless)
+        );
+        assert_eq!(defs.camp_script(41).map(|s| s.drop_table), Some(91));
+        assert_eq!(
+            defs.drop_table(91)
+                .and_then(|t| t.sets.get(&7))
+                .map(|s| s.total_weight()),
+            Some(100)
+        );
+        assert!(defs.camp_script(42).is_none());
+        assert!(defs.drop_table(92).is_none());
+    }
+
+    /// tasks 6.2：`SeedCreepCamp`（码 14）编码唯一，camp / script 两个字段
+    /// 均参与哈希；不同语义的命令 MUST NOT 碰撞。
+    #[test]
+    fn seed_creep_camp_command_encoding_is_unique() {
+        let command = |camp: u32, script: u32| {
+            GameplayCommand::new(
+                Frame::new(0),
+                0,
+                1,
+                GameplayCommandKind::SeedCreepCamp { camp, script },
+            )
+        };
+        let hash = |cmd: GameplayCommand| {
+            let mut queue = GameplayCommandQueue::new();
+            queue.submit(cmd).unwrap();
+            let mut hasher = StateHasher::new();
+            queue.hash(&mut hasher);
+            hasher.finish()
+        };
+        assert_ne!(
+            hash(command(1, 41)),
+            hash(command(2, 41)),
+            "camp must be encoded"
+        );
+        assert_ne!(
+            hash(command(1, 41)),
+            hash(command(1, 42)),
+            "script must be encoded"
+        );
+        // 校验覆盖：0 号营地 / 脚本被公开提交入口明确拒绝。
+        let mut queue = GameplayCommandQueue::new();
+        assert_eq!(
+            queue.submit(command(0, 41)),
+            Err(GameplayCommandError::InvalidEntity)
+        );
+        assert_eq!(
+            queue.submit(command(1, 0)),
+            Err(GameplayCommandError::InvalidEntity)
+        );
     }
 }

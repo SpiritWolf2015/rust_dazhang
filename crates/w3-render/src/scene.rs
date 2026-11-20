@@ -224,6 +224,18 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
         // P8.5b 主城升级取消 / 中止事实事件：事务性退款由内核结算，
         // 表现层只读派生、幂等 no-op，重复投递由 `consume` 的 sequence 去重吸收。
         EventKind::TownHallUpgradeCancelled => {}
+        // P8.5c 野怪营地 / leash / 掉落六个事实事件：营地 / 野怪 / 中立归属 /
+        // 掉落 / 地面物品 / 击杀收益 / 随机码消费序列全是 `w3-core` 顶层权威
+        // 状态，只由 `RtsMatch` 写入并进 FNV-1a 状态哈希 / v6 快照；HUD 从
+        // 只读 `Snapshot.creep_camps` 派生。本场景不持有权威句柄、无对应动画
+        // 序列，故六类事件一律幂等 no-op，重复投递按 sequence 去重吸收，
+        // MUST NOT 改哈希 / 快照 / `first_difference()`（ADR 0002 §5 / D7）。
+        EventKind::CreepCampSeeded
+        | EventKind::CreepEngaged
+        | EventKind::CreepLeashReturning
+        | EventKind::CreepLeashReturned
+        | EventKind::CreepDied
+        | EventKind::ItemDropped => {}
     }
 }
 

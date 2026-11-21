@@ -164,3 +164,14 @@
 **门禁（CI 真实 locale、串行单实例）**：`cargo fmt --all -- --check` OK、`git diff --check` OK、`openspec validate p8-item-shop-tp --strict` valid、`RUST_TEST_THREADS=1 cargo test --workspace` → `TEST_EXIT=0`（716 tests / 34 测试二进制全 `0 failed`、无 FAILED/error/panicked）、`env -u PYTHONIOENCODING PYTHONUTF8=0 RUST_TEST_THREADS=1 python tools/verify_all.py` → `Totals: 27 passed, 0 failed` / `Verification OK` / `spec gate OK` / `asset scan OK` / `decision memo OK`、`python tools/verify_all.py --fingerprint p8-item-shop-tp` → `22033f37…cc527c`（与锁定值一致）。
 
 **人工边界**：本地提交由 leader 执行（中文描述 + Conventional Commits 英文 type 前缀）；**AI 不执行任何 `push` / `fetch` / `pull` / `clone` / 远端同步**。真窗口人工验收、CI 双平台、跨平台 golden hash 比对、归档（`/opsx:archive`）均属人工边界、不冒充通过；归档豁免须用户另行明确拍板、不拿沉默当授权。跨平台确定性仅沿用 ADR 0002 既有复核记录（Windows 11 / Debian 12 x86_64 / rustc 1.99.1 v3 已验证），本 change 不声称有新验证或全平台达成。
+
+## 归档处置（2026-11-21，用户拍板「直接归档并继续 P8.5e」，leader 回填）
+
+> 边界：本小节只写进 `decision-memo.md`（不在 `spec_artifact_fingerprint` 哈希集合），不改四件套正文；指纹保持 `22033f37…cc527c`、`status: approved` 不变。归档按用户 2026-11-21 本会话 `AskUserQuestion` 明确选择「直接归档并继续 P8.5e（推荐）」执行。
+
+- **用户显式豁免，不冒充真窗口通过**：用户选择「直接归档并继续 P8.5e（推荐）」是对规格门 Q11 / 本纪要「真窗口清单未逐项勾选前不得归档」的**显式豁免**；但 MUST NOT 解读为真窗口人工验收已通过、MUST NOT 解读为 CI / 跨平台已绿。`tasks.md` 第 8 组 8.1–8.7 全部保持 `- [ ]`「未执行 / 待人工」，6.3（键位 / 命令卡接线，Q3 范围外）保持 `- [ ]`，归档时 `29/37 tasks`。
+- **push / CI 状态（归档当下如实登记）**：`origin/main` 为 `ca4b2b2`（P8.5d 提案，已由人工同步）；本地 HEAD 为 `699a490`（apply 实现），**尚未 push**、本地领先 1 个提交；本会话未收到 `699a490` 的 GitHub Action run 链接 / 双平台成功确认、CI 双平台 `verify_all.py` 未运行。归档在 push 之前进行（与 P8.5b 先例一致），归档后的本地提交仍待人工 push；AI 未执行任何 `push` / `fetch` / `pull` / `clone` / 远端同步。
+- **真窗口不可达登记**：真窗口当前无 frame-0 商店 / 回城卷轴 / 拾取 / 购买的键位与命令卡 UI 接线（6.3 未实现、Q3 范围外），野怪营地掉落承接到物品商店闭环在真窗口 UI / AI 触发层不可达；CPU 回归（真实装配可达性、HUD 只读派生、`Move` 过滤）与真窗口人工验收 MUST 严格区分，不冒充真窗口验收。
+- **已知限制承接（不扩范围）**：6.3 键位 / 命令卡接线（Q3 范围外）、Q2/Q3 范围外承接（P8.5e 迷雾下商店 / 地面物品可见性、R8.4 昼夜、AI 玩家清野 / 拾取、R9 中立建筑交互全量）、主 specs 其余历史硬禁令 / `## Purpose` 概述残留（Q10 已拍板登记、由 `docs-owner` 后续独立 change 收口）、活文档附录补锚 / 旧行号差异、`>500 characters` / `>1000 characters` warning、`model_index` 串行单实例门禁、回城多主城目标优先级 / 中断次数结算 `[待核]`、参考对照报告未落盘 / `vera20k` HEAD 偏离固定提交 823 commits、ADR 0005 历史修订记录统一收口、P8.5a/P8.5b/P8.5c 已知限制承接，全部如实登记、不在归档阶段补验。
+- **主 specs 合并去向**：新增 `item-shop-town-portal`（13 条 ADDED / 28 Scenario）+ 6 份 MODIFIED delta（14 条：`faction-definitions` 1 / `melee-match` 2 / `human-faction` 4 / `orc-faction` 4 / `gameplay-systems` 1 / `command-hotkeys` 2）；归档后主 `openspec/specs/` 变化据实说明（归档命令输出为准）。
+- **不冒充**：不冒充真窗口 / CI 通过、不声称跨平台 / 全平台已验证、不拿沉默当授权；归档后继续 P8.5e「战争迷雾」（注意路线图 `:129`：迷雾 MUST 表现层只读派生、不进权威状态 / 哈希 / 快照，与 P8.5a–d 的「改内核新增权威状态」方向不同）。

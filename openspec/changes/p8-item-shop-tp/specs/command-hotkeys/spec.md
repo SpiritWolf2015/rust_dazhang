@@ -1,0 +1,40 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: 经典键位映射汇入同一输入翻译链生成既有命令
+
+经典通用命令键 `M` / `A` / `S` / `G` / `B` / `T` / `Esc` 与 `U`（`U` 主基地升级 / 商店选择使用者，R13.2）SHALL 经**同一输入翻译链**翻译为 `w3-core` 既有命令面：键盘与命令卡点击 MUST 汇入同一处、MUST NOT 新增「命令来源标记」进命令面（`R13.1` / `R13.2` / `R13.6` / ADR 0002 / ADR 0005）；具体键位 `[待核]`。P8.5b 主城升级 / P8.5c 野怪营地 change 按用户拍板方向 A 在 `w3-core` 确定性命令面新增独立 `UpgradeTownHall` / `SeedCreepCamp` 变体（Q2 / Q5 推荐）：`U` 键与命令卡升级格位 SHALL 由定义层数据驱动、只生成该既有命令面命令、MUST NOT 反写权威状态或另立表现层假升级（R4.1 / R13.3 / ADR 0002 §5）。本 change P8.5d 物品 / 商店 / 回城卷轴按推荐方向 A（待规格门 Q1 拍板）**正式承接 P8.5c 明文留本期的拾取 / 六格背包 / 商店购买 / 使用 / 售卖 / 回城键位**（`creep-camps/spec.md:80,164` / `creep.rs:331`）：这些键（R13.5 `[待核]`，含回城 `T` 键口径）SHALL 经同一输入翻译链与命令卡点击等价地产出 `w3-core` 命令面命令、MUST NOT 反写权威状态 / 另立表现层假拾取或假购买（R13.5 / R13.6 / R7 / R9.3 / ADR 0002 §5）；按 Q5 推荐（条件项、待规格门拍板）新增拾取 / 购买 / 使用 / 售卖 / 回城相关 `GameplayCommandKind` / `EventKind` 变体（proto 只追加 tag 37 起、`reserved 14 to 32` 保留、`PROTOCOL_VERSION` 6→7 与 `Reject` 旧版本、canonical 约束），新增六格背包 / 实例 owner 与 slot / 商店库存 / 回城传送 / 消费序列等权威状态 MUST 同步进 FNV-1a 状态哈希、快照与 `first_difference()`，`SNAPSHOT_VERSION` 按 Q4 推荐 bump 6→7；本 capability 的键位映射本身 MUST NOT 新增变体、MUST NOT 反写权威状态，新变体属 `sim-owner` 按 ADR 0002 流程承接（连带 `hash_gameplay_command` 编码 / 校验 / 穷尽分发同步、`net-owner` 按 `CODEBUDDY.md §9` 串行协作）。键位与商店 / 道具交互的具体绑定 `[待核]`、不冻结进权威定义（R13.5 / §14）；MUST NOT 借 R13.6 `:314` 只读视图投影放松新增命令变体的旁路门禁。历史「MUST NOT 新增 `CommandKind` / `GameplayCommandKind` 变体」是 `command-hotkeys` change 的实施期约束、不代表禁止后续 change 按用户拍板改内核（R13.6 范围限定 / `decision-memo.md` R8）。
+
+> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题作 OpenSpec 归档合并身份键、字面不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。
+
+#### Scenario: 经典键逐键生成既有命令（R13.2）
+
+- **WHEN** 在有选中集合与合法目标 / 地面点下依次触发 `M` / `A` / `S` / `G` / `B` / `T` / `Esc`（合成键位配置，具体字母 `[待核]`），并触发 P8.5d 拾取 / 购买 / 使用 / 售卖 / 回城键位（R13.5 `[待核]`）
+- **THEN** 各键经同一 `apply` 产出既有命令面变体（或 `B` 开子菜单、`Esc` 取消且不生成命令），键位映射路径不出现任何新命令变体、命令字节与既有命令面一致；`U` 键升级格位由定义层数据驱动、只经 `w3-core` 既有命令面提交 `UpgradeTownHall`、不另立假升级；P8.5d 拾取 / 购买 / 使用 / 售卖 / 回城键位同样只产出 `w3-core` 命令面命令、由 `sim-owner` 在 `w3-core` 命令面承接新变体、键位映射层不旁路写入、不反写权威状态（R13.2 / R13.5 / R13.6 / R4.1 / R7 / R9.3 / ADR 0002）
+
+#### Scenario: 键盘与命令卡点击等价（R13.1 / R13.6）
+
+- **WHEN** 对同一选中集合分别「点击命令卡升级格位」与「按该格绑定的经典 `U` 键」，以及「点击商店命令卡购买格」与「按拾取 / 购买键」（R13.5）
+- **THEN** 两者经同一 `apply` 产出逐字段相同的 `ClientCommand`、不携带命令来源标记；`compute_state_hash()` 与 `capture_snapshot()` 字节不因输入来源不同而变化（ADR 0002 / R13.1 / R13.6 / R9.3）
+
+#### Scenario: A 与 S 的语义边界（R13.2）
+
+- **WHEN** 按 `A` 指定敌方目标、按 `S` 停止
+- **THEN** `A` 只生成既有 `Attack { target }`、`S` 只生成既有 `Stop`；`S` MUST NOT 合并 Hold 语义、`A` MUST NOT 化为 attack-move 点地面途中交战（该语义 `[待核]`、由后续 change 承接，R13.2）；清野时 `A` 指定野怪目标经既有 `Attack` 命令面、不绕过 R1.4 可移动性过滤（R8.1 / R1.4）；含地面物品 / 商店（中立建筑）的选中集合 MUST NOT 生成 `Move`（R1.1 / R1.4 / R9.1）
+
+### Requirement: 确定性契约零冲击与内核零 diff
+
+本 requirement 标题沿用 `command-hotkeys` P6 历史契约名、字面作归档合并身份键（不代表行为断言，详见本 requirement 下 `>` 身份键说明）。本 capability 的键位 / 命令卡 / 子菜单 / 编队 / 选中集合 / 队列历史行为 SHALL 只经 `w3-core` 既有公开 API 与命令面实现、全部为表现层只读派生、MUST NOT 进权威状态 / 状态哈希 / 快照（R13.6 / ADR 0002 §5）。但 P8.5b 主城升级 / P8.5c 野怪营地 change 按用户拍板方向 A **MUST 按 ADR 0002 全流程改 `w3-core`**：新增 tier / 野怪 / 掉落顶层权威状态同步进 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION` 定义的快照与 `first_difference()`，版本号按 Q1 推荐 bump 4→5→6（连同 `SIM_VERSION`、快照头部、单测硬断言、golden hash 基线、ADR 0002 复核记录同步更新；旧版本快照 / 回放按 `UnsupportedVersion` / `Reject` 明确拒绝）；`GameplayCommandKind` 按 Q2 / Q5 推荐新增独立 `UpgradeTownHall` / `SeedCreepCamp` 变体 + 事件变体；determinism 26 项全绿 +「改坏验红」、golden hash 基线按新实现如实更新、不沿用旧值。本 change P8.5d 物品 / 商店 / 回城卷轴按推荐方向 A（待规格门 Q1 拍板）继续按 ADR 0002 全流程改 `w3-core`：新增六格背包 / 实例 owner 与 slot / 充能冷却 / 拾取购买使用丢弃售卖事实 / 商店库存与刷新 / 回城传送（施法帧 / 目标 / 中断）/ 确定性随机码消费序列等权威状态（R6.2 / R7.5 / R9.3）同步进 FNV-1a 状态哈希、快照与 `first_difference()`、`SNAPSHOT_VERSION` / `SIM_VERSION` 按 Q4 推荐 bump 6→7（连同 `SIM_VERSION`、快照头部、单测硬断言、golden hash 基线、ADR 0002 复核记录同步更新；旧 v6 快照 / 回放按 `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝）；按 Q5 推荐（条件项、待规格门拍板）新增拾取 / 购买 / 使用 / 售卖 / 回城命令与事件变体（proto tag 37 起 / `PROTOCOL_VERSION` 6→7 / `Reject` 旧版本）；determinism 26 项全绿 +「改坏验红」、golden hash 基线按新实现如实更新、不沿用 P8.5c v6 值；`git diff -- crates/w3-core/` 非空属预期；MUST NOT 沿用「`crates/w3-core/` MUST 零改动 / `SNAPSHOT_VERSION` MUST 仍为 3、4、5 或 6 / golden hash MUST 逐字节不变 / MUST NOT 新增权威状态字段 / 变体集合不变」旧断言（R7.5 / R9.3 / R12.4 / ADR 0002 §6-8 / `CODEBUDDY.md §5` / `decision-memo.md` R8）。本 capability 的表现层只读派生正向语义不变：HUD 升级进度 / 命令卡状态 / 野怪血条 / 掉落标记 / 六格背包 / 商店命令卡 / 回城进度不进哈希 / 快照（R13.5 / R10.5）。
+
+> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题作 OpenSpec 归档合并身份键、字面不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。历史标题「内核零 diff」「golden hash 不变」字面保留，其口径已在 THEN 内按用户 2026-11-20 / 11-21 拍板修订、并按本 change 推荐方向 A 续写。
+
+#### Scenario: 内核零 diff（ADR 0002 / R13.6）
+
+- **WHEN** 校验本 capability 的全部改动，以及 P8.5b 主城升级 / P8.5c 野怪营地 / P8.5d 物品 / 商店 / 回城卷轴 change 对 `crates/w3-core/` 的全部改动
+- **THEN** 键位 / 命令卡 / 子菜单 / 编队 / 选中集合 / 队列仍全为表现层只读派生、不进权威状态 / 哈希 / 快照（R13.6 / ADR 0002 §5）；但 P8.5b / P8.5c / P8.5d 按用户拍板与推荐方向改 `w3-core` 的 `git diff -- crates/w3-core/` **非空属预期**，新增 tier / 野怪 / 地面物品 / 消费序列与 P8.5d 六格背包 / 实例 owner 与 slot / 商店库存 / 回城传送 / 消费序列等权威状态 MUST 同步进状态哈希 / 快照 / `first_difference()`，`cargo test -p w3-core --test determinism`（26 项）全绿、含「改坏验红」退化（Q9），MUST NOT 沿用「`git diff -- crates/w3-core/` 为空 / 既有权威状态字段集合不变 / 仍为 3、4、5 或 6 / 逐字节不变」旧断言（R7.5 / R9.3 / R12.4 / ADR 0002 / `CODEBUDDY.md §5`）
+
+#### Scenario: 状态哈希 / 快照 / golden hash 不变（ADR 0002 / R13.6）
+
+- **WHEN** 在一局中连续切换命令卡 / 子菜单 / 编队 / `Shift` 队列并下达经典键命令与 P8.5d 拾取 / 购买 / 使用 / 回城键后重跑 determinism，并与 P8.5d 新实现基线比对
+- **THEN** 表现层操作本身不改变逐帧 `compute_state_hash()` 与 `capture_snapshot()` 字节、命令 / 事件排序键 `ExecuteFrame → PlayerId → Sequence → Arrival` 不变、HUD 升级格位 / 野怪血条 / 掉落标记 / 六格背包 / 商店命令卡 / 回城进度只读派生不进哈希 / 快照（R13.6 / R13.5 / ADR 0002 §5）；但 P8.5d 新增物品 / 商店 / 回城权威状态后 golden hash 基线 MUST 按新实现如实更新、不沿用 P8.5c v6 值、不声称逐字节不变，`SNAPSHOT_VERSION` 按 Q4 推荐 bump 6→7（连同 `SIM_VERSION`、快照头部、单测硬断言、ADR 0002 复核记录同步更新；旧 v6 快照 / 回放按 `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝），状态哈希字段集合与快照头部布局按 ADR 0002 §6-8 纳入新字段，MUST NOT 沿用「golden hash 逐字节不变 / `SNAPSHOT_VERSION` 仍 3、4、5 或 6 / 字段集合不变」旧断言（R7.5 / R9.3 / R12.4 / ADR 0002 §6-8 / `CODEBUDDY.md §5`）

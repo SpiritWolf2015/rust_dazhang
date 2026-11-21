@@ -187,3 +187,15 @@ leader 串行委派 `sim-owner`（`w3-core` 唯一实现所有者，主 owner）
 - **6 份 MODIFIED delta 正文残留提案阶段措辞**：`spec-steward` tasks 7.7 复核发现 6 份 delta 正文保留「按推荐方向 A（待规格门 Q1 拍板）」「按 Q4 推荐（待规格门拍板）」等呈现性文字；规范性 THEN 已与方向 A 一致、不构成正面冲突，改任一正文会触发 `CODEBUDDY.md §8` 规格解锁重走门，故只登记不修订。
 - **跨平台 / CI（Q12）**：沿用 ADR 0002 复核记录 Windows / Debian 12 x86_64 / rustc 1.99.1（v3）已验证；**v4 / v5 / v6 的 Debian 12 侧逐字节比对仍待 VM / 人工**，macOS / ARM64 / 其它 rustc 待验证，不声称全平台达成或有新验证；CI 双平台 `verify_all.py` 本会话未运行、未收到 GitHub Action run 链接 / 成功确认，不冒充 CI 已绿。
 - **人工边界**：本地 `git add` / `commit` 由 AI（中文描述 + Conventional Commits 英文 type 前缀、首行 ≤ 72 字符、一个 change 一个 commit，四件套 + `decision-memo.md` + 5 个新测试文件一并纳入）；`push` / `fetch` / `pull` / `clone`、CI 双平台、真窗口人工验收、`/opsx:archive` 归档全部人工独占，本轮未执行。本地 commit 产生后仍待人工 push；不拿沉默当授权、不由实现方自行放行规格门。
+
+## 归档处置（2026-11-21，用户拍板「直接归档并继续 P8.5d」，leader 回填）
+
+> 日期：规格门拍板 / `/opsx:apply` / 本地提交 `d64b93f` 均发生于 2026-11-20，归档于 2026-11-21 跨日完成，OpenSpec 按系统日期生成归档目录 `2026-11-21-p8-creep-camps`；如实登记、不把跨日误记为同日。
+> 边界：用户 2026-11-20 本会话经 `AskUserQuestion` 明确选择「直接归档并继续 P8.5d（推荐）」，是对规格门 Q11 / 本纪要「真窗口清单未逐项勾选前不得归档」的**显式豁免**；但 MUST NOT 解读为真窗口人工验收已通过。本小节只写进 `decision-memo.md`（不在指纹集合），不改四件套正文。
+
+- **push / CI 状态（与 P8.4 / P8.5a 先例不同，与 P8.5b 同类）**：`cf6ea6d`（P8.5c 提案 / 规格门锁定）与 `d64b93f`（P8.5c apply / 代码门 / 本地提交）**均尚未 push**，`origin/main` 仍为 `292a62b`；本会话未收到这两个提交的 GitHub Action run 链接 / 双平台成功确认，CI 双平台 `verify_all.py` 未运行，**不冒充 CI 已绿**。归档在 push 之前进行，归档产生的新本地 commit 与前序 2 个提交均待人工 push。
+- **真窗口 8.1–8.6 全部保持 `- [ ]`「未执行 / 待人工」**：用户选择「直接归档」为显式豁免，不逐项勾选、不以离屏 / CPU 回归 / 截图冒充真窗口验收。真窗口当前无 `SeedCreepCamp` frame-0 接线、野怪营地在真窗口 UI / AI 触发层不可达（Q2 / Q3 / Q6 / Q11 已拍板范围外承接，见「## 应用阶段处置」），CPU 回归层达成不等于真窗口人工验收通过。
+- **主 specs 合并去向**：归档时由 OpenSpec 把 delta 合并进主 `openspec/specs/` —— 新增 `creep-camps` capability（12 条 ADDED / 24 Scenario）+ 6 份 `## MODIFIED Requirements`（`faction-definitions` 1 / `melee-match` 2 / `human-faction` 4 / `orc-faction` 4 / `gameplay-systems` 1 / `command-hotkeys` 2，共 14 条，逐字保留历史 `#### Scenario:` 身份键）。本纪要阶段主 specs 未变化。
+- **已知限制承接（如实登记、不冒充已收口）**：Q10 其余约 17 份主 specs 历史硬禁令（含 9 处「MUST NOT 新增权威状态 / `w3-core` 零改动 / `SNAPSHOT_VERSION` 仍 3」）、所有 `## Purpose` 概述残留（OpenSpec 1.17.0 delta 不合并）、6 份 MODIFIED delta 正文残留「待规格门 Q1 拍板」呈现措辞、R-a～R-o residual、活文档 `WC3-MELEE-RULES.md` 附录旧行号 / 补锚、跨平台 Debian 12 v4/v5/v6 / macOS / ARM64 / 其它 rustc 待验证、`model_index` 串行单实例门禁（R-j / R-m）、P8.5a / P8.5b 已知限制承接，全部由 `docs-owner` 后续独立 change 统一收口。
+- **后续承接（用户「继续 P8.5d」授权）**：按路线图 `docs/roadmap/P8-human-orc-melee.md` P8.5 五子系统串行顺序，归档后进入 **P8.5d 物品 / 商店 / 回城卷轴**（拾取 / 六格背包闭环，P8.5c Q2 已拍板留本期），再 P8.5e 战争迷雾；各单独 change、串行推进。
+- **人工边界**：`push` / `fetch` / `pull` / `clone`、CI 双平台、真窗口人工验收全部人工独占，本轮未执行；AI 不冒充真窗口 / CI 通过、不声称跨平台 / 全平台已验证、不拿沉默当授权。

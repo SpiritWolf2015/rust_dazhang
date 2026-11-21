@@ -9,10 +9,10 @@
 use std::collections::BTreeSet;
 
 use w3_core::{
-    Command, CommandKind, DefId, EntityId, EventKind, Frame, FrozenDefinitions, GameplayCommand,
-    GameplayCommandKind, HeroDeathRecord, HeroState, MatchConfig, ReviveConstants, RtsMatch,
-    SIM_VERSION, SNAPSHOT_VERSION, SYNTHETIC_REVIVE_CONSTANTS, SimFixed, SnapshotError,
-    StaticWorld, UnitDef,
+    Command, CommandKind, DefId, EffectDef, EffectKind, EntityId, EventKind, Frame,
+    FrozenDefinitions, GROUND_ITEM_ID_BASE, GameplayCommand, GameplayCommandKind, HeroDeathRecord,
+    HeroState, ItemBag, ItemInstanceState, MatchConfig, ReviveConstants, RtsMatch, SIM_VERSION,
+    SNAPSHOT_VERSION, SYNTHETIC_REVIVE_CONSTANTS, SimFixed, SnapshotError, StaticWorld, UnitDef,
 };
 
 const SEED: u64 = 0x5eed;
@@ -27,8 +27,83 @@ const HERO_LEVEL: u32 = 5;
 const HERO_XP: i64 = 4321;
 const HERO_MAX_HP: i64 = 400;
 const HERO_MAX_MANA: i64 = 100;
-/// 6 格背包逐项保留的合成物品 DefId `[待核]`。
+/// 6 格定长实例背包逐项保留的合成物品 DefId `[待核]`（P8.5d / Q7）。
+/// P5 的 `bag: Vec<DefId>` DefId 序列已收敛为六格 `ItemBag`，每格挂稳定
+/// `EntityId` 指向 `CreepCampState.item_instances`（R6.2 / R7.5）。
 const BAG: [DefId; 6] = [101, 102, 103, 104, 105, 106];
+
+/// 六格背包每格的稳定实例 `EntityId`（独立充能 / 冷却，R7.5）。
+fn bag_instances() -> [EntityId; 6] {
+    [
+        EntityId::new(GROUND_ITEM_ID_BASE + 1).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 2).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 3).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 4).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 5).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 6).unwrap(),
+    ]
+}
+
+/// 构造六格定长实例背包（每格挂一个独立 `EntityId`）。
+fn seeded_bag() -> ItemBag {
+    let mut bag = ItemBag::default();
+    for (slot, instance) in bag_instances().iter().enumerate() {
+        bag.set(slot as u8, Some(*instance));
+    }
+    bag
+}
+
+/// 经只读快照注入六格实例背包及其逐项实例状态（真实 `restore_snapshot`
+/// 生产路径，非旁路模拟）。`death` 为 `true` 时登记到 `death_bags`（阵亡态）。
+fn inject_bag(snapshot: &mut w3_core::Snapshot, hero: EntityId, death: bool) {
+    let bag = seeded_bag();
+    for (slot, instance) in bag_instances().iter().enumerate() {
+        snapshot.creep_camps.item_instances.insert(
+            *instance,
+            ItemInstanceState {
+                item_def: BAG[slot],
+                charges: 3,
+                cooldown_frames: 2,
+                effect: EffectDef {
+                    kind: EffectKind::BuffStat,
+                    amount: 2,
+                    duration_frames: 10,
+                },
+                holder: Some(hero),
+                slot: Some(slot as u8),
+            },
+        );
+    }
+    if death {
+        snapshot.item_shop.death_bags.insert(hero, bag);
+    } else {
+        snapshot.item_shop.bags.insert(hero, bag);
+    }
+}
+
+/// 正式不变量：复活后六格背包按实例 `EntityId` 逐项恢复、充能 / 冷却 /
+/// owner / slot 不重置，MUST NOT 回退为 DefId 序列（R6.3 / R7.5）。
+fn bag_restored_by_instance(snapshot: &w3_core::Snapshot, hero: EntityId) -> bool {
+    let Some(bag) = snapshot.item_shop.bags.get(&hero) else {
+        return false;
+    };
+    bag.slots == seeded_bag().slots
+        && bag_instances().iter().enumerate().all(|(slot, instance)| {
+            snapshot
+                .creep_camps
+                .item_instances
+                .get(instance)
+                .is_some_and(|state| {
+                    state.item_def == BAG[slot]
+                        && state.charges == 3
+                        // 冷却按整数帧自然递减，MUST NOT 被复活 / 转交刷新。
+                        && state.cooldown_frames <= 2
+                        && state.holder == Some(hero)
+                        && state.slot == Some(slot as u8)
+                })
+        })
+}
+
 /// 技能登记 / 等级快照（DefId → 等级整数）。
 fn ability_levels() -> std::collections::BTreeMap<DefId, u32> {
     [(20, 3), (21, 1)].into_iter().collect()
@@ -125,8 +200,9 @@ fn seeded() -> (RtsMatch, u64) {
 }
 
 /// 经快照往返注入「已阵亡英雄 + 死亡登记 + 祭坛 + 充足经济」。
-/// 死亡实体 `alive=false` 但 `hero` / `bag` / 技能登记全部保留在 `gameplay`，
-/// 死亡登记含整数帧号 `death_frame` 与同一份状态快照。
+/// 死亡实体 `alive=false` 但 `hero` / 六格实例背包 / 技能登记全部保留，
+/// 死亡登记含整数帧号 `death_frame` 与同一份状态快照。P8.5d 起六格背包
+/// 由 `ItemShopState.death_bags` 按实例身份保存（Q7 / R6.3）。
 fn dead_hero_match(gold: i64, lumber: i64) -> (RtsMatch, u64) {
     let (sim, content) = seeded();
     let mut snapshot = sim.capture_snapshot();
@@ -142,13 +218,14 @@ fn dead_hero_match(gold: i64, lumber: i64) -> (RtsMatch, u64) {
         level: HERO_LEVEL,
         xp: HERO_XP,
     });
-    hero_pos.gameplay.bag = BAG.to_vec();
     hero_pos.gameplay.cooldowns = ability_levels();
     hero_pos.gameplay.mana = 7;
     hero_pos.gameplay.max_mana = HERO_MAX_MANA;
     let hero_gameplay = hero_pos.gameplay.clone();
+    let hero_id = EntityId::new(HERO_ID).unwrap();
+    inject_bag(&mut snapshot, hero_id, true);
     snapshot.revive.deaths.insert(
-        EntityId::new(HERO_ID).unwrap(),
+        hero_id,
         HeroDeathRecord {
             death_frame: 0,
             owner: PLAYER,
@@ -247,7 +324,10 @@ fn revive_restores_same_entity_with_all_state() {
         }),
         "reason=level_and_xp_preserved"
     );
-    assert_eq!(hero.gameplay.bag, BAG.to_vec(), "reason=bag_preserved");
+    assert!(
+        bag_restored_by_instance(&after, EntityId::new(HERO_ID).unwrap()),
+        "reason=six_slot_instance_bag_restored_by_entity_id"
+    );
     assert_eq!(
         hero.gameplay.cooldowns,
         ability_levels(),
@@ -734,11 +814,11 @@ fn new_revive_fields_are_hashed_and_snapshot_safe() {
 }
 
 /// Q1：旧版本快照被 `SnapshotError` 明确拒绝，且 `SNAPSHOT_VERSION` /
-/// `SIM_VERSION` 已随 P8.5c bump 到 6（v3 / v4 / v5 均属旧版本，不提供迁移）。
+/// `SIM_VERSION` 已随 P8.5d bump 到 7（v3 / v4 / v5 / v6 均属旧版本，不提供迁移）。
 #[test]
 fn old_v3_snapshot_is_rejected() {
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
-    assert_eq!(SIM_VERSION, 6, "reason=sim_version_6");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
+    assert_eq!(SIM_VERSION, 7, "reason=sim_version_7");
     let (sim, content) = dead_hero_match(100_000, 100_000);
     let mut old = sim.capture_snapshot();
     old.version = 3;
@@ -752,7 +832,7 @@ fn old_v3_snapshot_is_rejected() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 3,
-            expected: 6
+            expected: 7
         })
     ));
 }
@@ -777,7 +857,6 @@ fn hero_death_registration_uses_integer_frame_number() {
         level: HERO_LEVEL,
         xp: HERO_XP,
     });
-    hero.gameplay.bag = BAG.to_vec();
     // 把第二个实体当作攻击者：注入足够伤害与射程（走真实 Attack 结算）。
     let attacker = snapshot
         .positions
@@ -786,6 +865,8 @@ fn hero_death_registration_uses_integer_frame_number() {
         .expect("attacker position present");
     attacker.attack_damage = 999;
     attacker.attack_range = SimFixed::from_int(100).unwrap().raw();
+    // 六格实例背包挂在存活英雄上；真实死亡登记应把它移入 `death_bags`。
+    inject_bag(&mut snapshot, EntityId::new(HERO_ID).unwrap(), false);
     let mut sim = RtsMatch::restore_snapshot(snapshot, StaticWorld::default(), content).unwrap();
     sim.drain_events();
 
@@ -829,10 +910,18 @@ fn hero_death_registration_uses_integer_frame_number() {
         }),
         "reason=death_snapshot_keeps_hero"
     );
+    // P8.5d：阵亡登记把六格实例背包按实例身份移入 `death_bags`（R6.3）。
     assert_eq!(
-        record.gameplay.bag,
-        BAG.to_vec(),
-        "reason=death_snapshot_keeps_bag"
+        after.item_shop.death_bags.get(&hero_id),
+        Some(&seeded_bag()),
+        "reason=death_registration_keeps_six_slot_instance_bag"
+    );
+    assert!(!after.item_shop.bags.contains_key(&hero_id));
+    assert!(
+        bag_instances()
+            .iter()
+            .all(|instance| after.creep_camps.item_instances.contains_key(instance)),
+        "reason=death_keeps_instance_identity"
     );
     // 不删实体、不判负、发事实事件。
     assert!(

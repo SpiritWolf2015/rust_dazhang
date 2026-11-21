@@ -560,7 +560,7 @@ fn play_full_match(setup: &MeleeSetup) -> (Vec<u64>, Snapshot) {
 
 /// 两族参数各装配一局并打完，逐帧哈希与快照字节与「未传种族参数」基线一致
 /// （design D2：种族选择不引入运行时权威状态，`SNAPSHOT_VERSION` 仍为 3；P8.5a 起为 4、
-/// P8.5b 起为 5、P8.5c 起为 6；本行属历史沿革叙述，按先例保留并加夹注）。
+/// P8.5b 起为 5、P8.5c 起为 6、P8.5d 起为 7；本行属历史沿革叙述，按先例保留并加夹注）。
 #[test]
 fn both_races_play_full_match_with_baseline_frame_hashes() {
     let baseline = play_full_match(&MeleeSetup::new());
@@ -1109,7 +1109,7 @@ fn play_human_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// 人族 P8.1 完整一局与基线一致：逐帧状态哈希与 `capture_snapshot()`
-/// 快照逐条相等，快照仍为 v6、冻结定义内容哈希仍由 `defs_hash` 承载。
+/// 快照逐条相等，快照仍为 v7、冻结定义内容哈希仍由 `defs_hash` 承载。
 #[test]
 fn human_full_match_matches_baseline_and_restart_is_clean() {
     let baseline = play_human_full_match(&MeleeSetup::new());
@@ -1127,9 +1127,9 @@ fn human_full_match_matches_baseline_and_restart_is_clean() {
             .snapshots
             .iter()
             .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-        "reason=all_snapshots_are_v6"
+        "reason=all_snapshots_are_v7"
     );
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_unchanged");
     assert!(
         baseline.victory_frame > 0,
         "reason=baseline_victory_frame_recorded"
@@ -1580,7 +1580,7 @@ fn play_orc_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// P8.2 兽族完整一局与基线一致：同一兽族脚本两实例逐帧状态哈希与
-/// `capture_snapshot()` 快照逐条相等，快照仍 v6、冻结定义内容哈希仍由
+/// `capture_snapshot()` 快照逐条相等，快照仍 v7、冻结定义内容哈希仍由
 /// `defs_hash` 承载（不依赖改动前的旧哈希数值）。胜负只结算一次、重开干净。
 #[test]
 fn orc_full_match_matches_baseline_and_restart_is_clean() {
@@ -1599,9 +1599,9 @@ fn orc_full_match_matches_baseline_and_restart_is_clean() {
             .snapshots
             .iter()
             .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-        "reason=all_orc_snapshots_are_v6"
+        "reason=all_orc_snapshots_are_v7"
     );
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=orc_snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=orc_snapshot_version_unchanged");
     assert!(
         baseline.victory_frame > 0,
         "reason=orc_baseline_victory_frame_recorded"
@@ -1611,7 +1611,7 @@ fn orc_full_match_matches_baseline_and_restart_is_clean() {
         "reason=orc_final_snapshot_uses_recorded_victory_frame"
     );
     // 新增定义是冻结定义内容变化：`defs_hash` 由 `synthetic_definitions()`
-    // 的 `content_hash()` 承载，进入 v6 快照头部（C2 / D2）。
+    // 的 `content_hash()` 承载，进入 v7 快照头部（C2 / D2）。
     let defs = synthetic_definitions();
     assert_eq!(
         baseline.final_snapshot.defs_hash,
@@ -1691,6 +1691,8 @@ fn degenerate_defs_with_mana_less_orc_hero() -> FrozenDefinitions {
         full.drop_tables().clone(),
         full.neutral_categories().clone(),
     )
+    // P8.5d：同源登记商店段，避免新增冻结段稀释退化装配的内容哈希比较。
+    .with_item_shop(full.item_shop().clone())
 }
 
 /// 经真实 `Train` → `Cast` 路径跑一次兽族英雄施法，返回「施法确实结算」
@@ -2021,11 +2023,11 @@ fn play_dual_faction_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// 四组合 CPU 端到端一局与确定性闭环（design D3 / C4 / tasks 3.x）：
-/// 各组合装配并打完一局，胜负只结算一次、重开无残留、快照仍 v6；
+/// 各组合装配并打完一局，胜负只结算一次、重开无残留、快照仍 v7；
 /// 只断言组内两实例逐帧哈希 / 快照字节一致，不断言跨组合或旧基线相等。
 #[test]
 fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_unchanged");
     for (local, ai) in DUAL_COMBINATIONS {
         let setup = MeleeSetup::with_races(local, ai);
         assert_eq!(setup.race, local, "reason=local_race_alias local={local:?}");
@@ -2069,7 +2071,7 @@ fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
             "reason=within_combo_victory_frame_match local={local:?} ai={ai:?}"
         );
 
-        // 胜负只结算一次（既有脚本已断言）、结算帧进权威状态、快照 v6。
+        // 胜负只结算一次（既有脚本已断言）、结算帧进权威状态、快照 v7。
         assert!(
             first.final_snapshot.gameplay.victory.resolved,
             "reason=victory_resolved local={local:?} ai={ai:?}"
@@ -2088,11 +2090,11 @@ fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
                 .snapshots
                 .iter()
                 .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-            "reason=all_snapshots_v6 local={local:?} ai={ai:?}"
+            "reason=all_snapshots_v7 local={local:?} ai={ai:?}"
         );
 
         // 重开无残留：`victory.resolved == false`、entities / positions /
-        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 6`。
+        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 7`。
         let fresh = build_driver(&setup, 300);
         assert!(
             !fresh.snapshot().gameplay.victory.resolved,
@@ -2117,7 +2119,7 @@ fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
         );
         assert_eq!(
             fresh_snapshot.version, SNAPSHOT_VERSION,
-            "reason=restart_snapshot_v6 local={local:?} ai={ai:?}"
+            "reason=restart_snapshot_v7 local={local:?} ai={ai:?}"
         );
     }
     // MUST NOT 断言「四组合之间哈希数值相等」或「与改动前旧基线数值相等」：

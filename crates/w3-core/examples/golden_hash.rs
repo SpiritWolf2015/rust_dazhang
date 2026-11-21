@@ -45,6 +45,24 @@
 //! **Debian 12 x86_64 侧 v4 / v5 / v6 逐字节离线比对仍待人工 / VM 执行；
 //! macOS、其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项**，
 //! 不得据本记录声称双平台 / 全平台确定性已验证或本 change 有新验证（Q12）。
+//!
+//! P8.5d 基线重取（Q4 / Q12 / tasks 3.4）：新增顶层权威状态 `item_shop`
+//! （六格定长实例背包 / 复活死亡背包 / 拾取购买使用丢弃移交售卖事实 /
+//! 商店库存与刷新计数 / 回城传送施法帧目标次数 / 随机码消费序列 / 购买
+//! 扣费登记）进入 `compute_state_hash()`，商店 / 道具 / 回城冻结定义段
+//! 进入 `compute_defs_hash()`，`ItemInstanceState` 扩展 `holder` / `slot`，
+//! `SNAPSHOT_VERSION` / `SIM_VERSION` bump 6→7，逐帧哈希布局再次实质
+//! 变化，故基线必变、不沿用 P8.5c v6 值、不声称逐字节不变。
+//!
+//! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按 v7 实现重取：
+//! - 41 行 / 1371 字节，`final_hash=0x940cb016f6630f1e`；
+//! - 整份文本 sha256 `d6c0c944d6ac3397cd16995ab82bce3243ecd7673d4788fec336c332936aaa41`。
+//! 上文 P8.5c v6 的 `final_hash=0xc802b63cd6c55b74` 已失效、不沿用、
+//! 不声称逐字节不变。**Debian 12 x86_64 侧 v4 / v5 / v6 / v7 逐字节
+//! 离线比对仍待人工 / VM 执行；macOS、其它 CPU 架构（ARM64 等）与其它
+//! rustc 版本仍属待验证项**，不得据本记录声称双平台 / 全平台确定性
+//! 已验证或本 change 有新验证（Q12）；不声称 Debian 12 侧 v4 / v5 /
+//! v6 / v7 逐字节比对已完成。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

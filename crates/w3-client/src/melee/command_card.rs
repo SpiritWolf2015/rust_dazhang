@@ -12,7 +12,7 @@
 //!   不冒充原版、不照搬 Warsmash rawcode / 暴雪 abilId / 参考项目原创单位名。
 //! - 按钮标识 `def_id` 是表现层装配用的合成整数命名空间（避开冻结定义的
 //!   `1xx` / `2xx` / `9xx` 段与类别内唯一 ID），**不是权威 `DefId`**，
-//!   MUST NOT 进入权威状态 / FNV-1a 状态哈希 / `SNAPSHOT_VERSION`（当前 6）
+//!   MUST NOT 进入权威状态 / FNV-1a 状态哈希 / `SNAPSHOT_VERSION`（当前 7）
 //!   快照；命令卡 12 格、键→action 表、子菜单栈全是 HUD 只读派生。
 //! - 第二键列表由定义表记录驱动，MUST NOT 用建筑名字符串硬编码白名单
 //!   （R1.2 / R13.3）；人族六类新单位 / 建筑各有定义表条目。

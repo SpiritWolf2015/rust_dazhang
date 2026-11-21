@@ -15,9 +15,10 @@
 //! `PROTOCOL_VERSION = 4` 在玩法线格式 oneof 追加 `ReviveHero` /
 //! `CancelRevive` 两个变体，`PROTOCOL_VERSION = 5` 再只追加
 //! `UpgradeTownHall` 一个变体，`PROTOCOL_VERSION = 6` 再只追加
-//! `SeedCreepCamp` 一个系统级变体（tag 36）；帧编排、稳定排序键、依序提交
-//! 与「恰好一次 `step()`」推进点一律不变，新增命令种类不造成双推进、
-//! 不绕过同源校验（ADR 0005 §3）。
+//! `SeedCreepCamp` 一个系统级变体（tag 36）；`PROTOCOL_VERSION = 7`
+//! 再只追加 9 个 P8.5d 物品 / 商店 / 回城变体（tag 37–45）；帧编排、
+//! 稳定排序键、依序提交与「恰好一次 `step()`」推进点一律不变，新增命令
+//! 种类不造成双推进、不绕过同源校验（ADR 0005 §3）。
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -3,10 +3,11 @@
 //! 两个 `RtsMatch` 经自建 relay 的权威帧命令流推进，只传输入命令、
 //! 不传状态；逐帧比对 `compute_state_hash()`、`read_view()`、
 //! `first_difference()` 与双方 checksum 交换结果。权威帧批轮转携带全部
-//! 14 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
-//! `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall` 与
-//! PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`），验证联机与本地
-//! 行为一致、联机唯一推进点仍是 `w3_net::apply_frame`。
+//! 23 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
+//! `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`、
+//! PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp` 与 PROTOCOL_VERSION 7
+//! 新增的 9 个 P8.5d 物品 / 商店 / 回城变体），验证联机与本地行为一致、
+//! 联机唯一推进点仍是 `w3_net::apply_frame`。
 //! 注意：此处两个客户端实例跑在内存回环总线上；真实 UDP 双进程实机
 //! 验收另见 `vera20k-mapping.md`，对应 tasks.md 的人工验收项。
 
@@ -71,16 +72,17 @@ fn commands_for(frame: u64, player: u8) -> Vec<Command> {
     )]
 }
 
-/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 14 类
+/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 23 类
 /// `GameplayCommandKind`（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
-/// `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall` 与
-/// PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`），
-/// 且 `execute_frame` 落在原定帧，验证玩法命令仍在原定 `ExecuteFrame`
-/// 执行一次、不改变帧序、两端逐帧哈希一致。
+/// `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`、
+/// PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp` 与 PROTOCOL_VERSION 7
+/// 新增的 9 个 P8.5d 物品 / 商店 / 回城变体），且 `execute_frame` 落在
+/// 原定帧，验证玩法命令仍在原定 `ExecuteFrame` 执行一次、不改变帧序、
+/// 两端逐帧哈希一致。
 fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
     let entity = EntityId::new(u64::from(player)).unwrap();
     let altar = EntityId::new(u64::from(player) + 100).unwrap();
-    let slot = frame % 14;
+    let slot = frame % 23;
     let kind = match slot {
         0 => GameplayCommandKind::Cast {
             caster: entity,
@@ -130,13 +132,61 @@ fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
         // 13：PROTOCOL_VERSION 6 新增的系统级营地装配命令（单一变体、
         // tag 36）。camp / script 为冻结定义层的营地实例 id / 脚本 id，
         // player_id 必须是 NEUTRAL_OWNER(0)，由 w3-core 同源校验。
-        _ => GameplayCommandKind::SeedCreepCamp {
+        13 => GameplayCommandKind::SeedCreepCamp {
             camp: 90 + u32::from(player),
             script: 41,
         },
+        // 14–22：PROTOCOL_VERSION 7 新增的 9 个 P8.5d 物品 / 商店 / 回城
+        // 变体（tag 37–45）。实体字段均为合法非零值，保证 `apply_frame`
+        // 提交时的同源校验通过；命令语义（拾取 / 购买 / 使用 / 回城）由
+        // w3-core 权威帧阶段确定性结算，两端脚本一致即逐帧哈希一致。
+        14 => GameplayCommandKind::PickupGroundItem {
+            hero: entity,
+            ground_item: altar,
+        },
+        15 => GameplayCommandKind::BuyFromShop {
+            hero: entity,
+            shop: 700 + u32::from(player),
+            shelf: 41,
+        },
+        16 => GameplayCommandKind::UseItem {
+            hero: entity,
+            instance: altar,
+            target: entity,
+        },
+        17 => GameplayCommandKind::DropItem {
+            hero: entity,
+            instance: altar,
+        },
+        18 => GameplayCommandKind::TransferItem {
+            from_hero: entity,
+            to_hero: altar,
+            instance: entity,
+        },
+        19 => GameplayCommandKind::SellItem {
+            hero: entity,
+            instance: altar,
+            shop: 700 + u32::from(player),
+        },
+        20 => GameplayCommandKind::UseTownPortal {
+            hero: entity,
+            instance: altar,
+        },
+        21 => GameplayCommandKind::CancelTownPortal { hero: entity },
+        // 22：系统级市场刷新（tag 45）。shop / batch 非零，player_id 必须是
+        // NEUTRAL_OWNER(0)，由 w3-core 同源校验。
+        _ => GameplayCommandKind::RefreshMarket {
+            shop: 700 + u32::from(player),
+            batch: 90 + u32::from(player),
+        },
     };
-    // 系统级命令由中立归属提交；其余 13 类沿用玩家 id，保证两端一致。
-    let command_player = if slot == 13 { NEUTRAL_OWNER } else { player };
+    // 两个系统级命令（slot 13 `SeedCreepCamp` / slot 22 `RefreshMarket`）
+    // 由中立归属提交；其余 21 类沿用玩家 id，保证两端一致。
+    let command_player = if slot == 13 || slot == 22 {
+        NEUTRAL_OWNER
+    } else {
+        player
+    };
     vec![GameplayCommand::new(
         Frame::new(frame),
         command_player,
@@ -306,6 +356,59 @@ fn relay_rejects_version_five_carrying_seed_creep_camp() {
         .encode()
         .unwrap();
     stale[4] = 5;
+
+    client.send(&Endpoint::Loopback(0), &stale).unwrap();
+    relay.poll().unwrap();
+    let (_, bytes) = client.recv().unwrap().unwrap();
+    let reject = Packet::decode(&bytes).unwrap();
+    assert_eq!(reject.kind, PacketKind::Reject);
+    assert_eq!(
+        parse_reject(&reject.payload).unwrap(),
+        "protocol version mismatch"
+    );
+    assert!(
+        relay.log().is_empty(),
+        "stale payload must not enter command stream"
+    );
+}
+
+#[test]
+fn relay_rejects_version_six_carrying_p8_5d_variant() {
+    // 伪装成旧 v6 的 Input 包，载荷携带 PROTOCOL_VERSION 7 新增的
+    // PickupGroundItem（tag 37）与 RefreshMarket（tag 45，系统级）；v7 relay
+    // 必须在解码 payload 之前回 Reject("protocol version mismatch")，
+    // tag 37–45 玩法命令字段绝不被静默当作 unknown field 丢弃后进入
+    // 权威命令流（ADR 0005 §3 / R12.2）。
+    let bus = LoopbackBus::shared();
+    let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+    let mut client = LoopbackTransport::new(1, &bus);
+
+    let hero = EntityId::new(20).unwrap();
+    let gameplay = vec![
+        GameplayCommand::new(
+            Frame::new(0),
+            1,
+            1,
+            GameplayCommandKind::PickupGroundItem {
+                hero,
+                ground_item: EntityId::new(21).unwrap(),
+            },
+        ),
+        GameplayCommand::new(
+            Frame::new(0),
+            NEUTRAL_OWNER,
+            2,
+            GameplayCommandKind::RefreshMarket {
+                shop: 701,
+                batch: 91,
+            },
+        ),
+    ];
+    let payload = encode_commands(&[], &gameplay).unwrap();
+    let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+        .encode()
+        .unwrap();
+    stale[4] = 6;
 
     client.send(&Endpoint::Loopback(0), &stale).unwrap();
     relay.poll().unwrap();

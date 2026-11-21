@@ -23,6 +23,10 @@
 // 新增 GameplaySeedCreepCamp 消息，camp / script 用 uint32 定宽承载；
 // 明确拒绝 v5，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
 // player_id 的 NEUTRAL_OWNER 同源校验由 w3-core 承担，protobuf 层不校验。
+// PROTOCOL_VERSION 7（P8.5d 新增 9 个物品 / 商店 / 回城玩法命令变体）：
+// 在 GameplayCommand.oneof 只追加 tag 37–45，reserved 14 to 32 与
+// tag 33/34/35/36 一字不动；每个新 message 字段编号只追加、尾部保留 reserved；
+// 明确拒绝 v6，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
 
 syntax = "proto3";
 package w3net;
@@ -124,7 +128,7 @@ message Reject {
   reserved 2 to 6;
 }
 
-// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体 / 5 追加一个变体 / 6 追加一个变体，只追加，见 ADR 0005 §3）----
+// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体 / 5 追加一个变体 / 6 追加一个变体 / 7 追加九个变体，只追加，见 ADR 0005 §3）----
 
 // 效果定义（玩法命令参数）：EffectKind 用稳定码 uint32 承载，amount 用 int64。
 message EffectDef {
@@ -137,7 +141,8 @@ message EffectDef {
 // 玩法命令：execute_frame / player_id / sequence 与 w3_core::GameplayCommand 一一对应。
 // oneof kind 用 tag 4–13 覆盖前 10 个玩法变体；PROTOCOL_VERSION 4 在
 // reserved 14 to 32 之后只追加 tag 33 / 34 两个变体，PROTOCOL_VERSION 5
-// 再只追加 tag 35 一个变体，PROTOCOL_VERSION 6 再只追加 tag 36 一个变体
+// 再只追加 tag 35 一个变体，PROTOCOL_VERSION 6 再只追加 tag 36 一个变体，
+// PROTOCOL_VERSION 7 再只追加 tag 37–45 九个变体
 // （均跳过 reserved 段，字段编号只追加、不复用、不改名）。
 // arrival 不编码，由各端提交时按稳定序本地分配。
 message GameplayCommand {
@@ -159,6 +164,15 @@ message GameplayCommand {
     GameplayCancelRevive cancel_revive = 34;
     GameplayUpgradeTownHall upgrade_town_hall = 35;
     GameplaySeedCreepCamp seed_creep_camp = 36;
+    GameplayPickupGroundItem pickup_ground_item = 37;
+    GameplayBuyFromShop buy_from_shop = 38;
+    GameplayUseItem use_item = 39;
+    GameplayDropItem drop_item = 40;
+    GameplayTransferItem transfer_item = 41;
+    GameplaySellItem sell_item = 42;
+    GameplayUseTownPortal use_town_portal = 43;
+    GameplayCancelTownPortal cancel_town_portal = 44;
+    GameplayRefreshMarket refresh_market = 45;
   }
   reserved 14 to 32;
 }
@@ -252,6 +266,69 @@ message GameplayUpgradeTownHall {
 message GameplaySeedCreepCamp {
   uint32 camp = 1;
   uint32 script = 2;
+  reserved 3 to 8;
+}
+
+// 以下九个消息为 PROTOCOL_VERSION 7（P8.5d 物品 / 商店 / 回城）追加：
+// EntityId 一律 uint64 的 value()，shop / shelf / batch 一律 uint32 定宽；
+// 玩家归属 / 系统级 NEUTRAL_OWNER 同源校验由 w3-core 承担，线格式层
+// 只忠实传输、不猜测、不回退。字段编号只追加，尾部保留 reserved。
+// 拾取地面物品（kind 码 15）：英雄与地面物品实例均为 EntityId。
+message GameplayPickupGroundItem {
+  uint64 hero = 1;
+  uint64 ground_item = 2;
+  reserved 3 to 8;
+}
+// 商店购买（kind 码 16）：shop 为商店 id，shelf 为货架 id。
+message GameplayBuyFromShop {
+  uint64 hero = 1;
+  uint32 shop = 2;
+  uint32 shelf = 3;
+  reserved 4 to 8;
+}
+// 使用道具（kind 码 17）：target 为 EntityId::NONE 时表示自身。
+message GameplayUseItem {
+  uint64 hero = 1;
+  uint64 instance = 2;
+  uint64 target = 3;
+  reserved 4 to 8;
+}
+// 丢弃道具（kind 码 18）：实例以同一 EntityId 回地面。
+message GameplayDropItem {
+  uint64 hero = 1;
+  uint64 instance = 2;
+  reserved 3 to 8;
+}
+// 移交道具（kind 码 19）：两英雄六格背包间迁移同一实例。
+message GameplayTransferItem {
+  uint64 from_hero = 1;
+  uint64 to_hero = 2;
+  uint64 instance = 3;
+  reserved 4 to 8;
+}
+// 售卖道具（kind 码 20）：shop 为回收商店 id。
+message GameplaySellItem {
+  uint64 hero = 1;
+  uint64 instance = 2;
+  uint32 shop = 3;
+  reserved 4 to 8;
+}
+// 使用回城卷轴（kind 码 21）：目标按友方主城分类由内核数据驱动选出。
+message GameplayUseTownPortal {
+  uint64 hero = 1;
+  uint64 instance = 2;
+  reserved 3 to 8;
+}
+// 中断回城施法（kind 码 22）：仅携带目标英雄 EntityId。
+message GameplayCancelTownPortal {
+  uint64 hero = 1;
+  reserved 2 to 8;
+}
+// 系统级市场刷新（kind 码 23）：shop / batch 均为 uint32 定宽，
+// player_id 的 NEUTRAL_OWNER 同源校验在 w3-core 侧，线格式层不校验。
+message GameplayRefreshMarket {
+  uint32 shop = 1;
+  uint32 batch = 2;
   reserved 3 to 8;
 }
 

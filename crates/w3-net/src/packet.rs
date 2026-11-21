@@ -33,8 +33,12 @@ pub const MAGIC: [u8; 4] = *b"W3N1";
 ///     `GameplayCommand.oneof` 只追加 tag 36，`reserved 14 to 32` 原样保留）；
 ///     `player_id` 的中立归属同源校验仍由 `w3-core` 承担；明确拒绝 v5，
 ///     玩法命令字段不被静默当作 unknown field，客户端与 relay 同步发布。
+/// 7 = 新增 9 个 P8.5d 物品 / 商店 / 回城玩法命令变体（ADR 0005 §3，
+///     `GameplayCommand.oneof` 只追加 tag 37–45，`reserved 14 to 32` 与
+///     tag 33–36 一字不动）；明确拒绝 v6，玩法命令字段不被静默当作
+///     unknown field，客户端与 relay 同步发布。
 /// 与 `w3-core` 的 `SNAPSHOT_VERSION` / `SIM_VERSION` 是相互独立的版本号。
-pub const PROTOCOL_VERSION: u8 = 6;
+pub const PROTOCOL_VERSION: u8 = 7;
 /// 固定包头长度：magic4 + version1 + kind1 + sender1 + seq4 + frame8 + len2 + sum4。
 pub const HEADER_LEN: usize = 25;
 const MAX_PAYLOAD: usize = u16::MAX as usize;
@@ -413,7 +417,7 @@ mod tests {
             bytes[4], PROTOCOL_VERSION,
             "PROTOCOL_VERSION bumped for breaking payload change"
         );
-        assert_eq!(PROTOCOL_VERSION, 6);
+        assert_eq!(PROTOCOL_VERSION, 7);
         assert_eq!(&bytes[7..11], &7u32.to_le_bytes());
         assert_eq!(&bytes[11..19], &4u64.to_le_bytes());
         assert_eq!(&bytes[19..21], &(payload.len() as u16).to_le_bytes());
@@ -518,6 +522,40 @@ mod tests {
                 assert_eq!(found, 5);
             }
             other => panic!("version=5 must be rejected decisively: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_six_packet_carrying_new_variant_is_rejected_before_payload_decode() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        // PROTOCOL_VERSION 由 6 bump 到 7（新增 9 个 P8.5d 玩法命令变体）。
+        // 构造一个携带 tag 37 新玩法命令字段的 v7 载荷，再把包头版本字节
+        // 伪装成旧 v6；两个 EntityId 均为合法非零值，与内核同源校验一致。
+        let gameplay = GameplayCommand::new(
+            Frame::new(3),
+            1,
+            1,
+            GameplayCommandKind::PickupGroundItem {
+                hero: entity_from_raw(20),
+                ground_item: entity_from_raw(21),
+            },
+        );
+        let payload = encode_commands(&sample_commands(), &[gameplay]).unwrap();
+        let mut bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload)
+            .encode()
+            .unwrap();
+        bytes[4] = 6;
+
+        // v6 端会把 tag 37–45 的新玩法命令字段当 unknown field 静默丢弃，
+        // 两端命令流不等 -> desync 不可见。因此必须在解码 payload 之前
+        // 按 VersionMismatch 明确拒绝，玩法命令字段绝不被静默当作 unknown。
+        match Packet::decode(&bytes) {
+            Err(NetError::VersionMismatch { expected, found }) => {
+                assert_eq!(expected, PROTOCOL_VERSION);
+                assert_eq!(found, 6);
+            }
+            other => panic!("version=6 must be rejected decisively: {other:?}"),
         }
     }
 }

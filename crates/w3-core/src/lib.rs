@@ -24,6 +24,7 @@ pub mod entity;
 pub mod fixed;
 pub mod frame;
 pub mod gameplay;
+pub mod item_shop;
 pub mod nav;
 pub mod sim_match;
 pub mod snapshot;
@@ -49,6 +50,12 @@ pub use gameplay::{
     SYNTHETIC_TOWN_HALL_CONSTANTS, StatMods, TownHallConstants, TownHallCost, TownHallTier,
     TownHallUpgradeCharge, TownHallUpgradeItem, TownHallUpgradeState, UnitDef, UnitGameplayState,
     UpgradeDef, VictoryState, WaveState, WorldGameplayState, resolve_effects, restore_by_percent,
+};
+pub use item_shop::{
+    BAG_SLOTS, ItemBag, ItemCategory, ItemShopConstants, ItemShopDefinitions, ItemShopFact,
+    ItemShopFactKind, ItemShopState, PurchaseCharge, SHOP_FIXTURE_ID_BASE,
+    SYNTHETIC_ITEM_SHOP_CONSTANTS, ShopFixture, ShopRefreshDraw, ShopShelf, TownPortalCast,
+    shop_fixture_id, synthetic_item_shop_definitions,
 };
 pub use nav::{DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 pub use sim_match::{EntityView, Event, EventKind, MatchConfig, RtsMatch, WorldView};

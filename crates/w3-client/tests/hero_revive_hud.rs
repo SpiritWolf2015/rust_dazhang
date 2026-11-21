@@ -88,6 +88,8 @@ fn degenerate_definitions() -> FrozenDefinitions {
             full.drop_tables().clone(),
             full.neutral_categories().clone(),
         )
+        // P8.5d：同源登记商店段，使缺陷态仍只差复活段。
+        .with_item_shop(full.item_shop().clone())
 }
 
 /// 真实装配 + 快照往返注入「已阵亡英雄 + 死亡登记 + 祭坛 + 充足经济」。
@@ -320,8 +322,8 @@ fn revive_command_is_accepted_in_real_assembly() {
     sim.step();
 
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v7");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
     let item = snapshot
         .revive
         .queue
@@ -527,7 +529,7 @@ fn hud_redraw_keeps_state_hash_and_snapshot_bytes() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=snapshot_version_6 frame={frame}"
+            "reason=snapshot_version_7 frame={frame}"
         );
     }
 }

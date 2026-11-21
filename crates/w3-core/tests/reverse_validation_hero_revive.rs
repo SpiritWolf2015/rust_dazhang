@@ -8,9 +8,10 @@
 //! `movability.rs::degenerate_filter`。
 
 use w3_core::{
-    Command, CommandKind, DefId, EntityId, Frame, FrozenDefinitions, GameplayCommand,
-    GameplayCommandKind, HeroDeathRecord, HeroState, MatchConfig, ReviveConstants, RtsMatch,
-    SYNTHETIC_REVIVE_CONSTANTS, SimFixed, StaticWorld, UnitDef,
+    Command, CommandKind, DefId, EffectDef, EffectKind, EntityId, Frame, FrozenDefinitions,
+    GROUND_ITEM_ID_BASE, GameplayCommand, GameplayCommandKind, HeroDeathRecord, HeroState, ItemBag,
+    ItemInstanceState, MatchConfig, ReviveConstants, RtsMatch, SYNTHETIC_REVIVE_CONSTANTS,
+    SimFixed, StaticWorld, UnitDef,
 };
 
 const SEED: u64 = 0x5eed;
@@ -24,6 +25,70 @@ const HERO_XP: i64 = 4321;
 const HERO_MAX_HP: i64 = 400;
 const HERO_MAX_MANA: i64 = 100;
 const BAG: [DefId; 6] = [101, 102, 103, 104, 105, 106];
+
+/// 六格定长实例背包（Q7 收敛），每格挂一个稳定 `EntityId` 指向实例。
+fn bag_instances() -> [EntityId; 6] {
+    [
+        EntityId::new(GROUND_ITEM_ID_BASE + 1).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 2).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 3).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 4).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 5).unwrap(),
+        EntityId::new(GROUND_ITEM_ID_BASE + 6).unwrap(),
+    ]
+}
+
+fn seeded_bag() -> ItemBag {
+    let mut bag = ItemBag::default();
+    for (slot, instance) in bag_instances().iter().enumerate() {
+        bag.set(slot as u8, Some(*instance));
+    }
+    bag
+}
+
+/// 经只读快照注入六格实例背包与逐项实例状态（真实 `restore_snapshot` 路径）。
+fn inject_bag(snapshot: &mut w3_core::Snapshot, hero: EntityId) {
+    let bag = seeded_bag();
+    for (slot, instance) in bag_instances().iter().enumerate() {
+        snapshot.creep_camps.item_instances.insert(
+            *instance,
+            ItemInstanceState {
+                item_def: BAG[slot],
+                charges: 3,
+                cooldown_frames: 2,
+                effect: EffectDef {
+                    kind: EffectKind::BuffStat,
+                    amount: 2,
+                    duration_frames: 10,
+                },
+                holder: Some(hero),
+                slot: Some(slot as u8),
+            },
+        );
+    }
+    snapshot.item_shop.death_bags.insert(hero, bag);
+}
+
+/// 正式不变量：复活后六格背包按实例身份逐项恢复（R6.3 / R7.5）。
+fn bag_restored_by_instance(snapshot: &w3_core::Snapshot, hero: EntityId) -> bool {
+    let Some(bag) = snapshot.item_shop.bags.get(&hero) else {
+        return false;
+    };
+    bag.slots == seeded_bag().slots
+        && bag_instances().iter().enumerate().all(|(slot, instance)| {
+            snapshot
+                .creep_camps
+                .item_instances
+                .get(instance)
+                .is_some_and(|state| {
+                    state.item_def == BAG[slot]
+                        && state.charges == 3
+                        && state.cooldown_frames <= 2
+                        && state.holder == Some(hero)
+                        && state.slot == Some(slot as u8)
+                })
+        })
+}
 
 fn ability_levels() -> std::collections::BTreeMap<DefId, u32> {
     [(20, 3), (21, 1)].into_iter().collect()
@@ -132,11 +197,11 @@ fn dead_hero_match(gold: i64, lumber: i64) -> (RtsMatch, u64) {
         level: HERO_LEVEL,
         xp: HERO_XP,
     });
-    hero_pos.gameplay.bag = BAG.to_vec();
     hero_pos.gameplay.cooldowns = ability_levels();
     hero_pos.gameplay.mana = 7;
     hero_pos.gameplay.max_mana = HERO_MAX_MANA;
     let hero_gameplay = hero_pos.gameplay.clone();
+    inject_bag(&mut snapshot, EntityId::new(HERO_ID).unwrap());
     snapshot.revive.deaths.insert(
         EntityId::new(HERO_ID).unwrap(),
         HeroDeathRecord {
@@ -219,7 +284,7 @@ fn revive_preserves_original(before: &w3_core::Snapshot, after: &w3_core::Snapsh
     };
     hero.alive
         && hero.gameplay.hero.is_some()
-        && hero.gameplay.bag == BAG.to_vec()
+        && bag_restored_by_instance(after, EntityId::new(HERO_ID).unwrap())
         && after.next_entity_id == before.next_entity_id
         && after.alive_entities.len() == before.alive_entities.len()
 }
@@ -229,14 +294,21 @@ fn revive_preserves_original(before: &w3_core::Snapshot, after: &w3_core::Snapsh
 /// 模拟，并经 `restore_snapshot` 真实生产路径注入（非旁路模拟）。
 fn degenerate_spawn_new_entity(before: &w3_core::Snapshot, content: u64) -> w3_core::Snapshot {
     let mut broken = before.clone();
+    // 丢本体：hero=None、空六格实例背包（P8.5d / Q7）。
+    broken
+        .item_shop
+        .death_bags
+        .remove(&EntityId::new(HERO_ID).unwrap());
+    broken
+        .item_shop
+        .bags
+        .remove(&EntityId::new(HERO_ID).unwrap());
     let hero = broken
         .positions
         .iter_mut()
         .find(|position| position.entity == HERO_ID)
         .expect("hero position present");
-    // 丢本体：hero=None、空背包。
     hero.gameplay.hero = None;
-    hero.gameplay.bag.clear();
     hero.gameplay.cooldowns.clear();
     hero.alive = true;
     // spawn 新实体：next_entity_id 前进、alive_entities 增加。

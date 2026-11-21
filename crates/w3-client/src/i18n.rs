@@ -122,6 +122,44 @@ pub struct Texts {
     pub creep_died: &'static str,
     /// 道具掉落事实事件标签。
     pub item_dropped: &'static str,
+    /// 物品 / 商店 / 回城 HUD 标题（P8.5d / tasks 6.2）。
+    pub item_shop: &'static str,
+    /// 六格背包标签。
+    pub item_shop_bag: &'static str,
+    /// 背包槽位标签。
+    pub item_shop_slot: &'static str,
+    /// 货架库存标签。
+    pub item_shop_stock: &'static str,
+    /// 回城施法条标签。
+    pub item_shop_casts: &'static str,
+    /// 权威事实计数标签。
+    pub item_shop_facts: &'static str,
+    /// 本批次事实事件计数标签。
+    pub item_shop_events: &'static str,
+    /// 无物品 / 商店数据提示。
+    pub item_shop_empty: &'static str,
+    /// 拾取事实事件标签。
+    pub item_shop_picked_up: &'static str,
+    /// 购买事实事件标签。
+    pub item_shop_purchased: &'static str,
+    /// 使用道具事实事件标签。
+    pub item_shop_used: &'static str,
+    /// 丢弃道具事实事件标签。
+    pub item_shop_discarded: &'static str,
+    /// 移交道具事实事件标签。
+    pub item_shop_transferred: &'static str,
+    /// 售卖道具事实事件标签。
+    pub item_shop_sold: &'static str,
+    /// 回城施法开始事实事件标签。
+    pub item_shop_portal_started: &'static str,
+    /// 回城传送完成事实事件标签。
+    pub item_shop_portal_completed: &'static str,
+    /// 回城施法中断事实事件标签。
+    pub item_shop_portal_cancelled: &'static str,
+    /// 市场刷新事实事件标签。
+    pub item_shop_refreshed: &'static str,
+    /// 物品商店命令拒单事实事件标签。
+    pub item_shop_rejected: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
@@ -190,4 +228,23 @@ pub const ZH: Texts = Texts {
     creep_leash_returned: "Returned",
     creep_died: "Died",
     item_dropped: "Dropped",
+    item_shop: "Item Shop",
+    item_shop_bag: "Bag",
+    item_shop_slot: "Slot",
+    item_shop_stock: "Stock",
+    item_shop_casts: "Town Portal",
+    item_shop_facts: "Facts",
+    item_shop_events: "Events",
+    item_shop_empty: "no item data",
+    item_shop_picked_up: "Picked",
+    item_shop_purchased: "Bought",
+    item_shop_used: "Used",
+    item_shop_discarded: "Dropped",
+    item_shop_transferred: "Moved",
+    item_shop_sold: "Sold",
+    item_shop_portal_started: "Portal Started",
+    item_shop_portal_completed: "Portal Done",
+    item_shop_portal_cancelled: "Portal Cancelled",
+    item_shop_refreshed: "Refreshed",
+    item_shop_rejected: "Rejected",
 };

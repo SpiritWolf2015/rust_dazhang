@@ -14,9 +14,10 @@
 //! `PROTOCOL_VERSION = 4` 在玩法 oneof 只追加 `ReviveHero` / `CancelRevive`
 //! 两个变体（tag 33 / 34）；`PROTOCOL_VERSION = 5` 再只追加
 //! `UpgradeTownHall` 一个变体（tag 35），`PROTOCOL_VERSION = 6` 再只追加
-//! `SeedCreepCamp` 一个变体（tag 36，均跳过 `reserved 14 to 32`），玩法变体
-//! 累计 14 类；帧编排、`arrival` 语义与「恰好一次 `step()`」推进点一律不变
-//! （ADR 0005 §3）。
+//! `SeedCreepCamp` 一个变体（tag 36，均跳过 `reserved 14 to 32`）；
+//! `PROTOCOL_VERSION = 7` 再只追加 P8.5d 物品 / 商店 / 回城 9 个变体
+//! （tag 37–45），玩法变体累计 23 类；帧编排、`arrival` 语义与「恰好一次
+//! `step()`」推进点一律不变（ADR 0005 §3）。
 
 use prost::Message;
 use w3_core::{
@@ -207,10 +208,10 @@ fn from_pb_kind(kind: pb::command::Kind) -> CommandKind {
 }
 
 // ---------------------------------------------------------------------------
-// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（14 变体）
+// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（23 变体）
 // ---------------------------------------------------------------------------
 
-/// 把 14 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
+/// 把 23 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
 pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::Kind {
     match *kind {
         GameplayCommandKind::Cast {
@@ -296,10 +297,75 @@ pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::
         GameplayCommandKind::SeedCreepCamp { camp, script } => {
             pb::gameplay_command::Kind::SeedCreepCamp(pb::GameplaySeedCreepCamp { camp, script })
         }
+        // P8.5d 物品 / 商店 / 回城 9 个变体（tag 37–45）。EntityId 一律用
+        // uint64 的 value()，shop / shelf / batch 一律用 uint32 定宽；均为
+        // 无损映射，一个变体对应一个 proto tag、不合并、不复用（ADR 0005 §3）。
+        GameplayCommandKind::PickupGroundItem { hero, ground_item } => {
+            pb::gameplay_command::Kind::PickupGroundItem(pb::GameplayPickupGroundItem {
+                hero: hero.value(),
+                ground_item: ground_item.value(),
+            })
+        }
+        GameplayCommandKind::BuyFromShop { hero, shop, shelf } => {
+            pb::gameplay_command::Kind::BuyFromShop(pb::GameplayBuyFromShop {
+                hero: hero.value(),
+                shop,
+                shelf,
+            })
+        }
+        GameplayCommandKind::UseItem {
+            hero,
+            instance,
+            target,
+        } => pb::gameplay_command::Kind::UseItem(pb::GameplayUseItem {
+            hero: hero.value(),
+            instance: instance.value(),
+            target: target.value(),
+        }),
+        GameplayCommandKind::DropItem { hero, instance } => {
+            pb::gameplay_command::Kind::DropItem(pb::GameplayDropItem {
+                hero: hero.value(),
+                instance: instance.value(),
+            })
+        }
+        GameplayCommandKind::TransferItem {
+            from_hero,
+            to_hero,
+            instance,
+        } => pb::gameplay_command::Kind::TransferItem(pb::GameplayTransferItem {
+            from_hero: from_hero.value(),
+            to_hero: to_hero.value(),
+            instance: instance.value(),
+        }),
+        GameplayCommandKind::SellItem {
+            hero,
+            instance,
+            shop,
+        } => pb::gameplay_command::Kind::SellItem(pb::GameplaySellItem {
+            hero: hero.value(),
+            instance: instance.value(),
+            shop,
+        }),
+        GameplayCommandKind::UseTownPortal { hero, instance } => {
+            pb::gameplay_command::Kind::UseTownPortal(pb::GameplayUseTownPortal {
+                hero: hero.value(),
+                instance: instance.value(),
+            })
+        }
+        GameplayCommandKind::CancelTownPortal { hero } => {
+            pb::gameplay_command::Kind::CancelTownPortal(pb::GameplayCancelTownPortal {
+                hero: hero.value(),
+            })
+        }
+        // 系统级市场刷新：shop / batch 均为 u32 -> uint32 定宽无损映射，
+        // player_id 的 NEUTRAL_OWNER 同源校验由 w3-core 承担，线格式层不校验。
+        GameplayCommandKind::RefreshMarket { shop, batch } => {
+            pb::gameplay_command::Kind::RefreshMarket(pb::GameplayRefreshMarket { shop, batch })
+        }
     }
 }
 
-/// 把 protobuf `GameplayCommand.kind` oneof 还原为 14 类 `GameplayCommandKind`；穷尽匹配。
+/// 把 protobuf `GameplayCommand.kind` oneof 还原为 23 类 `GameplayCommandKind`；穷尽匹配。
 /// 缺 `kind` / 缺 `effect` / 未知效果码 / 未知等级 / 数值溢出一律显式返回 `NetError`，
 /// 不猜测、不回退。
 pub fn from_pb_gameplay_kind(
@@ -380,6 +446,50 @@ pub fn from_pb_gameplay_kind(
         pb::gameplay_command::Kind::SeedCreepCamp(m) => GameplayCommandKind::SeedCreepCamp {
             camp: m.camp,
             script: m.script,
+        },
+        // P8.5d 物品 / 商店 / 回城 9 个变体（tag 37–45）：uint64 -> EntityId
+        // 与 uint32 -> u32 均为无损定宽映射，无收窄溢出分支；`UseItem.target`
+        // 为 0（EntityId::NONE 表示自身）也如实还原，不猜测、不回退。
+        // 语义合法性（hero / instance 非 NONE、shop / shelf / batch 非 0、
+        // 系统级命令 player_id 为 NEUTRAL_OWNER）由 w3-core 同源校验承担。
+        pb::gameplay_command::Kind::PickupGroundItem(m) => GameplayCommandKind::PickupGroundItem {
+            hero: entity_from_raw(m.hero),
+            ground_item: entity_from_raw(m.ground_item),
+        },
+        pb::gameplay_command::Kind::BuyFromShop(m) => GameplayCommandKind::BuyFromShop {
+            hero: entity_from_raw(m.hero),
+            shop: m.shop,
+            shelf: m.shelf,
+        },
+        pb::gameplay_command::Kind::UseItem(m) => GameplayCommandKind::UseItem {
+            hero: entity_from_raw(m.hero),
+            instance: entity_from_raw(m.instance),
+            target: entity_from_raw(m.target),
+        },
+        pb::gameplay_command::Kind::DropItem(m) => GameplayCommandKind::DropItem {
+            hero: entity_from_raw(m.hero),
+            instance: entity_from_raw(m.instance),
+        },
+        pb::gameplay_command::Kind::TransferItem(m) => GameplayCommandKind::TransferItem {
+            from_hero: entity_from_raw(m.from_hero),
+            to_hero: entity_from_raw(m.to_hero),
+            instance: entity_from_raw(m.instance),
+        },
+        pb::gameplay_command::Kind::SellItem(m) => GameplayCommandKind::SellItem {
+            hero: entity_from_raw(m.hero),
+            instance: entity_from_raw(m.instance),
+            shop: m.shop,
+        },
+        pb::gameplay_command::Kind::UseTownPortal(m) => GameplayCommandKind::UseTownPortal {
+            hero: entity_from_raw(m.hero),
+            instance: entity_from_raw(m.instance),
+        },
+        pb::gameplay_command::Kind::CancelTownPortal(m) => GameplayCommandKind::CancelTownPortal {
+            hero: entity_from_raw(m.hero),
+        },
+        pb::gameplay_command::Kind::RefreshMarket(m) => GameplayCommandKind::RefreshMarket {
+            shop: m.shop,
+            batch: m.batch,
         },
     })
 }
@@ -626,8 +736,9 @@ mod tests {
         ]
     }
 
-    /// 覆盖全部 14 类玩法变体的样本（含 1 种 EffectKind 稳定码）；
-    /// 其余 3 种 EffectKind 稳定码由专门用例覆盖。
+    /// 覆盖全部 23 类玩法变体的样本（含 1 种 EffectKind 稳定码）；
+    /// 其余 3 种 EffectKind 稳定码由专门用例覆盖。P8.5d 九个新变体
+    /// 追加在 `SeedCreepCamp` 之后，`RefreshMarket` 用 NEUTRAL_OWNER(0)。
     fn sample_gameplay() -> Vec<GameplayCommand> {
         let caster = entity_from_raw(1);
         let target = entity_from_raw(2);
@@ -751,6 +862,93 @@ mod tests {
                     script: 41,
                 },
             ),
+            // PROTOCOL_VERSION 7 九个新变体（tag 37–45）：EntityId 一律用
+            // uint64 承载，shop / shelf / batch 一律用 uint32 承载。
+            GameplayCommand::new(
+                Frame::new(10),
+                1,
+                1,
+                GameplayCommandKind::PickupGroundItem {
+                    hero: entity_from_raw(30),
+                    ground_item: entity_from_raw(31),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(11),
+                1,
+                2,
+                GameplayCommandKind::BuyFromShop {
+                    hero: entity_from_raw(32),
+                    shop: 33,
+                    shelf: 34,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(12),
+                1,
+                3,
+                GameplayCommandKind::UseItem {
+                    hero: entity_from_raw(35),
+                    instance: entity_from_raw(36),
+                    target: entity_from_raw(37),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(13),
+                1,
+                4,
+                GameplayCommandKind::DropItem {
+                    hero: entity_from_raw(38),
+                    instance: entity_from_raw(39),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(14),
+                1,
+                5,
+                GameplayCommandKind::TransferItem {
+                    from_hero: entity_from_raw(40),
+                    to_hero: entity_from_raw(41),
+                    instance: entity_from_raw(42),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(15),
+                1,
+                6,
+                GameplayCommandKind::SellItem {
+                    hero: entity_from_raw(43),
+                    instance: entity_from_raw(44),
+                    shop: 45,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(16),
+                1,
+                7,
+                GameplayCommandKind::UseTownPortal {
+                    hero: entity_from_raw(46),
+                    instance: entity_from_raw(47),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(17),
+                1,
+                8,
+                GameplayCommandKind::CancelTownPortal {
+                    hero: entity_from_raw(48),
+                },
+            ),
+            // 系统级市场刷新：player_id 用 NEUTRAL_OWNER(0)。
+            GameplayCommand::new(
+                Frame::new(18),
+                0,
+                9,
+                GameplayCommandKind::RefreshMarket {
+                    shop: 49,
+                    batch: 50,
+                },
+            ),
         ]
     }
 
@@ -813,9 +1011,9 @@ mod tests {
     }
 
     #[test]
-    fn all_fourteen_gameplay_kinds_roundtrip() {
+    fn all_twenty_three_gameplay_kinds_roundtrip() {
         let gameplay = sample_gameplay();
-        assert_eq!(gameplay.len(), 14, "sample must cover every gameplay kind");
+        assert_eq!(gameplay.len(), 23, "sample must cover every gameplay kind");
         let bytes = encode_commands(&[], &gameplay).unwrap();
         let (commands, decoded) = decode_commands(&bytes).unwrap();
         assert!(commands.is_empty());
@@ -1334,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_appends_only_tags_33_34_35_36_and_preserves_reserved() {
+    fn schema_appends_only_tags_33_through_45_and_preserves_reserved() {
         let schema = include_str!("proto/w3net.proto");
         assert!(schema.contains("reserved 14 to 32;"));
         assert!(schema.contains("message GameplayReviveHero {"));
@@ -1358,7 +1556,25 @@ mod tests {
         assert!(!schema.contains("CancelSeedCreepCamp"));
         assert!(!schema.contains("GameplayCancelSeedCreepCamp"));
         assert!(!schema.contains("DespawnCreepCamp"));
-        // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加 33 / 34 / 35 / 36。
+        // P8.5d 九个新 message 与字段（EntityId 用 uint64、定义层 id 用 uint32）。
+        assert!(schema.contains("message GameplayPickupGroundItem {"));
+        assert!(schema.contains("message GameplayBuyFromShop {"));
+        assert!(schema.contains("message GameplayUseItem {"));
+        assert!(schema.contains("message GameplayDropItem {"));
+        assert!(schema.contains("message GameplayTransferItem {"));
+        assert!(schema.contains("message GameplaySellItem {"));
+        assert!(schema.contains("message GameplayUseTownPortal {"));
+        assert!(schema.contains("message GameplayCancelTownPortal {"));
+        assert!(schema.contains("message GameplayRefreshMarket {"));
+        assert!(schema.contains("uint64 ground_item = 2;"));
+        assert!(schema.contains("uint64 instance = 2;"));
+        assert!(schema.contains("uint64 target = 3;"));
+        assert!(schema.contains("uint64 from_hero = 1;"));
+        assert!(schema.contains("uint64 to_hero = 2;"));
+        assert!(schema.contains("uint32 shop = 1;"));
+        assert!(schema.contains("uint32 batch = 2;"));
+        // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加
+        // 33 / 34 / 35 / 36，再追加 P8.5d 的 37–45（reserved 段跳过）。
         let oneof = schema
             .split("oneof kind {")
             .nth(2)
@@ -1376,8 +1592,11 @@ mod tests {
             .collect();
         assert_eq!(
             tags,
-            vec![4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34, 35, 36],
-            "oneof tags must be append-only (4-13 + 33/34/35/36)"
+            vec![
+                4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+                45
+            ],
+            "oneof tags must be append-only (4-13 + 33-36 + 37-45)"
         );
         // 新消息尾部保留 reserved；既有编号段零改动。
         assert!(schema.contains("reserved 5 to 8;"));
@@ -1661,10 +1880,10 @@ mod tests {
     }
 
     #[test]
-    fn fourteen_variants_roundtrip_keeps_single_command_variants() {
-        // 14 变体样本整体 canonical 往返（禁 map / 禁 float 由专门用例复核）。
+    fn twenty_three_variants_roundtrip_keeps_single_command_variants() {
+        // 23 变体样本整体 canonical 往返（禁 map / 禁 float 由专门用例复核）。
         let gameplay = sample_gameplay();
-        assert_eq!(gameplay.len(), 14, "sample must cover every gameplay kind");
+        assert_eq!(gameplay.len(), 23, "sample must cover every gameplay kind");
         let bytes = encode_commands(&[], &gameplay).unwrap();
         let (commands, decoded) = decode_commands(&bytes).unwrap();
         assert!(commands.is_empty());
@@ -1676,6 +1895,26 @@ mod tests {
         // Q5 单命令口径：SeedCreepCamp 只追加一个变体，不新增第二个命令变体。
         assert!(schema.contains("GameplaySeedCreepCamp seed_creep_camp = 36;"));
         assert!(!schema.contains("CancelSeedCreepCamp"));
+        // P8.5d 单命令口径：九个新变体各占一个 tag、不合并、不另设取消变体。
+        for (name, tag) in [
+            ("pickup_ground_item", 37),
+            ("buy_from_shop", 38),
+            ("use_item", 39),
+            ("drop_item", 40),
+            ("transfer_item", 41),
+            ("sell_item", 42),
+            ("use_town_portal", 43),
+            ("cancel_town_portal", 44),
+            ("refresh_market", 45),
+        ] {
+            assert_eq!(
+                schema.matches(&format!("= {tag};")).count(),
+                1,
+                "tag {tag} ({name}) must be appended exactly once"
+            );
+        }
+        assert!(!schema.contains("CancelRefreshMarket"));
+        assert!(!schema.contains("CancelPickupGroundItem"));
     }
 
     // ---- PROTOCOL_VERSION 6：SeedCreepCamp 变体的线格式回归 ----
@@ -1976,7 +2215,9 @@ mod tests {
                 );
             }
         }
-        // 字段编号只追加：reserved 14 to 32 原样保留、tag 36 唯一。
+        // 字段编号只追加：reserved 14 to 32 原样保留、tag 36 唯一；
+        // PROTOCOL_VERSION 7 追加 tag 37–45 后，下一个空闲 tag 是 46，
+        // 因此断言「不存在 = 46;」维持「只追加、顶点之后留空」的边界语义。
         assert!(schema.contains("reserved 14 to 32;"));
         assert_eq!(
             schema
@@ -1985,6 +2226,327 @@ mod tests {
             1,
             "tag 36 must be appended exactly once"
         );
-        assert!(!schema.contains("= 37;"));
+        assert!(!schema.contains("= 46;"));
+    }
+
+    // ---- PROTOCOL_VERSION 7：P8.5d 九个玩法变体的线格式回归 ----
+
+    /// 九个新变体的样本（含 uint64 / uint32 边界值）；`RefreshMarket`
+    /// 为系统级命令，`player_id` 用 NEUTRAL_OWNER(0)。
+    fn sample_p8_5d_gameplay() -> Vec<GameplayCommand> {
+        use w3_core::NEUTRAL_OWNER;
+        vec![
+            GameplayCommand::new(
+                Frame::new(3),
+                1,
+                1,
+                GameplayCommandKind::PickupGroundItem {
+                    hero: entity_from_raw(20),
+                    ground_item: entity_from_raw(21),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(4),
+                2,
+                2,
+                GameplayCommandKind::BuyFromShop {
+                    hero: entity_from_raw(u64::MAX),
+                    shop: u32::MAX,
+                    shelf: 41,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(5),
+                1,
+                3,
+                GameplayCommandKind::UseItem {
+                    hero: entity_from_raw(30),
+                    instance: entity_from_raw(31),
+                    // target 允许 EntityId::NONE（表示自身），线格式如实承载 0 值。
+                    target: EntityId::NONE,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(6),
+                2,
+                4,
+                GameplayCommandKind::DropItem {
+                    hero: entity_from_raw(40),
+                    instance: entity_from_raw(41),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(7),
+                1,
+                5,
+                GameplayCommandKind::TransferItem {
+                    from_hero: entity_from_raw(50),
+                    to_hero: entity_from_raw(51),
+                    instance: entity_from_raw(52),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(8),
+                2,
+                6,
+                GameplayCommandKind::SellItem {
+                    hero: entity_from_raw(60),
+                    instance: entity_from_raw(61),
+                    shop: u32::MAX,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(9),
+                1,
+                7,
+                GameplayCommandKind::UseTownPortal {
+                    hero: entity_from_raw(70),
+                    instance: entity_from_raw(71),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(10),
+                2,
+                8,
+                GameplayCommandKind::CancelTownPortal {
+                    hero: entity_from_raw(u64::MAX),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(11),
+                NEUTRAL_OWNER,
+                9,
+                GameplayCommandKind::RefreshMarket {
+                    shop: u32::MAX,
+                    batch: u32::MAX,
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn p8_5d_nine_variants_roundtrip_is_canonical() {
+        use w3_core::NEUTRAL_OWNER;
+        let gameplay = sample_p8_5d_gameplay();
+        assert_eq!(gameplay.len(), 9, "sample must cover all 9 new variants");
+        let first = encode_commands(&[], &gameplay).unwrap();
+        let second = encode_commands(&[], &gameplay).unwrap();
+        assert_eq!(first, second, "two encodes must be byte-identical");
+        let (commands, decoded) = decode_commands(&first).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            first,
+            "decode -> encode must be canonical"
+        );
+        assert_eq!(
+            decoded.last().unwrap().player_id,
+            NEUTRAL_OWNER,
+            "system command owner must stay neutral"
+        );
+        // 逐条单独往返，避免批量编码掩盖某个变体的歧义映射。
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    /// tag 37–45 / wire 2 的 key varint：
+    /// 37=298->[0xaa,0x02]，38=306->[0xb2,0x02]，39=314->[0xba,0x02]，
+    /// 40=322->[0xc2,0x02]，41=330->[0xca,0x02]，42=338->[0xd2,0x02]，
+    /// 43=346->[0xda,0x02]，44=354->[0xe2,0x02]，45=362->[0xea,0x02]。
+    #[test]
+    fn p8_5d_variants_use_wire_tags_37_to_45() {
+        let gameplay = sample_p8_5d_gameplay();
+        let keys: [[u8; 2]; 9] = [
+            [0xaa, 0x02],
+            [0xb2, 0x02],
+            [0xba, 0x02],
+            [0xc2, 0x02],
+            [0xca, 0x02],
+            [0xd2, 0x02],
+            [0xda, 0x02],
+            [0xe2, 0x02],
+            [0xea, 0x02],
+        ];
+        for (command, key) in gameplay.iter().zip(keys.iter()) {
+            let bytes = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            assert!(
+                bytes.windows(2).any(|w| w == &key[..]),
+                "variant {:?} must be encoded on its own tag",
+                command.kind
+            );
+            // 反向断言：绝不误编码到既有 tag 36（SeedCreepCamp）的 wire key。
+            assert!(
+                !bytes.windows(2).any(|w| w == &[0xa2, 0x02][..]),
+                "new variant must not reuse tag 36"
+            );
+            let (_, decoded) = decode_commands(&bytes).unwrap();
+            assert_eq!(decoded[0].kind, command.kind);
+        }
+    }
+
+    /// 手工拼装 `GameplayPickupGroundItem` 载荷（2 个 uint64 定宽字段，仅测试用）。
+    fn pickup_ground_item_payload(hero: u64, ground_item: u64) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend(field_varint(1, hero));
+        payload.extend(field_varint(2, ground_item));
+        payload
+    }
+
+    /// 手工拼装一条 `GameplayCommand`：oneof kind 落在指定 tag 上，载荷为
+    /// `GameplayPickupGroundItem` 形状，供 tag 37 / reserved 段反例复用。
+    fn gameplay_command_with_p8_5d_tag(tag: u32, payload: &[u8]) -> Vec<u8> {
+        let mut command = Vec::new();
+        command.extend(field_varint(1, 3)); // execute_frame = 3
+        command.extend(field_varint(2, 1)); // player_id = 1
+        command.extend(field_varint(3, 1)); // sequence = 1
+        command.extend(field_bytes(tag, payload));
+        command
+    }
+
+    #[test]
+    fn reserved_tag_rejects_p8_5d_payload() {
+        let payload = pickup_ground_item_payload(91, 92);
+        // 缺陷态：把 PickupGroundItem 载荷错放进 reserved 14 to 32 段的 tag 14 / 32。
+        // prost 视作 unknown field 丢弃，kind 变 None，解码显式返回 Malformed。
+        for tag in [14, 32] {
+            let defect =
+                command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(tag, &payload));
+            assert!(
+                matches!(decode_commands(&defect), Err(NetError::Malformed(_))),
+                "reserved tag must be rejected: tag={tag}"
+            );
+        }
+        // 元断言防退化：同一载荷改回规范 tag 37 必须成功解码为 PickupGroundItem。
+        let good = command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(37, &payload));
+        let (commands, gameplay) = decode_commands(&good).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 1);
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::PickupGroundItem {
+                hero: entity_from_raw(91),
+                ground_item: entity_from_raw(92),
+            }
+        );
+    }
+
+    #[test]
+    fn p8_5d_non_canonical_varint_is_rejected_and_never_echoed() {
+        let payload = pickup_ground_item_payload(91, 92);
+        // 溢出型非规范 varint（10 个以上 continuation 字节）：明确转成 Malformed。
+        let mut overlong_cmd = vec![0x08]; // execute_frame field 1, wire type 0
+        overlong_cmd.extend_from_slice(&[0x80u8; 11]);
+        overlong_cmd.push(0x00);
+        overlong_cmd.extend(field_varint(2, 1)); // player_id = 1
+        overlong_cmd.extend(field_varint(3, 1)); // sequence = 1
+        overlong_cmd.extend(field_bytes(37, &payload));
+        assert!(matches!(
+            decode_commands(&command_batch_with_gameplay(overlong_cmd)),
+            Err(NetError::Malformed(_))
+        ));
+
+        // overlong 但可解码的 varint：解码 -> 再编码必须产出规范最短字节，
+        // 绝不回显非规范字节（ADR 0005 §3 canonical 往返约束）。
+        let mut non_canonical = vec![0x08];
+        non_canonical.extend_from_slice(&[0x81, 0x00]); // execute_frame = 1（overlong）
+        non_canonical.extend(field_varint(2, 1)); // player_id = 1
+        non_canonical.extend(field_varint(3, 1)); // sequence = 1
+        non_canonical.extend(field_bytes(37, &payload));
+        let bytes = command_batch_with_gameplay(non_canonical);
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        assert_eq!(gameplay.len(), 1);
+        assert!(matches!(
+            gameplay[0].kind,
+            GameplayCommandKind::PickupGroundItem { .. }
+        ));
+        let reencoded = encode_commands(&commands, &gameplay).unwrap();
+        assert_ne!(reencoded, bytes, "non-canonical bytes must not be echoed");
+        assert!(
+            reencoded.windows(2).any(|w| w == &[0x08, 0x01][..]),
+            "re-encode must use minimal varint for execute_frame=1"
+        );
+        assert!(
+            !reencoded.windows(3).any(|w| w == &[0x08, 0x81, 0x00][..]),
+            "overlong varint must not survive re-encode"
+        );
+    }
+
+    #[test]
+    fn p8_5d_unknown_fields_are_dropped_not_echoed() {
+        let gameplay = sample_p8_5d_gameplay();
+        let mut bytes = encode_commands(&[], &gameplay).unwrap();
+        // 追加一个合法但未知字段（field 1000, varint 0）。
+        bytes.extend_from_slice(&[0xc0, 0x3e, 0x00]);
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        let reencoded = encode_commands(&commands, &decoded).unwrap();
+        assert!(
+            !reencoded.ends_with(&[0xc0, 0x3e, 0x00]),
+            "unknown fields must not be echoed"
+        );
+        assert_eq!(reencoded, encode_commands(&[], &gameplay).unwrap());
+    }
+
+    #[test]
+    fn p8_5d_schema_keeps_canonical_constraints() {
+        let schema = include_str!("proto/w3net.proto");
+        // 九个新消息、EntityId 用 uint64、定义层 id 用 uint32、尾部保留 reserved。
+        for message in [
+            "message GameplayPickupGroundItem {",
+            "message GameplayBuyFromShop {",
+            "message GameplayUseItem {",
+            "message GameplayDropItem {",
+            "message GameplayTransferItem {",
+            "message GameplaySellItem {",
+            "message GameplayUseTownPortal {",
+            "message GameplayCancelTownPortal {",
+            "message GameplayRefreshMarket {",
+        ] {
+            assert!(schema.contains(message), "missing {message}");
+        }
+        assert!(schema.contains("uint64 ground_item = 2;"));
+        assert!(schema.contains("uint64 from_hero = 1;"));
+        assert!(schema.contains("uint64 to_hero = 2;"));
+        assert!(schema.contains("uint64 target = 3;"));
+        assert!(schema.contains("uint32 shop = 1;"));
+        assert!(schema.contains("uint32 batch = 2;"));
+        // 字段编号只追加：reserved 14 to 32 原样保留、tag 37–45 各唯一、tag 46 留空。
+        assert!(schema.contains("reserved 14 to 32;"));
+        for (name, tag) in [
+            ("pickup_ground_item", 37),
+            ("buy_from_shop", 38),
+            ("use_item", 39),
+            ("drop_item", 40),
+            ("transfer_item", 41),
+            ("sell_item", 42),
+            ("use_town_portal", 43),
+            ("cancel_town_portal", 44),
+            ("refresh_market", 45),
+        ] {
+            assert_eq!(
+                schema.matches(&format!("= {tag};")).count(),
+                1,
+                "tag {tag} ({name}) must be appended exactly once"
+            );
+        }
+        assert!(!schema.contains("= 46;"));
+        // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码，
+        // 避免把「禁止 float」这类说明文字算成声明字段。
+        for line in schema.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            for forbidden in ["map<", "float", "double"] {
+                assert!(
+                    !code.contains(forbidden),
+                    "schema must not declare {forbidden}: {line}"
+                );
+            }
+        }
+        // 单命令口径：九个新变体不设第二个取消 / 合并消息。
+        assert!(!schema.contains("CancelRefreshMarket"));
+        assert!(!schema.contains("CancelPickupGroundItem"));
+        assert!(!schema.contains("GameplayCancelRefreshMarket"));
     }
 }

@@ -3,7 +3,7 @@
 //! 全部用合成命令脚本与合成地形，不读取任何真实导出资产、不开 GPU 窗口、
 //! 不引入墙钟（宿主时钟仅测其整数换算纯度）。核心断言：
 //! - HUD 生命周期、相机操作后，`compute_state_hash()` 与快照逐字节不变，
-//!   `SNAPSHOT_VERSION` 仍为 6；
+//!   `SNAPSHOT_VERSION` 仍为 7；
 //! - 60 Hz / 144 Hz 呈现节奏经宿主整数 tick 喂入后逐帧帧号与哈希一致；
 //! - 命令只经 `submit_command` / `submit_gameplay_command`，执行帧由冻结
 //!   帧号推导，坐标经 `freeze_f64` 冻结边界；
@@ -127,7 +127,7 @@ fn hud_lifecycle_keeps_state_hash_and_snapshot_bytes() {
             "HUD drawing changed the snapshot bytes"
         );
         assert_eq!(snapshot(&rendered).version, SNAPSHOT_VERSION);
-        assert_eq!(SNAPSHOT_VERSION, 6);
+        assert_eq!(SNAPSHOT_VERSION, 7);
     }
 }
 
@@ -205,7 +205,7 @@ fn hud_model_is_read_only_projection() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn camera_operations_keep_state_hash_and_snapshot_v6() {
+fn camera_operations_keep_state_hash_and_snapshot_v7() {
     use w3_client::CameraAction;
 
     let mut moved = build_app();

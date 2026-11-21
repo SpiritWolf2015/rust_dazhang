@@ -12,7 +12,7 @@
 //! `DEFAULT_UNIT_DEF` / `SOLDIER` / `BARRACKS` 等既有入口行为不变。
 //! P8.5b 主城升级需求链另用独立 `8xxx` 段真实定义，不属于两族 / 中立分段，
 //! 也不改既有命令行为。分段差异只经既有 `defs_hash` 字段天然覆盖，
-//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 6）与快照头部布局
+//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 7）与快照头部布局
 //! （ADR 0002）。
 //!
 //! P8.1 人族完整化：在人族段 `1xx` 追加远程 / 反重甲 / 人口 / 祭坛 /
@@ -28,7 +28,7 @@
 //! 数值差异只以常量相对大小表达、标 `[取舍]`、引用 R2 / R5，MUST NOT
 //! 冒充经典事实或参考项目结论（design D1 / D10 / C6）。新增定义仍是
 //! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3（P8.5a 起为 4、
-//! P8.5b 起为 5、P8.5c 起为 6；本行属历史沿革叙述，按先例保留并加夹注）。
+//! P8.5b 起为 5、P8.5c 起为 6、P8.5d 起为 7；本行属历史沿革叙述，按先例保留并加夹注）。
 //!
 //! P8.5a 英雄复活接入：真实对局装配在 [`synthetic_definitions`] 内经纯链式
 //! [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与祭坛 / 英雄类别集合，
@@ -58,6 +58,15 @@
 //! `content_hash()` 快照头部，故 client 装配层内容哈希必变；上层 golden hash
 //! 示例不依赖本装配，二者层次 MUST NOT 混淆（R-k）。反向验证同源重建 MUST
 //! 同步登记野怪段，避免段差异稀释既有 A-B 断言（CODEBUDDY.md §5）。
+//!
+//! P8.5d 物品 / 商店 / 回城卷轴接入：真实对局装配在 [`synthetic_definitions`]
+//! 末尾再链式 [`FrozenDefinitions::with_item_shop`] 登记内核合成原创冻结段，
+//! 并把商店 / 友方主城 / 三个货架道具 / 两个打野掉落道具 DefId 注册为真实
+//! `UnitDef` / `ItemDef` / 地面物品类别。商店按 Q6 落在定义层货架表，不新增
+//! R9.1 中立建筑实体；`NeutralCategory` 没有商店类别，MUST NOT 强行复用野怪
+//! 或地面物品类别。第五段冻结定义同样经 `compute_defs_hash` 进快照头部，
+//! client 装配层内容哈希必变；所有反向验证同源重建 MUST 同步登记该段，
+//! 避免段差异稀释既有 A-B 断言（CODEBUDDY.md §5 / P8.5b blocker 1 教训）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,6 +74,7 @@ use w3_core::{
     AbilityDef, CampScript, DefId, DropSet, DropTable, EffectDef, EffectKind, FrozenDefinitions,
     ItemDef, NeutralCategory, SCALE, SYNTHETIC_CREEP_CONSTANTS, SYNTHETIC_REVIVE_CONSTANTS,
     SYNTHETIC_TOWN_HALL_CONSTANTS, SimFixed, TownHallTier, UnitDef, UpgradeDef,
+    synthetic_item_shop_definitions,
 };
 
 // 新类别槽位编号（表现层装配查表键，**不是** `EntityId`，MUST NOT 进入
@@ -230,6 +240,43 @@ pub const CREEP_HOME_Y: i64 = 2 * SCALE;
 pub const CREEP_XP: i64 = 24;
 /// 单个野怪击杀金币（合成整数 `[待核]`）。
 pub const CREEP_GOLD: i64 = 12;
+
+// ---------------------------------------------------------------------------
+// 物品 / 商店 / 回城冻结段 DefId（P8.5d / Q6「定义层商店表」）
+//
+// 全部为合成原创编译期整数 `[待核]`、零资产。商店按内核 Q6 简化建模落在
+// 定义层货架表，不是 R9.1 中立建筑实体；`NeutralCategory` 没有商店类别，
+// 故 `SHOP_DEF` 只注册为真实不可移动 `UnitDef` 与 `ItemShopDefinitions.shop_defs`
+// 类别，不强行塞入野怪 / 地面物品类别。友方主城 / 道具 / 回城卷轴同时注册
+// 真实定义，保证 `friendly_town_hall_target` 与物品命令面不是只登记占位
+// （R1.2 / R13.3 / D2 / P8.5b 代码门 blocker 1 教训）。
+// ---------------------------------------------------------------------------
+/// 合成商店稳定 id（定义层商店表键，同时作真实不可移动 `UnitDef` 编号）。
+pub const SHOP_ID: u32 = 7;
+/// 合成商店 DefId（与 [`SHOP_ID`] 同值，供 `shop_defs` 类别登记查表）。
+pub const SHOP_DEF: DefId = SHOP_ID;
+/// 友方主城 DefId（回城卷轴分类目标，独立 `8xxx` 段）。
+pub const TOWN_HALL_PORTAL_DEF: DefId = 8002;
+/// 货架：消耗品道具 DefId。
+pub const ITEM_SHOP_CONSUMABLE: DefId = 9001;
+/// 货架：单英雄回城卷轴 DefId。
+pub const TOWN_PORTAL_ITEM: DefId = 9002;
+/// 货架：永久宝物 DefId。
+pub const ITEM_SHOP_PERMANENT: DefId = 9003;
+/// 打野掉落消耗品 DefId（地面物品类别）。
+pub const ITEM_SHOP_DROP_CONSUMABLE: DefId = 9201;
+/// 打野掉落永久宝物 DefId（地面物品类别）。
+pub const ITEM_SHOP_DROP_PERMANENT: DefId = 9202;
+/// 合成货架编号：消耗品。
+pub const SHELF_CONSUMABLE: u32 = 101;
+/// 合成货架编号：回城卷轴。
+pub const SHELF_TOWN_PORTAL: u32 = 102;
+/// 合成货架编号：永久宝物。
+pub const SHELF_PERMANENT: u32 = 103;
+/// 定义层商店表冻结坐标 x（Q47.16 raw，合成整数 `[待核]`）。
+pub const ITEM_SHOP_X: i64 = 2 * SCALE;
+/// 定义层商店表冻结坐标 y（Q47.16 raw，合成整数 `[待核]`）。
+pub const ITEM_SHOP_Y: i64 = 2 * SCALE;
 
 /// 开局选择的种族（定义层参数，纯表现层 / 装配层数据）。
 ///
@@ -460,7 +507,7 @@ fn unit_with_mana(
 /// **相对大小**表达、标 `[取舍]`，是本项目在 R2 / R5 / R5.1 / R5.3
 /// `[已核]` 框架下的原创取舍，不是参考项目得来的经典事实（design D1 / D10）。
 /// 新增定义只改变 `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），
-/// 不改 `SNAPSHOT_VERSION`（当前 6）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// 不改 `SNAPSHOT_VERSION`（当前 7）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5a 起额外经 [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与
 /// 两族祭坛 / 英雄类别集合，使真实对局的复活命令面可达（Q3 / D2 / R1.2）。
 /// P8.5b 起再经 [`FrozenDefinitions::with_town_hall_upgrade`] 登记主城升级冻结
@@ -468,10 +515,13 @@ fn unit_with_mana(
 /// 写进 `units` / `upgrades` 表，使 `Train` / `Research` 在 T1 被拒、T2 完成后
 /// 能生成实体 / 结算科技效果（Q3 / Q4 / D2 / R1.2）。新增定义只改变
 /// `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），不改
-/// `SNAPSHOT_VERSION`（当前 6）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// `SNAPSHOT_VERSION`（当前 7）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5c 起再经 [`FrozenDefinitions::with_creep_camps`] 登记野怪冻结常量、
 /// 营地脚本、掉落表与中立类别；`9301` 野怪 DefId 同时写进 `units` 表，
 /// `9401` / `9402` 只作为掉落表与类别登记的道具 DefId，不新增资产 / 模型键。
+/// P8.5d 起再经 [`FrozenDefinitions::with_item_shop`] 登记商店货架 / 道具 /
+/// 回城冻结段；`7` / `8002` 与五个 `9xxx` 道具 DefId 同步注册真实定义，
+/// 使购买 / 使用 / 回城 / 刷新命令面不是不可达占位。
 /// 这些段只改变 client 装配层 `content_hash()`；内核 `golden_hash.rs` 示例
 /// 使用独立固定配置，不依赖本函数，MUST NOT 声称其 golden hash 随之改变。
 pub fn synthetic_definitions() -> FrozenDefinitions {
@@ -523,6 +573,11 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
         // P8.5c 合成野怪单位：生命刻意压低，便于真实装配 CPU 回归经既有
         // `Attack` 命令面稳定清野；数值同样为原创 `[待核]`、零资产。
         (CREEP_UNIT, unit(50, 6, 5, 2, 0, 1)),
+        // P8.5d 真实商店 / 友方主城定义：两者都 `speed_raw == 0`，供
+        // `derive_movability` 把商店 fixture 与回城目标一律判为不可移动。
+        // 商店按 Q6 是定义层货架表，不生成 R9.1 中立建筑实体。
+        (SHOP_DEF, unit(300, 0, 0, 0, 0, 0)),
+        (TOWN_HALL_PORTAL_DEF, unit(180, 0, 0, 0, 0, 60)),
     ];
     let abilities = vec![
         (
@@ -604,13 +659,53 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
             },
         ),
     ];
-    let items = vec![(
-        ITEM,
-        ItemDef {
-            hp_mod: 10,
-            damage_mod: 2,
-        },
-    )];
+    let items = vec![
+        (
+            ITEM,
+            ItemDef {
+                hp_mod: 10,
+                damage_mod: 2,
+            },
+        ),
+        // P8.5d 五个合成道具 DefId 注册为真实 `ItemDef`：内核物品商店命令
+        // 面查的是 `ItemShopDefinitions` 类别 / 效果 / 价格段，本表保证装配层
+        // 不是只登记占位编号；数值原创 `[待核]`、零资产。
+        (
+            ITEM_SHOP_CONSUMABLE,
+            ItemDef {
+                hp_mod: 0,
+                damage_mod: 2,
+            },
+        ),
+        (
+            TOWN_PORTAL_ITEM,
+            ItemDef {
+                hp_mod: 0,
+                damage_mod: 0,
+            },
+        ),
+        (
+            ITEM_SHOP_PERMANENT,
+            ItemDef {
+                hp_mod: 10,
+                damage_mod: 2,
+            },
+        ),
+        (
+            ITEM_SHOP_DROP_CONSUMABLE,
+            ItemDef {
+                hp_mod: 0,
+                damage_mod: 1,
+            },
+        ),
+        (
+            ITEM_SHOP_DROP_PERMANENT,
+            ItemDef {
+                hp_mod: 5,
+                damage_mod: 1,
+            },
+        ),
+    ];
     let upgrades = vec![
         (
             UPGRADE,
@@ -683,9 +778,17 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
     // 真实 `UnitDef` / `UpgradeDef`，MUST NOT 复用既有可训练 / 可研发 DefId，
     // 避免 `tier_requirement_met` 改变既有命令行为。判定只查冻结定义数据，
     // 不查建筑名 / rawcode 白名单（R1.2 / R13.3 / D2）。
-    let town_hall_defs: BTreeSet<DefId> = [TOWN_HALL, HUMAN_TOWN_HALL, ORC_TOWN_HALL]
-        .into_iter()
-        .collect();
+    // P8.5d：回城目标也登记进主城类别集合，使同一 DefId 在
+    // `FrozenDefinitions.town_hall_defs()` 与 `ItemShopDefinitions.town_hall_defs`
+    // 两侧都可由数据驱动查表，MUST NOT 用建筑名白名单。
+    let town_hall_defs: BTreeSet<DefId> = [
+        TOWN_HALL,
+        HUMAN_TOWN_HALL,
+        ORC_TOWN_HALL,
+        TOWN_HALL_PORTAL_DEF,
+    ]
+    .into_iter()
+    .collect();
     let tier_requirements: BTreeMap<DefId, TownHallTier> = [
         (TIER2_UNIT, TownHallTier::T2),
         (TIER2_TECH, TownHallTier::T2),
@@ -759,6 +862,20 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
         (CREEP_UNIT, NeutralCategory::CreepHostile),
         (CREEP_ITEM_ALWAYS, NeutralCategory::GroundItemOwnerless),
         (CREEP_ITEM_CHOICE, NeutralCategory::GroundItemOwnerless),
+        // P8.5d 五个道具 DefId 登记为无主地面物品类别：掉落 / 丢弃 / 拾取
+        // 判据由 `is_ground_item` 数据驱动，MUST NOT 用 DefId 硬编码白名单
+        // （R1.1 / R1.2）。商店 DefId 不复用该类别，见上方注释。
+        (ITEM_SHOP_CONSUMABLE, NeutralCategory::GroundItemOwnerless),
+        (TOWN_PORTAL_ITEM, NeutralCategory::GroundItemOwnerless),
+        (ITEM_SHOP_PERMANENT, NeutralCategory::GroundItemOwnerless),
+        (
+            ITEM_SHOP_DROP_CONSUMABLE,
+            NeutralCategory::GroundItemOwnerless,
+        ),
+        (
+            ITEM_SHOP_DROP_PERMANENT,
+            NeutralCategory::GroundItemOwnerless,
+        ),
     ]
     .into_iter()
     .collect();
@@ -776,6 +893,9 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
             drop_tables,
             neutral_categories,
         )
+        // P8.5d：第五段冻结定义登记商店货架 / 道具类别 / 回城常量，
+        // 使真实装配的购买 / 使用 / 回城 / 刷新命令面可达。
+        .with_item_shop(synthetic_item_shop_definitions())
 }
 
 /// 本机导出数据的可选来源（ADR 0001 / design D2）。
@@ -812,7 +932,8 @@ mod tests {
     use crate::input::derive_movability;
 
     /// `units` 类别定义编号全集（既有 6 个基线 + 分段 + P8.1 人族六类 +
-    /// P8.2 兽族六类 + P8.5b T2 需求链单位 + P8.5c 合成野怪单位）。
+    /// P8.2 兽族六类 + P8.5b T2 需求链单位 + P8.5c 合成野怪单位 +
+    /// P8.5d 商店 / 回城目标真实单位定义）。
     fn all_unit_ids() -> Vec<DefId> {
         vec![
             PEASANT,
@@ -845,6 +966,8 @@ mod tests {
             NEUTRAL_TREE,
             TIER2_UNIT,
             CREEP_UNIT,
+            SHOP_DEF,
+            TOWN_HALL_PORTAL_DEF,
         ]
     }
 
@@ -878,6 +1001,9 @@ mod tests {
     /// P8.5c 合成野怪单位（供内容敏感性回归复用）。
     const CREEP_NEW_UNIT_IDS: [DefId; 1] = [CREEP_UNIT];
 
+    /// P8.5d 商店 / 回城目标真实单位定义（供内容敏感性回归复用）。
+    const ITEM_SHOP_NEW_UNIT_IDS: [DefId; 2] = [SHOP_DEF, TOWN_HALL_PORTAL_DEF];
+
     /// 新增升级定义编号全集（P8.1 / P8.2 + P8.5b T2 需求链科技）。
     const NEW_UPGRADE_IDS: [DefId; 5] = [
         UPGRADE_WEAPONS,
@@ -888,13 +1014,14 @@ mod tests {
     ];
 
     /// 新增 `UnitDef` 编号全集（P8.1 / P8.2 新类别 + P8.5b T2 需求链单位 +
-    /// P8.5c 合成野怪单位）。
+    /// P8.5c 合成野怪单位 + P8.5d 商店 / 回城目标真实单位定义）。
     fn new_unit_ids() -> Vec<DefId> {
         HUMAN_NEW_UNIT_IDS
             .iter()
             .chain(ORC_NEW_UNIT_IDS.iter())
             .chain(TIER2_NEW_UNIT_IDS.iter())
             .chain(CREEP_NEW_UNIT_IDS.iter())
+            .chain(ITEM_SHOP_NEW_UNIT_IDS.iter())
             .copied()
             .collect()
     }
@@ -902,7 +1029,7 @@ mod tests {
     #[test]
     fn definitions_cover_all_kinds_and_are_stable() {
         let defs = synthetic_definitions();
-        assert_eq!(defs.units().len(), 30, "reason=definition_count");
+        assert_eq!(defs.units().len(), 32, "reason=definition_count");
         assert!(defs.units().contains_key(&PEASANT));
         assert!(defs.units().contains_key(&SOLDIER));
         assert!(defs.units().contains_key(&TOWN_HALL));
@@ -923,6 +1050,14 @@ mod tests {
         }
         assert!(defs.units().contains_key(&TIER2_UNIT));
         assert!(defs.units().contains_key(&CREEP_UNIT));
+        assert!(
+            defs.units().contains_key(&SHOP_DEF),
+            "reason=shop_unit_registered"
+        );
+        assert!(
+            defs.units().contains_key(&TOWN_HALL_PORTAL_DEF),
+            "reason=portal_town_hall_unit_registered"
+        );
         assert!(
             defs.is_creep(CREEP_UNIT),
             "reason=creep_category_registered"
@@ -955,6 +1090,44 @@ mod tests {
         assert!(defs.abilities().contains_key(&HERO_ABILITY));
         assert!(defs.abilities().contains_key(&ORC_HERO_ABILITY));
         assert!(defs.items().contains_key(&ITEM));
+        for id in [
+            ITEM_SHOP_CONSUMABLE,
+            TOWN_PORTAL_ITEM,
+            ITEM_SHOP_PERMANENT,
+            ITEM_SHOP_DROP_CONSUMABLE,
+            ITEM_SHOP_DROP_PERMANENT,
+        ] {
+            assert!(
+                defs.items().contains_key(&id),
+                "reason=item_shop_item_def_registered id={id}"
+            );
+        }
+        assert!(
+            defs.item_shop().shop(SHOP_ID).is_some(),
+            "reason=shop_fixture_registered"
+        );
+        assert!(
+            defs.item_shop().is_shop_def(SHOP_DEF),
+            "reason=shop_definition_category_registered"
+        );
+        assert!(
+            defs.item_shop().is_town_hall_def(TOWN_HALL_PORTAL_DEF),
+            "reason=portal_town_hall_definition_category_registered"
+        );
+        assert!(
+            defs.item_shop().is_town_portal_item(TOWN_PORTAL_ITEM),
+            "reason=town_portal_item_category_registered"
+        );
+        assert!(
+            defs.item_shop().shelf(SHELF_TOWN_PORTAL).is_some(),
+            "reason=town_portal_shelf_registered"
+        );
+        assert!(
+            defs.is_ground_item(ITEM_SHOP_DROP_CONSUMABLE)
+                && defs.is_ground_item(ITEM_SHOP_DROP_PERMANENT),
+            "reason=item_shop_drop_categories_registered"
+        );
+        assert_eq!(defs.items().len(), 6, "reason=item_definition_count");
         assert!(defs.upgrades().contains_key(&UPGRADE));
         assert!(defs.upgrades().contains_key(&UPGRADE_WEAPONS));
         assert!(defs.upgrades().contains_key(&UPGRADE_ARMOR));
@@ -1006,6 +1179,13 @@ mod tests {
             TIER2_TECH,
             CREEP_ITEM_ALWAYS,
             CREEP_ITEM_CHOICE,
+            SHOP_DEF,
+            TOWN_HALL_PORTAL_DEF,
+            ITEM_SHOP_CONSUMABLE,
+            TOWN_PORTAL_ITEM,
+            ITEM_SHOP_PERMANENT,
+            ITEM_SHOP_DROP_CONSUMABLE,
+            ITEM_SHOP_DROP_PERMANENT,
         ];
         let category_unique: BTreeSet<DefId> = category_ids.into_iter().collect();
         assert_eq!(
@@ -1160,7 +1340,9 @@ mod tests {
             a.camp_scripts().clone(),
             a.drop_tables().clone(),
             a.neutral_categories().clone(),
-        );
+        )
+        // P8.5d：同源登记商店段，使缺陷态仍只差「少一个单位」。
+        .with_item_shop(a.item_shop().clone());
         assert_ne!(a.content_hash(), smaller.content_hash());
     }
 
@@ -1215,10 +1397,12 @@ mod tests {
                 full.drop_tables().clone(),
                 full.neutral_categories().clone(),
             )
+            // P8.5d：同源登记商店段，使每个反例只差被删除的条目。
+            .with_item_shop(full.item_shop().clone())
     }
 
     /// 退化哈希（缺陷态）：只散列 P8.0 基线 16 个 `UnitDef`，忽略全部
-    /// P8.1 / P8.2 / P8.5b / P8.5c 新增单位 / 技能 / 升级，模拟
+    /// P8.1 / P8.2 / P8.5b / P8.5c / P8.5d 新增单位 / 技能 / 升级，模拟
     /// `compute_defs_hash` 漏接新定义的退化实现。仅用于反向验证，生产实现
     /// MUST 用 `content_hash()`。
     ///
@@ -1669,6 +1853,8 @@ mod tests {
             full.drop_tables().clone(),
             full.neutral_categories().clone(),
         )
+        // P8.5d：同源登记商店段，避免新冻结段差异稀释 mana 缺陷态。
+        .with_item_shop(full.item_shop().clone())
     }
 
     /// 被反向验证的断言：兽族英雄定义在冻结定义层带 `mana > 0`（R6）。

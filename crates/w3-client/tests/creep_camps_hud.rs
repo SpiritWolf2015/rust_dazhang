@@ -137,6 +137,8 @@ fn defs_without_creep_segment() -> FrozenDefinitions {
             full.town_hall_defs().clone(),
             full.tier_requirements().clone(),
         )
+        // P8.5d：同源登记商店段，使唯一差异仍是野怪营地脚本 / 掉落表 / 类别缺失。
+        .with_item_shop(full.item_shop().clone())
 }
 
 /// 六类事实事件拷贝，供 HUD 只读派生回归使用；`Event` 不携带 payload。
@@ -188,7 +190,7 @@ fn fact_events() -> Vec<Event> {
 #[test]
 fn real_assembly_seeds_creep_camp_and_camps_are_non_empty() {
     let defs = synthetic_definitions();
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
     assert!(defs.is_creep(CREEP_UNIT), "reason=creep_unit_registered");
     assert!(
         defs.is_ground_item(CREEP_ITEM_ALWAYS) && defs.is_ground_item(CREEP_ITEM_CHOICE),

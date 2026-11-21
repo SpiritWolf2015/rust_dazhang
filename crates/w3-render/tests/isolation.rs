@@ -6,8 +6,8 @@
 //! 与 `read_view()`。
 
 use w3_core::{
-    Command, CommandKind, EntityId, Event, EventKind, Frame, MatchConfig, RtsMatch, SimFixed,
-    StaticWorld,
+    Command, CommandKind, EntityId, Event, EventKind, Frame, MatchConfig, RtsMatch,
+    SNAPSHOT_VERSION, SimFixed, StaticWorld,
 };
 use w3_render::{FrameInput, Model, ModelLibrary, Scene, TerrainMesh, TerrainVertex};
 
@@ -461,6 +461,149 @@ fn creep_camp_events_do_not_change_state_hash() {
             view,
             plain.read_view(),
             "reason=creep_event_consumption_keeps_read_view"
+        );
+    }
+}
+
+/// P8.5d：物品 / 商店 / 回城十一类事实事件是纯表现层副作用。
+///
+/// 十一个事件在 `apply_event` 里都是幂等 no-op（六格背包 / 货架库存 /
+/// 回城施法 / 市场刷新 / 消费序列由 `w3-core` 权威状态写入，HUD 只读派生），
+/// 重复投递按 sequence 去重；连续 16 帧重绘、插值与事件重复消费 MUST NOT
+/// 反写权威状态、不改 `compute_state_hash()` / `capture_snapshot()` 字节，
+/// 快照版本仍为 v7（ADR 0002 §5 / tasks 6.2 / R10.5）。
+#[test]
+fn item_shop_events_do_not_change_state_hash() {
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
+    let mut rendered = build_match();
+    let mut plain = build_match();
+    submit_move(&mut rendered);
+    submit_move(&mut plain);
+    let mut library = ModelLibrary::default();
+    library.insert("default", Model::from_json(MODEL_DOC).unwrap());
+    let mut scene = Scene::default();
+    let terrain = simple_terrain();
+
+    for _ in 0..16 {
+        rendered.step();
+        plain.step();
+        let view = rendered.read_view();
+        let _events = rendered.drain_events();
+        let _ = plain.drain_events();
+
+        // 只读视图先建实例；随后投递十一类物品 / 商店 / 回城事实事件，
+        // 并重复投递同一批次（幂等：按 sequence 去重）。
+        scene.consume(
+            FrameInput {
+                view: &view,
+                events: &[],
+            },
+            &library,
+        );
+        let item_shop_events = vec![
+            Event {
+                frame: view.tick,
+                sequence: 40_001,
+                entity: 1,
+                kind: EventKind::ItemPickedUp,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_002,
+                entity: 1,
+                kind: EventKind::ItemPurchased,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_003,
+                entity: 1,
+                kind: EventKind::ItemUsed,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_004,
+                entity: 1,
+                kind: EventKind::ItemDiscarded,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_005,
+                entity: 1,
+                kind: EventKind::ItemTransferred,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_006,
+                entity: 1,
+                kind: EventKind::ItemSold,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_007,
+                entity: 1,
+                kind: EventKind::TownPortalStarted,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_008,
+                entity: 1,
+                kind: EventKind::TownPortalCompleted,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_009,
+                entity: 1,
+                kind: EventKind::TownPortalCancelled,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_010,
+                entity: 1,
+                kind: EventKind::MarketRefreshed,
+            },
+            Event {
+                frame: view.tick,
+                sequence: 40_011,
+                entity: 1,
+                kind: EventKind::ItemShopCommandRejected,
+            },
+        ];
+        for _ in 0..3 {
+            scene.consume(
+                FrameInput {
+                    view: &view,
+                    events: &item_shop_events,
+                },
+                &library,
+            );
+        }
+        scene.interpolate_all(0.5);
+        let _vertices = scene.build_vertices(&terrain);
+
+        assert_eq!(
+            scene.applied_events(),
+            item_shop_events.len() as u64,
+            "reason=item_shop_events_are_deduplicated"
+        );
+        assert_eq!(
+            rendered.compute_state_hash(),
+            plain.compute_state_hash(),
+            "reason=item_shop_event_consumption_keeps_state_hash"
+        );
+        assert_eq!(
+            rendered.capture_snapshot(),
+            plain.capture_snapshot(),
+            "reason=item_shop_event_consumption_keeps_snapshot"
+        );
+        assert_eq!(
+            rendered.capture_snapshot().version,
+            SNAPSHOT_VERSION,
+            "reason=item_shop_snapshot_stays_v7"
+        );
+        assert_eq!(
+            view,
+            plain.read_view(),
+            "reason=item_shop_event_consumption_keeps_read_view"
         );
     }
 }

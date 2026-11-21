@@ -19,6 +19,7 @@ use crate::creep::{
 };
 use crate::entity::EntityId;
 use crate::frame::Frame;
+use crate::item_shop::ItemShopDefinitions;
 use crate::state_hash::StateHasher;
 
 /// 冻结定义内容哈希的版本域分隔；编码变化时递增。
@@ -341,11 +342,16 @@ pub struct UpgradeDef {
 /// P8.5c 追加四个私有冻结字段：`creep` 为野怪冻结常量段，
 /// `camp_scripts` / `drop_tables` 为营地脚本与「表 → 互斥 set → 概率条目」
 /// 分层掉落表，`neutral_categories` 为中立类别 / 阵营标记登记（Q7 / Q8）。
-/// 全部编入 `compute_defs_hash`，改常量或改类别 / 脚本 / 概率条目登记即
-/// 改变 `content_hash()`（Q3 / Q8）。类别与解锁判定只查定义层数据
+/// P8.5d 追加一个私有冻结字段 `item_shop`：商店货架清单 / 类别 / 价格 /
+/// 回购价 / 库存上限 / 刷新间隔 / 解锁时间 / 回城施法帧 / 次数 / 拾取半径 /
+/// 售卖比例 / 友方主城分类标记全为合成原创编译期整数常量 `[待核]`，
+/// 经 `compute_defs_hash` 进 `defs_hash` / `content_hash` 快照头部（Q6 / Q8）。
+/// 全部编入 `compute_defs_hash`，改常量或改类别 / 脚本 / 概率条目 / 货架登记
+/// 即改变 `content_hash()`（Q3 / Q8）。类别与解锁判定只查定义层数据
 /// （数据驱动），MUST NOT 用建筑名字符串白名单或硬编码 DefId（R1.2 / R13.3）。
 /// 注意：这些是**冻结定义层内容**，不是权威状态字段；野怪 / 营地 / 掉落 /
-/// 随机码消费序列的运行态在 `CreepCampState`（D1 / D4 / ADR 0002 §6-8）。
+/// 随机码消费序列的运行态在 `CreepCampState`，物品 / 商店 / 回城的
+/// 六格背包 / 库存 / 传送 / 消费序列运行态在 `ItemShopState`（D1 / D4）。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenDefinitions {
     units: BTreeMap<DefId, UnitDef>,
@@ -362,6 +368,7 @@ pub struct FrozenDefinitions {
     camp_scripts: BTreeMap<u32, CampScript>,
     drop_tables: BTreeMap<u32, DropTable>,
     neutral_categories: BTreeMap<DefId, NeutralCategory>,
+    item_shop: ItemShopDefinitions,
     hash: u64,
 }
 
@@ -489,6 +496,10 @@ fn compute_defs_hash(defs: &FrozenDefinitions) -> u64 {
         hasher.write_u32(def_id);
         hasher.write_u8(category.code());
     }
+    // P8.5d：商店 / 道具 / 回城冻结定义段编入定义哈希。任一段
+    // （常量 / 货架 / 商店表 / 类别 / 冷却组 / 效果 / 回城卷轴登记）变化
+    // 都会改变 content_hash() 并进入快照头部（Q8 / tasks 1.2 / D4）。
+    defs.item_shop.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -515,6 +526,7 @@ impl FrozenDefinitions {
             camp_scripts: BTreeMap::new(),
             drop_tables: BTreeMap::new(),
             neutral_categories: BTreeMap::new(),
+            item_shop: ItemShopDefinitions::default(),
             hash: 0,
         };
         insert_unique(&mut defs.units, units)?;
@@ -588,6 +600,25 @@ impl FrozenDefinitions {
         self.neutral_categories = neutral_categories;
         self.hash = compute_defs_hash(&self);
         self
+    }
+
+    /// 纯新增构造路径：注入 P8.5d 商店 / 道具 / 回城冻结定义段，重算内容哈希。
+    ///
+    /// 既有四参数签名不变，需要物品 / 商店 / 回城卷轴的装配层链式调用。
+    /// 货架清单 / 类别 / 价格 / 回购价 / 库存上限 / 刷新间隔 / 解锁时间 /
+    /// 回城施法帧 / 次数 / 拾取半径 / 售卖比例 / 友方主城分类标记全为
+    /// 冻结定义层合成原创整数 `[待核]`；改任一段即改变 `content_hash()`
+    /// 并进入快照头部（Q6 / Q8 / tasks 1.2）。判定只查定义层类别登记
+    /// （数据驱动），MUST NOT 用建筑名白名单 / 硬编码 DefId / rawcode。
+    pub fn with_item_shop(mut self, definitions: ItemShopDefinitions) -> Self {
+        self.item_shop = definitions;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 物品 / 商店 / 回城冻结定义段（只读，Q6 / Q8）。
+    pub fn item_shop(&self) -> &ItemShopDefinitions {
+        &self.item_shop
     }
 
     /// 野怪冻结常量（只读，Q8）。
@@ -885,8 +916,10 @@ pub struct HeroState {
 ///
 /// `death_frame` 是阵亡发生的整数逻辑帧号（`Frame::value()`），MUST NOT 使用
 /// 墙钟 / 渲染帧率；`gameplay` 是阵亡瞬间完整的 [`UnitGameplayState`] 快照，
-/// 逐项承载 `hero.level` / `hero.xp`、6 格背包、技能等级 / 冷却登记
-/// （`cooldowns`）、法力与 Buff，复活时回填到同一实体。
+/// 逐项承载 `hero.level` / `hero.xp`、技能等级 / 冷却登记（`cooldowns`）、
+/// 法力与 Buff，复活时回填到同一实体。P8.5d 起六格定长实例背包由
+/// `ItemShopState.death_bags` 按实例 `EntityId` 身份恢复（R6.3），
+/// MUST NOT 回退为 DefId 序列。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct HeroDeathRecord {
     pub death_frame: u64,
@@ -1080,6 +1113,12 @@ pub struct ProductionItem {
 }
 
 /// 单个单位的玩法运行态（全部整数，可进入哈希 / 快照 / 差异诊断）。
+///
+/// P8.5d：P5 遗留的 `bag: Vec<DefId>` DefId 序列已收敛为顶层权威状态
+/// `ItemShopState.bags` 的六格定长实例背包（每格挂稳定 `EntityId` 指向
+/// `CreepCampState.item_instances`），MUST NOT 回退为 DefId 序列（Q7 / R6.2）。
+/// 复活恢复时 `HeroDeathRecord.gameplay` 只负责法力 / Buff / 冷却 / 英雄，
+/// 六格实例背包由 `ItemShopState.death_bags` 按实例身份恢复（R6.3）。
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct UnitGameplayState {
     pub mana: i64,
@@ -1088,7 +1127,6 @@ pub struct UnitGameplayState {
     pub cast: Option<CastRuntime>,
     pub cooldowns: BTreeMap<DefId, u32>,
     pub hero: Option<HeroState>,
-    pub bag: Vec<DefId>,
     pub production: Vec<ProductionItem>,
     pub stat_mods: StatMods,
     pub gathered: i64,
@@ -1126,10 +1164,6 @@ impl UnitGameplayState {
                 hasher.write_i64(hero.xp);
             }
             None => hasher.write_u8(0),
-        }
-        hasher.write_u64(self.bag.len() as u64);
-        for &item in &self.bag {
-            hasher.write_u32(item);
         }
         hasher.write_u64(self.production.len() as u64);
         for item in &self.production {
@@ -1293,6 +1327,63 @@ pub enum GameplayCommandKind {
         camp: u32,
         script: u32,
     },
+    /// P8.5d 拾取地面物品：英雄走近 P8.5c 掉落的同一 `EntityId` 实例，
+    /// MUST NOT 新建实例 / 重置充能冷却（R1.1 / R7.2 / R7.5）。
+    PickupGroundItem {
+        hero: EntityId,
+        ground_item: EntityId,
+    },
+    /// P8.5d 商店购买事务：`shop` 是定义层商店 id，`shelf` 是冻结货架 id。
+    /// 「距离 / 库存 / 黄金 / 背包空位校验 → 精确扣费 → 建实例 → 入包 →
+    /// 库存递减」，失败事务性回滚退款（R7.3 / R9.3）。
+    BuyFromShop {
+        hero: EntityId,
+        shop: u32,
+        shelf: u32,
+    },
+    /// P8.5d 使用道具：先验证充能 > 0 / 冷却到期 / 目标合法再提交，
+    /// 失败不扣次数（R7.5 / R7.6）。`target` 为 `EntityId::NONE` 表示自身。
+    UseItem {
+        hero: EntityId,
+        instance: EntityId,
+        target: EntityId,
+    },
+    /// P8.5d 丢弃道具：实例以同一 `EntityId` 回无主地面物品，
+    /// 剩余充能 / 冷却「转交也不能刷新」（R1.1 / R7.5）。
+    DropItem {
+        hero: EntityId,
+        instance: EntityId,
+    },
+    /// P8.5d 移交道具：两英雄六格背包间迁移同一实例，目标满包显式拒绝（R6.2）。
+    TransferItem {
+        from_hero: EntityId,
+        to_hero: EntityId,
+        instance: EntityId,
+    },
+    /// P8.5d 售卖道具：按实例移出背包、精确入账冻结回购价（R7.4 / R9.3）。
+    SellItem {
+        hero: EntityId,
+        instance: EntityId,
+        shop: u32,
+    },
+    /// P8.5d 使用回城卷轴：目标按「友方主城分类」定义层数据驱动选出，
+    /// 无可用友方主城显式拒单不扣次数（R7.1 / 结论 7）。单英雄传送，
+    /// MUST NOT 与大法师 MassTeleport 群体传送混淆。
+    UseTownPortal {
+        hero: EntityId,
+        instance: EntityId,
+    },
+    /// P8.5d 显式中断回城施法（R7.5）；施法期主城被毁也由帧阶段自动取消。
+    CancelTownPortal {
+        hero: EntityId,
+    },
+    /// P8.5d 系统级市场刷新通知：`batch` 为批次 id，同一批次幂等不重复消费，
+    /// 随机码复用 P8.5c 事件驱动流（R8.6 / Q6）。`player_id` MUST 为
+    /// [`crate::creep::NEUTRAL_OWNER`]。
+    RefreshMarket {
+        shop: u32,
+        batch: u32,
+    },
 }
 
 /// 玩法命令。
@@ -1446,6 +1537,68 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u32(camp);
             hasher.write_u32(script);
         }
+        // P8.5d：追加唯一编码 15–23，既有码 1–14 一个不动；每个字段
+        // 显式小端编码，且与校验 / 穷尽分发三处同步（Q5 / D2）。
+        GameplayCommandKind::PickupGroundItem { hero, ground_item } => {
+            hasher.write_u8(15);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(ground_item.value());
+        }
+        GameplayCommandKind::BuyFromShop { hero, shop, shelf } => {
+            hasher.write_u8(16);
+            hasher.write_u64(hero.value());
+            hasher.write_u32(shop);
+            hasher.write_u32(shelf);
+        }
+        GameplayCommandKind::UseItem {
+            hero,
+            instance,
+            target,
+        } => {
+            hasher.write_u8(17);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(instance.value());
+            hasher.write_u64(target.value());
+        }
+        GameplayCommandKind::DropItem { hero, instance } => {
+            hasher.write_u8(18);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(instance.value());
+        }
+        GameplayCommandKind::TransferItem {
+            from_hero,
+            to_hero,
+            instance,
+        } => {
+            hasher.write_u8(19);
+            hasher.write_u64(from_hero.value());
+            hasher.write_u64(to_hero.value());
+            hasher.write_u64(instance.value());
+        }
+        GameplayCommandKind::SellItem {
+            hero,
+            instance,
+            shop,
+        } => {
+            hasher.write_u8(20);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(instance.value());
+            hasher.write_u32(shop);
+        }
+        GameplayCommandKind::UseTownPortal { hero, instance } => {
+            hasher.write_u8(21);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(instance.value());
+        }
+        GameplayCommandKind::CancelTownPortal { hero } => {
+            hasher.write_u8(22);
+            hasher.write_u64(hero.value());
+        }
+        GameplayCommandKind::RefreshMarket { shop, batch } => {
+            hasher.write_u8(23);
+            hasher.write_u32(shop);
+            hasher.write_u32(batch);
+        }
     }
 }
 
@@ -1471,6 +1624,35 @@ pub(crate) fn validate_gameplay_entities(
         // P8.5c：营地 id / 冻结脚本 id 均不得为 0（系统级命令的实体合法性
         // 校验），与 hash 编码 / 穷尽分发三处同步（Q5 / D6）。
         GameplayCommandKind::SeedCreepCamp { camp, script } => camp == 0 || script == 0,
+        // P8.5d：`UseItem` 的 `target` 允许 `EntityId::NONE` 表示自身，
+        // 其余实体字段 MUST NOT 为 0；商店 / 货架 / 批次 id 不得为 0。
+        GameplayCommandKind::PickupGroundItem { hero, ground_item } => {
+            hero == EntityId::NONE || ground_item == EntityId::NONE
+        }
+        GameplayCommandKind::BuyFromShop { hero, shop, shelf } => {
+            hero == EntityId::NONE || shop == 0 || shelf == 0
+        }
+        GameplayCommandKind::UseItem { hero, instance, .. } => {
+            hero == EntityId::NONE || instance == EntityId::NONE
+        }
+        GameplayCommandKind::DropItem { hero, instance } => {
+            hero == EntityId::NONE || instance == EntityId::NONE
+        }
+        GameplayCommandKind::TransferItem {
+            from_hero,
+            to_hero,
+            instance,
+        } => from_hero == EntityId::NONE || to_hero == EntityId::NONE || instance == EntityId::NONE,
+        GameplayCommandKind::SellItem {
+            hero,
+            instance,
+            shop,
+        } => hero == EntityId::NONE || instance == EntityId::NONE || shop == 0,
+        GameplayCommandKind::UseTownPortal { hero, instance } => {
+            hero == EntityId::NONE || instance == EntityId::NONE
+        }
+        GameplayCommandKind::CancelTownPortal { hero } => hero == EntityId::NONE,
+        GameplayCommandKind::RefreshMarket { shop, batch } => shop == 0 || batch == 0,
         _ => false,
     };
     if invalid {

@@ -327,14 +327,22 @@ pub struct GroundItemState {
 
 /// 物品实例权威状态：同名道具的多个实例各有独立充能 / 冷却（R7.5）。
 ///
-/// 效果走既有 `EffectDef` 组合、MUST NOT 引入 JASS VM（R7.6 / N5）；
-/// 拾取 / 背包 / 商店 / 回城卷轴按 Q2 留 P8.5d，本期只登记地面实例。
+/// 效果走既有 `EffectDef` 组合、MUST NOT 引入 JASS VM（R7.6 / N5）。
+/// P8.5d 追加 `holder` / `slot`：`Some` 表示被某英雄六格背包持有，
+/// `None` 表示无主地面物品（R1.1 / R6.2）。持有者与槽位是
+/// `ItemShopState.bags` 的反向索引，两者 MUST 同步进哈希 / 快照 /
+/// `first_difference()`（ADR 0002 §6-8 / Q7）。拾取 / 丢弃 / 移交 MUST
+/// 保持同一 `EntityId` 身份与剩余充能 / 冷却（「转交也不能刷新」）。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ItemInstanceState {
     pub item_def: DefId,
     pub charges: u32,
     pub cooldown_frames: u32,
     pub effect: EffectDef,
+    /// 持有英雄；`None` 表示无主地面物品（R1.1）。
+    pub holder: Option<EntityId>,
+    /// 六格背包槽位 `0..6`；`None` 表示不在背包。
+    pub slot: Option<u8>,
 }
 
 /// 击杀收益登记（R6.1 / R6.5 / R8.3，按稳定 `EntityId` 只结算一次）。
@@ -383,8 +391,10 @@ pub struct CreepDeathNotice {
 ///
 /// 全部落 `BTreeMap` / `BTreeSet` 确定性有序容器，按稳定 `EntityId` /
 /// `u32` / `u64` 键顺序遍历；MUST 同时进入 FNV-1a 状态哈希、由
-/// `SNAPSHOT_VERSION`(6) 定义的快照与 `first_difference()`
+/// `SNAPSHOT_VERSION`(7) 定义的快照与 `first_difference()`
 /// （ADR 0002 §6-8 / `CODEBUDDY.md §5` / D1 / D5）。
+/// P8.5d 起 `item_instances` 追加 `holder` / `slot`，与
+/// `ItemShopState.bags` 同属单一实例身份口径（Q7）。
 ///
 /// `rng_state` 是独立事件驱动掉落流（由 `seed` 派生，随快照恢复），
 /// `rng_draws` / `next_rng_seq` 是显式消费序列编码；两者与每帧恰好
@@ -484,6 +494,22 @@ impl CreepCampState {
             hasher.write_u8(effect_kind_code(instance.effect.kind));
             hasher.write_i64(instance.effect.amount);
             hasher.write_u32(instance.effect.duration_frames);
+            // P8.5d：实例 owner 与 slot 显式小端编码；Option 带存在标记，
+            // 避免 `Some(0)` 与 `None` 可构造的哈希碰撞（ADR 0002 §6）。
+            match instance.holder {
+                Some(hero) => {
+                    hasher.write_u8(1);
+                    hasher.write_u64(hero.value());
+                }
+                None => hasher.write_u8(0),
+            }
+            match instance.slot {
+                Some(slot) => {
+                    hasher.write_u8(1);
+                    hasher.write_u8(slot);
+                }
+                None => hasher.write_u8(0),
+            }
         }
 
         hasher.write_u64(self.death_processed.len() as u64);
@@ -559,6 +585,19 @@ impl CreepCampState {
         }
         if self.ground_items != other.ground_items {
             return Some("creep_ground_items");
+        }
+        // P8.5d：先按稳定 EntityId 顺序单独定位实例 owner / slot 差异，
+        // 使新增字段有独立诊断名；只改充能或冷却时落到下一分支。
+        let holders =
+            |state: &CreepCampState| -> BTreeMap<EntityId, (Option<EntityId>, Option<u8>)> {
+                state
+                    .item_instances
+                    .iter()
+                    .map(|(&id, instance)| (id, (instance.holder, instance.slot)))
+                    .collect()
+            };
+        if holders(self) != holders(other) {
+            return Some("creep_item_holders");
         }
         if self.item_instances != other.item_instances {
             return Some("creep_item_instances");

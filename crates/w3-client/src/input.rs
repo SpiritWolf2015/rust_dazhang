@@ -5,7 +5,7 @@
 //! 权威字段；命令最终只经 `submit_command` / `submit_gameplay_command` 提交。
 //!
 //! 选中集合、框选矩形、序号计数器一律是表现层专属状态，MUST NOT 进入
-//! FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 6）快照。执行帧由冻结的
+//! FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 7）快照。执行帧由冻结的
 //! 整数帧号推导（`WorldView::tick + LEAD_FRAMES`），MUST NOT 用墙钟或呈现帧号。
 //!
 //! 屏幕 `f64` → 世界 `f64` 的拾取运算只发生在表现层；任何将进入权威状态的
@@ -29,7 +29,7 @@ use crate::melee::defs::BARRACKS;
 /// 装配期由 client 侧冻结定义 [`FrozenDefinitions::units`] 的
 /// `UnitDef::speed_raw` 派生（design D1），经 [`crate::app::ClientApp`]
 /// 注入输入翻译层。该映射是表现层专属数据，MUST NOT 进入 FNV-1a 状态哈希、
-/// `SNAPSHOT_VERSION`（当前 6）快照或任何权威状态字段（ADR 0002）。
+/// `SNAPSHOT_VERSION`（当前 7）快照或任何权威状态字段（ADR 0002）。
 /// 本映射只登记 frame-0 装配实体；群体 `Move` 前 MUST 经
 /// [`effective_movability`] 用只读视图补齐运行时动态实体判据，再把产出的
 /// 有效映射交给 [`filter_movable`]，不做类型白名单推断。
@@ -84,7 +84,7 @@ pub fn filter_movable(selection: &BTreeSet<u64>, movability: &MovabilityMap) -> 
 ///
 /// 纯函数、每次 `apply` 从当前 `view` 现算，不持久化映射、不监听生产事件、
 /// 不反写模拟状态；有效映射是表现层只读派生数据，MUST NOT 进入 FNV-1a
-/// 状态哈希、`SNAPSHOT_VERSION`（当前 6）快照或任何权威状态字段（ADR 0002）。
+/// 状态哈希、`SNAPSHOT_VERSION`（当前 7）快照或任何权威状态字段（ADR 0002）。
 /// 已登记项优先（原样保留），仅对未登记项按视图 speed 补齐，因此默认空映射
 /// （`ClientApp::new`）下 view 里所有实体也都有判据，不再等价「全部可移动」
 /// 缺陷态（design D5）。
@@ -372,7 +372,7 @@ pub enum InputAction {
 /// 表现层放置态内容：待左键定点的既有 `Train { is_building }` 参数。
 ///
 /// 纯表现层局部状态，MUST NOT 进入权威状态 / FNV-1a 状态哈希 /
-/// `SNAPSHOT_VERSION`（当前 6）快照（D3 / ADR 0002）。
+/// `SNAPSHOT_VERSION`（当前 7）快照（D3 / ADR 0002）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PendingPlacement {
     pub unit_def: u32,
@@ -406,7 +406,7 @@ pub struct InputState {
     no_movable_target: bool,
     /// 子菜单栈：当前卡 ID 序列。空表示按选中集合类型定主卡；栈顶为
     /// 当前子卡。纯表现层局部状态，MUST NOT 进入权威状态 / FNV-1a 状态
-    /// 哈希 / `SNAPSHOT_VERSION`（当前 6）快照（D3 / ADR 0002 / R13.3）。
+    /// 哈希 / `SNAPSHOT_VERSION`（当前 7）快照（D3 / ADR 0002 / R13.3）。
     submenu_stack: Vec<CardId>,
     /// 放置态：待左键定点的建造命令（既有 `Train { is_building }` 参数）。
     /// 纯表现层局部状态，MUST NOT 进入权威状态 / 状态哈希 / 快照（D3）。

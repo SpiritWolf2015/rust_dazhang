@@ -10,7 +10,7 @@
 //!   建筑 / 金矿 / 主城 / 运行时建筑 MUST NOT 生成 `Move`；
 //! - 反向验证（改坏验红）：退化实现经**真实** `filter_movable` / `apply`
 //!   路径注入，缺陷态失败、修复态通过（反例元断言 / A-B 对照）；
-//! - 状态哈希 / 快照 / `SNAPSHOT_VERSION=6` / golden hash 逐字节不变。
+//! - 状态哈希 / 快照 / `SNAPSHOT_VERSION=7` / golden hash 逐字节不变。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -593,7 +593,7 @@ fn submenu_fields_are_presentation_only() {
         snapshot_before,
         "reason=snapshot_unchanged"
     );
-    assert_eq!(SNAPSHOT_VERSION, 6);
+    assert_eq!(SNAPSHOT_VERSION, 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -953,7 +953,7 @@ fn runtime_building_does_not_move_under_keyboard_m() {
     assert_eq!(sim.compute_state_hash(), hash_before);
     assert_eq!(sim.capture_snapshot(), snapshot_before);
     assert_eq!(snapshot_before.version, SNAPSHOT_VERSION);
-    assert_eq!(SNAPSHOT_VERSION, 6);
+    assert_eq!(SNAPSHOT_VERSION, 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -1198,7 +1198,7 @@ fn hud_twelve_slot_card_and_labels_never_change_state_hash() {
         );
         assert_eq!(snapshot(&rendered).version, SNAPSHOT_VERSION);
     }
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
 }
 
 #[test]
@@ -1231,7 +1231,7 @@ fn melee_setup_def_ids_wire_into_definition_table() {
 fn presentation_state_and_classic_commands_replay_frame_by_frame() {
     // 两同构真实生产对局：连续切换命令卡 / 子菜单 / 编队 / Shift 队列并
     // 下达经典键命令后，逐帧 `compute_state_hash()` / `capture_snapshot()`
-    // 字节一致；`SNAPSHOT_VERSION` 仍 6、golden hash 口径不变。
+    // 字节一致；`SNAPSHOT_VERSION` 仍 7、golden hash 口径不变。
     let (mut a, defs) = runtime_production_match();
     let (mut b, _) = runtime_production_match();
     assert_eq!(
@@ -1312,7 +1312,7 @@ fn presentation_state_and_classic_commands_replay_frame_by_frame() {
     }
     let snapshot = a.capture_snapshot();
     assert_eq!(snapshot.version, SNAPSHOT_VERSION);
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
     assert_eq!(
         snapshot.defs_hash,
         defs.content_hash(),

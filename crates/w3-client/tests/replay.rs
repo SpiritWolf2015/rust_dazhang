@@ -5,7 +5,7 @@
 //! - 60 Hz 与 144 Hz 两种重绘节奏喂同一命令脚本，逐帧帧号与 `compute_state_hash()`
 //!   完全一致，且与「每帧直接 step」的 30 Hz 基准实例一致；
 //! - 不同 `alpha` 连续插值、事件重复投递后，权威状态哈希与快照字节不变，
-//!   快照版本仍为 6（头部含 `defs_hash` / `content_hash`）；
+//!   快照版本仍为 7（头部含 `defs_hash` / `content_hash`）；
 //! - `FrameProducer::next_frame()` 只交出当前只读视图，MUST NOT 推进模拟；
 //! - 追帧有显式上限且超限被明确报告，累加器只数整数帧步长。
 
@@ -176,7 +176,7 @@ fn interpolation_alpha_keeps_state_hash_and_snapshot_bytes() {
     let snapshot_before = client.sim().capture_snapshot();
     let bytes_before = snapshot_bytes(&snapshot_before);
     assert_eq!(snapshot_before.version, SNAPSHOT_VERSION);
-    assert_eq!(SNAPSHOT_VERSION, 6);
+    assert_eq!(SNAPSHOT_VERSION, 7);
     assert_eq!(snapshot_before.content_hash, CONTENT_HASH);
 
     let mut scene = Scene::default();

@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use w3_client::melee::defs::{
     HUMAN_BARRACKS, HUMAN_TOWN_HALL, ORC_TOWN_HALL, SOLDIER, TIER2_TECH, TIER2_UNIT, TOWN_HALL,
-    synthetic_definitions,
+    TOWN_HALL_PORTAL_DEF, synthetic_definitions,
 };
 use w3_client::melee::synthetic_world;
 use w3_client::{
@@ -96,6 +96,8 @@ fn degenerate_definitions() -> FrozenDefinitions {
             full.drop_tables().clone(),
             full.neutral_categories().clone(),
         )
+        // P8.5d：同源登记商店段，使缺陷态仍只差主城升级段。
+        .with_item_shop(full.item_shop().clone())
 }
 
 /// 真实装配 + 快照往返注入「主城实体 + 充足经济」。
@@ -119,7 +121,7 @@ fn upgrade_fixture() -> (RtsMatch, FrozenDefinitions, StaticWorld, u64, EntityId
     sim.step();
 
     let mut snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v7");
     let economy = snapshot.gameplay.players.entry(PLAYER).or_default();
     economy.gold = 100_000;
     economy.lumber = 100_000;
@@ -179,7 +181,7 @@ fn tier_gate_fixture_with_defs(
     sim.step();
 
     let mut snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v7");
     {
         let hall = snapshot
             .positions
@@ -529,11 +531,21 @@ fn synthetic_definitions_registers_town_hall_categories_and_tier_chain() {
         "reason=orc_hall_registered"
     );
     assert!(!defs.is_town_hall(SOLDIER), "reason=categories_not_crossed");
+    // P8.5d：回城目标也登记为主城类别，使数据驱动目标与升级类别共用同一集合。
+    assert!(
+        defs.is_town_hall(TOWN_HALL_PORTAL_DEF),
+        "reason=portal_town_hall_registered"
+    );
     assert_eq!(
         defs.town_hall_defs(),
-        &[TOWN_HALL, HUMAN_TOWN_HALL, ORC_TOWN_HALL]
-            .into_iter()
-            .collect::<BTreeSet<DefId>>(),
+        &[
+            TOWN_HALL,
+            HUMAN_TOWN_HALL,
+            ORC_TOWN_HALL,
+            TOWN_HALL_PORTAL_DEF,
+        ]
+        .into_iter()
+        .collect::<BTreeSet<DefId>>(),
         "reason=town_hall_defs_exact"
     );
 
@@ -627,9 +639,9 @@ fn upgrade_command_is_accepted_in_real_assembly_and_builds_state() {
     sim.step();
 
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
-    assert_eq!(SNAPSHOT_VERSION, 6, "reason=snapshot_version_6");
-    // `Some(TownHallUpgradeState)`：v6 快照携带已填充的顶层权威状态。
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v7");
+    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
+    // `Some(TownHallUpgradeState)`：v7 快照携带已填充的顶层权威状态。
     let state: TownHallUpgradeState = snapshot.town_hall.clone();
     let item = state
         .queue
@@ -909,7 +921,7 @@ fn hud_redraw_keeps_state_hash_and_snapshot_bytes() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=snapshot_version_6 frame={frame}"
+            "reason=snapshot_version_7 frame={frame}"
         );
     }
 }
@@ -999,7 +1011,9 @@ fn upgrade_slot_is_definition_driven_not_name_whitelist() {
             defs.camp_scripts().clone(),
             defs.drop_tables().clone(),
             defs.neutral_categories().clone(),
-        );
+        )
+        // P8.5d：同源登记商店段，使非经典主城对照只差类别集合。
+        .with_item_shop(defs.item_shop().clone());
     assert!(
         alt_defs.is_town_hall(non_classic),
         "reason=non_classic_hall_registered"
@@ -1163,7 +1177,7 @@ fn real_assembly_t2_accepts_tier2_train_research_and_settles_effects() {
     advance_until_tier2_effects_dual(&mut primary, &mut replay, producer_a, before_alive);
 
     let snapshot = primary.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v6");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v7");
     assert_eq!(
         snapshot.defs_hash,
         defs.content_hash(),

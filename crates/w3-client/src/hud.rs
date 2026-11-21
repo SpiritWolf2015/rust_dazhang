@@ -16,7 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_content::RgbaImage;
-use w3_core::{DefId, Event, EventKind, LeashPhase, SCALE, Snapshot, TownHallTier, WorldView};
+use w3_core::{
+    BAG_SLOTS, DefId, Event, EventKind, LeashPhase, SCALE, Snapshot, TownHallTier, WorldView,
+};
 use w3_render::{display_hints, team_color};
 
 use crate::faction::FactionSelection;
@@ -435,6 +437,182 @@ impl CreepCampHudModel {
     }
 }
 
+/// 单个英雄六格实例背包的只读 HUD 投影（P8.5d / tasks 6.2）。
+///
+/// 槽位保存物品实例 `EntityId` 的值拷贝，不保存 `RtsMatch` 句柄，也不解析
+/// 定义层名称；同名道具多实例仍各有独立编号，纯表现层派生。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudItemBag {
+    /// 持包英雄的实体编号（只读派生）。
+    pub hero: u64,
+    /// 定长六格；`None` 表示空槽，`Some` 是物品实例编号值拷贝。
+    pub slots: [Option<u64>; BAG_SLOTS],
+}
+
+/// 单个回城施法条的只读 HUD 投影（P8.5d / tasks 6.2）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudTownPortalCast {
+    /// 施法英雄实体编号。
+    pub caster: u64,
+    /// 友方主城目标实体编号。
+    pub target: u64,
+    /// 剩余施法整数帧。
+    pub remaining_frames: u32,
+    /// 施法总整数帧。
+    pub total_frames: u32,
+}
+
+/// 单条物品 / 商店 / 回城事实的只读 HUD 投影（P8.5d / tasks 6.2）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudItemShopFact {
+    /// 稳定事实序号。
+    pub seq: u64,
+    /// 事实登记整数帧。
+    pub frame: u64,
+    /// 事实种类稳定编码，来自 `ItemShopFactKind::code()`。
+    pub kind_code: u8,
+    /// 持包英雄 / 施法者实体编号。
+    pub hero: u64,
+    /// 物品实例实体编号。
+    pub instance: u64,
+    /// 参与槽位；`u8::MAX` 表示无槽位。
+    pub slot: u8,
+    /// 关联实体编号。
+    pub entity: u64,
+    /// 精确黄金变动。
+    pub gold_delta: i64,
+    /// 货架 / 商店 / 道具编号。
+    pub shelf: u32,
+}
+
+/// 物品 / 商店 / 回城 HUD 的只读投影模型（一帧，P8.5d / tasks 6.2）。
+///
+/// 只从只读 [`w3_core::Snapshot::item_shop`] 的 `bags` / `stock` / `casts` /
+/// `facts` 与 `drain_events()` 的十一类事实事件拷贝派生：六格背包、货架库存、
+/// 回城施法进度、购买 / 拾取 / 使用 / 拒单事实都只是整数值拷贝。本结构不持有
+/// `RtsMatch`，结构上无法反写模拟状态，也不进入 FNV-1a 状态哈希、v7 快照或
+/// `first_difference()`（ADR 0002 §5 / R10.5 / R13.5）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ItemShopHudModel {
+    /// 六格背包投影（按稳定 `EntityId` 顺序）。
+    pub bags: Vec<HudItemBag>,
+    /// 货架库存投影（按稳定货架 id 顺序）。
+    pub stock: BTreeMap<u32, u32>,
+    /// 回城施法条（按稳定施法者 `EntityId` 顺序）。
+    pub casts: Vec<HudTownPortalCast>,
+    /// 权威事实投影（按稳定 `seq` 顺序）。
+    pub facts: Vec<HudItemShopFact>,
+    /// 本批次事实事件总数。
+    pub event_count: usize,
+    /// 本批次 `ItemPickedUp` 计数。
+    pub picked_up_events: usize,
+    /// 本批次 `ItemPurchased` 计数。
+    pub purchased_events: usize,
+    /// 本批次 `ItemUsed` 计数。
+    pub used_events: usize,
+    /// 本批次 `ItemDiscarded` 计数。
+    pub discarded_events: usize,
+    /// 本批次 `ItemTransferred` 计数。
+    pub transferred_events: usize,
+    /// 本批次 `ItemSold` 计数。
+    pub sold_events: usize,
+    /// 本批次 `TownPortalStarted` 计数。
+    pub portal_started_events: usize,
+    /// 本批次 `TownPortalCompleted` 计数。
+    pub portal_completed_events: usize,
+    /// 本批次 `TownPortalCancelled` 计数。
+    pub portal_cancelled_events: usize,
+    /// 本批次 `MarketRefreshed` 计数。
+    pub market_refreshed_events: usize,
+    /// 本批次 `ItemShopCommandRejected` 计数。
+    pub rejected_events: usize,
+}
+
+impl ItemShopHudModel {
+    /// 从只读快照拷贝与事实事件拷贝派生 HUD 数据；纯只读、无副作用。
+    ///
+    /// `snapshot` 是 [`w3_core::Snapshot`] 的所有权副本（由 `StepDriver::snapshot`
+    /// 提供），`events` 是 `drain_events()` 的事实事件拷贝。本函数只读取两者，
+    /// 不调用 `step()`、不提交命令、不改写任何权威状态字段；所有集合都按
+    /// `BTreeMap` 稳定键序遍历，不引入墙钟、浮点、全局静态字典或 `HashMap`
+    /// 迭代顺序（ADR 0002 §5 / D7）。
+    pub fn derive(snapshot: &Snapshot, events: &[Event]) -> Self {
+        let bags = snapshot
+            .item_shop
+            .bags
+            .iter()
+            .map(|(&hero, bag)| HudItemBag {
+                hero: hero.value(),
+                slots: bag.slots.map(|slot| slot.map(|instance| instance.value())),
+            })
+            .collect();
+        let casts = snapshot
+            .item_shop
+            .casts
+            .values()
+            .map(|cast| HudTownPortalCast {
+                caster: cast.caster.value(),
+                target: cast.target.value(),
+                remaining_frames: cast.remaining_frames,
+                total_frames: cast.total_frames,
+            })
+            .collect();
+        let facts = snapshot
+            .item_shop
+            .facts
+            .values()
+            .map(|fact| HudItemShopFact {
+                seq: fact.seq,
+                frame: fact.frame,
+                kind_code: fact.kind.code(),
+                hero: fact.hero.value(),
+                instance: fact.instance.value(),
+                slot: fact.slot,
+                entity: fact.entity.value(),
+                gold_delta: fact.gold_delta,
+                shelf: fact.shelf,
+            })
+            .collect();
+        let mut model = Self {
+            bags,
+            stock: snapshot.item_shop.stock.clone(),
+            casts,
+            facts,
+            event_count: events.len(),
+            picked_up_events: 0,
+            purchased_events: 0,
+            used_events: 0,
+            discarded_events: 0,
+            transferred_events: 0,
+            sold_events: 0,
+            portal_started_events: 0,
+            portal_completed_events: 0,
+            portal_cancelled_events: 0,
+            market_refreshed_events: 0,
+            rejected_events: 0,
+        };
+        // 十一类新增事实事件只参与表现层计数，重复投递由事件消费者的
+        // sequence 去重吸收，MUST NOT 改写权威状态或进入状态哈希。
+        for event in events {
+            match event.kind {
+                EventKind::ItemPickedUp => model.picked_up_events += 1,
+                EventKind::ItemPurchased => model.purchased_events += 1,
+                EventKind::ItemUsed => model.used_events += 1,
+                EventKind::ItemDiscarded => model.discarded_events += 1,
+                EventKind::ItemTransferred => model.transferred_events += 1,
+                EventKind::ItemSold => model.sold_events += 1,
+                EventKind::TownPortalStarted => model.portal_started_events += 1,
+                EventKind::TownPortalCompleted => model.portal_completed_events += 1,
+                EventKind::TownPortalCancelled => model.portal_cancelled_events += 1,
+                EventKind::MarketRefreshed => model.market_refreshed_events += 1,
+                EventKind::ItemShopCommandRejected => model.rejected_events += 1,
+                _ => {}
+            }
+        }
+        model
+    }
+}
+
 /// 命令卡动作（由选中集合与实体类型只读派生）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandAction {
@@ -567,6 +745,10 @@ pub struct HudModel {
     /// 纯表现层派生，MUST NOT 反写权威状态、进状态哈希 / 快照 /
     /// `first_difference()`（ADR 0002 §5 / D7）。
     pub creep: CreepCampHudModel,
+    /// 六格背包 / 货架库存 / 回城施法 / 事实事件的只读 HUD 投影
+    /// （P8.5d / tasks 6.2）；纯表现层派生，MUST NOT 反写权威状态、
+    /// 进状态哈希 / 快照 / `first_difference()`（ADR 0002 §5）。
+    pub item_shop: ItemShopHudModel,
     pub selected_count: usize,
     pub event_count: usize,
     /// 本地玩家编号，用于按队伍区分 HUD 标记颜色。
@@ -804,6 +986,9 @@ impl HudModel {
             town_hall: TownHallUpgradeHudModel::derive(snapshot, events),
             // 只读派生：只消费 `snapshot.creep_camps` 与事实事件拷贝，不写回模拟状态。
             creep: CreepCampHudModel::derive(snapshot, events),
+            // 只读派生：只消费 `snapshot.item_shop` 与十一类事实事件拷贝，
+            // 不写回模拟状态，也不进入状态哈希 / 快照。
+            item_shop: ItemShopHudModel::derive(snapshot, events),
             selected_count: selection.len(),
             event_count: events.len(),
             local_player,
@@ -1186,6 +1371,90 @@ pub fn draw_with_minimap(
                 model.creep.creep_died_events,
                 texts.item_dropped,
                 model.creep.item_dropped_events,
+            ));
+        }
+        ui.separator();
+
+        // 物品 / 商店 / 回城 HUD：六格背包 / 库存 / 施法条 / 事实计数全部来自
+        // `ItemShopHudModel` 只读投影；文案全部走 i18n，MUST NOT 进日志 /
+        // 权威状态 / 状态哈希（ADR 0002 §5 / R10.5 / R13.5）。
+        ui.label(texts.item_shop);
+        if model.item_shop.bags.is_empty()
+            && model.item_shop.stock.is_empty()
+            && model.item_shop.casts.is_empty()
+            && model.item_shop.facts.is_empty()
+        {
+            ui.label(texts.item_shop_empty);
+        } else {
+            for bag in model.item_shop.bags.iter().take(2) {
+                let slots: Vec<String> = bag
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, instance)| match instance {
+                        Some(instance) => {
+                            format!("{}#{}:{}", texts.item_shop_slot, slot, instance)
+                        }
+                        None => format!("{}#{}:-", texts.item_shop_slot, slot),
+                    })
+                    .collect();
+                ui.label(format!(
+                    "{} #{}: {}",
+                    texts.item_shop_bag,
+                    bag.hero,
+                    slots.join(" ")
+                ));
+            }
+            for (&shelf, &remaining) in model.item_shop.stock.iter().take(3) {
+                ui.label(format!(
+                    "{} #{}: {}",
+                    texts.item_shop_stock, shelf, remaining
+                ));
+            }
+            for cast in model.item_shop.casts.iter().take(2) {
+                ui.label(format!(
+                    "{} #{} -> #{}: {}/{}",
+                    texts.item_shop_casts,
+                    cast.caster,
+                    cast.target,
+                    cast.remaining_frames,
+                    cast.total_frames
+                ));
+            }
+            ui.label(format!(
+                "{}: {} | {}: {}",
+                texts.item_shop_facts,
+                model.item_shop.facts.len(),
+                texts.item_shop_events,
+                model.item_shop.event_count
+            ));
+            ui.label(format!(
+                "{} {} | {} {} | {} {} | {} {} | {} {} | {} {}",
+                texts.item_shop_picked_up,
+                model.item_shop.picked_up_events,
+                texts.item_shop_purchased,
+                model.item_shop.purchased_events,
+                texts.item_shop_used,
+                model.item_shop.used_events,
+                texts.item_shop_discarded,
+                model.item_shop.discarded_events,
+                texts.item_shop_transferred,
+                model.item_shop.transferred_events,
+                texts.item_shop_sold,
+                model.item_shop.sold_events,
+            ));
+            ui.label(format!(
+                "{} {} | {} {} | {} {} | {} {} | {} {}",
+                texts.item_shop_portal_started,
+                model.item_shop.portal_started_events,
+                texts.item_shop_portal_completed,
+                model.item_shop.portal_completed_events,
+                texts.item_shop_portal_cancelled,
+                model.item_shop.portal_cancelled_events,
+                texts.item_shop_refreshed,
+                model.item_shop.market_refreshed_events,
+                texts.item_shop_rejected,
+                model.item_shop.rejected_events,
             ));
         }
         ui.separator();

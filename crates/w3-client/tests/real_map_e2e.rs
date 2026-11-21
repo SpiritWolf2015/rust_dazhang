@@ -98,7 +98,7 @@ fn static_markers_enter_gpu_vertices() {
     let again = scene.build_vertices(&map.terrain);
     assert_eq!(vertices, again);
     assert_eq!(
-        SNAPSHOT_VERSION, 6,
+        SNAPSHOT_VERSION, 7,
         "reason=real_map_assembly_keeps_snapshot_version"
     );
 }
@@ -341,7 +341,7 @@ fn real_models_enter_scene_vertices_and_are_deterministic() {
     // 确定性：同一真实模型流逐帧可复现（无随机源 / 无墙钟）。
     assert_eq!(with_models, scene.build_vertices(&map.terrain));
     assert_eq!(
-        SNAPSHOT_VERSION, 6,
+        SNAPSHOT_VERSION, 7,
         "reason=real_model_assembly_keeps_snapshot_version"
     );
 }

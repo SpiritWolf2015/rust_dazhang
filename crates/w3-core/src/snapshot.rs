@@ -23,15 +23,25 @@
 //! 等权威状态，并同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 6。旧 v5
 //! 及更早快照按 `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝，
 //! 不提供跨版本迁移（ADR 0002 §7 / Q4）。
+//!
+//! v7 由 P8.5d 引入：追加顶层权威状态 `item_shop`（六格定长实例背包 /
+//! 复活死亡背包 / 拾取购买使用丢弃移交售卖事实 / 商店库存与刷新计数 /
+//! 回城传送施法帧目标中断次数 / 确定性随机码消费序列 / 购买事务扣费登记），
+//! 并把 `ItemInstanceState` 扩展出 `holder` / `slot`；商店 / 道具 / 回城
+//! 冻结定义段进入 `defs_hash` / `content_hash` 快照头部。同步
+//! `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 7。旧 v6 及更早快照按
+//! `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本
+//! 迁移（ADR 0002 §7 / Q4）。
 
 use crate::command::Command;
 use crate::creep::CreepCampState;
 use crate::gameplay::{
     FrozenDefinitions, HeroReviveState, TownHallUpgradeState, UnitGameplayState, WorldGameplayState,
 };
+use crate::item_shop::ItemShopState;
 
-pub const SNAPSHOT_VERSION: u32 = 6;
-pub const SIM_VERSION: u32 = 6;
+pub const SNAPSHOT_VERSION: u32 = 7;
+pub const SIM_VERSION: u32 = 7;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,6 +137,12 @@ pub struct Snapshot {
     /// 物品实例 / 死亡登记 / 收益登记 / 随机码消费序列，恢复后从 N+1
     /// 继续不重复掉落、不残留上一局状态（ADR 0002 §6-8 / R12.4）。
     pub creep_camps: CreepCampState,
+    /// 物品 / 商店 / 回城卷轴全部权威状态（v7 新增，P8.5d / Q4 / D1）。
+    /// 帧 N 提交后的完整状态必须包含六格定长实例背包 / 复活死亡背包 /
+    /// 拾取购买使用丢弃移交售卖事实 / 商店库存与刷新计数 / 回城传送 /
+    /// 随机码消费序列 / 购买扣费登记，恢复后从 N+1 继续不残留 /
+    /// 不重复购买或刷新（ADR 0002 §6-8 / R11.5 / R12.4）。
+    pub item_shop: ItemShopState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

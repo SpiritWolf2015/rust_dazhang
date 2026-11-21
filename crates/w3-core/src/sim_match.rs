@@ -26,6 +26,10 @@ use crate::gameplay::{
     UnitGameplayState, VictoryState, Vitals, WaveState, WorldGameplayState, resolve_effects,
     restore_by_percent, validate_gameplay_entities,
 };
+use crate::item_shop::{
+    ItemBag, ItemCategory, ItemShopFact, ItemShopFactKind, ItemShopState, PurchaseCharge,
+    ShopRefreshDraw, TownPortalCast, shop_fixture_id,
+};
 use crate::nav::{self, DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 use crate::snapshot::{
     GroupPlanRecord, ObstacleRecord, OrderRecord, PositionRecord, SIM_VERSION, SNAPSHOT_VERSION,
@@ -200,6 +204,30 @@ pub enum EventKind {
     CreepDied,
     /// P8.5c 地面物品掉落事实事件（无主，`Event.entity` 为地面物品 id）。
     ItemDropped,
+    /// P8.5d 拾取地面物品事实事件（`Event.entity` 为英雄 id，按只读
+    /// `Snapshot.item_shop.facts` / `Snapshot.item_shop.bags` 查表）。
+    ItemPickedUp,
+    /// P8.5d 商店购买事实事件（精确扣费 / 建实例 / 库存递减）。
+    ItemPurchased,
+    /// P8.5d 使用道具事实事件（充能 / 冷却 / 既有 `EffectDef` 组合）。
+    ItemUsed,
+    /// P8.5d 丢弃道具回地面事实事件（保持实例身份与剩余冷却）。
+    ItemDiscarded,
+    /// P8.5d 两英雄间移交道具事实事件。
+    ItemTransferred,
+    /// P8.5d 售卖道具事实事件（精确入账冻结回购价）。
+    ItemSold,
+    /// P8.5d 回城施法开始事实事件（目标按友方主城分类数据驱动）。
+    TownPortalStarted,
+    /// P8.5d 回城传送完成事实事件（单英雄整数坐标传送）。
+    TownPortalCompleted,
+    /// P8.5d 回城施法中断 / 拒单事实事件（不产生半传送位置）。
+    TownPortalCancelled,
+    /// P8.5d 市场刷新事实事件（幂等，复用 P8.5c 事件驱动随机流）。
+    MarketRefreshed,
+    /// P8.5d 命令被显式拒绝事实事件（满包 / 售罄 / 黄金不足 / 非法目标 /
+    /// 冷却未到 / 无友方主城 / 旧 `BuyItem` 占位旁路被拒）。
+    ItemShopCommandRejected,
 }
 
 /// 只读事实事件（`drain_events()` 返回 owned 拷贝，序号不重置）。
@@ -209,6 +237,9 @@ pub enum EventKind {
 /// 地面物品 id，表现层由 owned `Snapshot.creep_camps` 与
 /// [`RtsMatch::creep_camps`] 只读投影查表得到「掉什么 / 给谁经验」
 /// 等全部事实（复用 P8.5a `ReviveHudModel::derive(snapshot, events)` 范式）。
+/// P8.5d 同样不新增 payload：拾取 / 购买 / 使用 / 丢弃 / 移交 / 售卖 /
+/// 回城 / 刷新事实由 `Event.entity` 查只读 `Snapshot.item_shop.facts` /
+/// `Snapshot.item_shop.bags` / `Snapshot.item_shop.stock` 得到（Q5 / D6）。
 /// 历史事件不进入状态哈希 / 快照 / `first_difference()`（ADR 0002 §5-6）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Event {
@@ -268,6 +299,11 @@ pub struct RtsMatch {
     /// 字段私有，仅本结构可写；全部落 `BTreeMap` / `BTreeSet`
     /// 确定性有序容器，同时进入状态哈希、快照与差异诊断。
     creep_camps: CreepCampState,
+    /// P8.5d 物品 / 商店 / 回城卷轴全部权威状态（Q6 / Q7 / D1 / D5）。
+    /// 字段私有，仅本结构可写；六格定长实例背包与 `creep_camps`
+    /// 的 `item_instances` 按稳定 `EntityId` 构成单一实例身份口径。
+    /// 同时进入状态哈希、v7 快照与差异诊断。
+    item_shop: ItemShopState,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -465,6 +501,7 @@ impl RtsMatch {
             revive: HeroReviveState::default(),
             town_hall: TownHallUpgradeState::default(),
             creep_camps,
+            item_shop: ItemShopState::default(),
         }
     }
 
@@ -475,6 +512,9 @@ impl RtsMatch {
         defs: FrozenDefinitions,
     ) -> Self {
         let mut sim = Self::create_with_world(config, world);
+        // P8.5d：商店库存初值来自冻结货架清单（权威状态初值，非定义层本身）。
+        let item_shop_defs = defs.item_shop().clone();
+        sim.item_shop.initialize_stock(&item_shop_defs);
         sim.defs = defs;
         sim
     }
@@ -482,6 +522,11 @@ impl RtsMatch {
     /// 冻结定义的只读视图。
     pub fn definitions(&self) -> &FrozenDefinitions {
         &self.defs
+    }
+
+    /// P8.5d 物品 / 商店 / 回城权威状态的只读 owned 拷贝（只读投影）。
+    pub fn item_shop_state(&self) -> ItemShopState {
+        self.item_shop.clone()
     }
 
     pub fn config(&self) -> MatchConfig {
@@ -582,7 +627,12 @@ impl RtsMatch {
         self.advance_town_hall_queue(frame);
 
         // 8d. P8.5c 地面物品实例冷却逐帧推进（R7.5 独立状态，位置不变）。
+        //     P8.5d 起持有实例的共享冷却按同一整数帧推进（R7.5）。
         self.advance_ground_items();
+
+        // 8e. P8.5d 物品 / 商店 / 回城卷轴帧阶段：购买事务提交 / 回城施法 /
+        //     市场刷新，按稳定顺序执行；费用提交事务在阶段 7 已完成（D2 / D4）。
+        self.advance_item_shop(frame);
 
         // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
         self.resolve_victory(frame);
@@ -702,8 +752,14 @@ impl RtsMatch {
     /// `run_creep_ai` 复用的 `order_attack` / `assign_move` 内部路径，
     /// 不经 `is_actionable`。地面物品不是 `EntityStore` 实体，天然不
     /// 出现在 `Move` 生成集合、位置不变。
+    /// P8.5d：商店是定义层货架表（非中立建筑实体），其稳定标识与地面
+    /// 物品同属 `GROUND_ITEM_ID_BASE` 以上的保留段，MUST NOT 生成 `Move`
+    /// （R1.1 / R1.4 / R9.1 / R13.6），不借只读视图投影放松旁路门禁。
     fn is_actionable(&self, entity: EntityId, player_id: u8) -> bool {
         if self.creep_camps.neutral.contains_key(&entity) {
+            return false;
+        }
+        if entity.value() >= GROUND_ITEM_ID_BASE {
             return false;
         }
         self.entities.contains(entity)
@@ -1260,15 +1316,871 @@ impl RtsMatch {
         economy.research = Some((upgrade, frames.max(1)));
     }
 
-    fn buy_item(&mut self, unit: EntityId, item: DefId) {
-        let Some(def) = self.defs.items().get(&item).copied() else {
+    /// P5 遗留 `BuyItem` 占位的收敛（R-1 / R9.3 / ADR 0005 §3）。
+    ///
+    /// 变体编码与 `hash_gameplay_command` 码 5 保留不动，但语义重写为
+    /// **显式拒单**：MUST NOT 再写 `PlayerEconomy.gold` / 六格实例背包 /
+    /// 商店库存或凭空建实例。购买的唯一事务入口是
+    /// [`GameplayCommandKind::BuyFromShop`]（码 16）→ `submit_purchase`。
+    /// 只登记一条 `Rejected` 事实，供只读表现层按 `Event.entity` 查表。
+    fn buy_item(&mut self, unit: EntityId, item: DefId, frame: Frame) {
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Rejected,
+            unit,
+            EntityId::NONE,
+            u8::MAX,
+            EntityId::NONE,
+            0,
+            item,
+        );
+        self.push_event(frame, unit, EventKind::ItemShopCommandRejected);
+    }
+
+    // -----------------------------------------------------------------------
+    // P8.5d 物品 / 商店 / 回城卷轴：唯一事务命令面（R7 / R9.3 / Q5 / Q7）
+    // -----------------------------------------------------------------------
+
+    /// 登记一条确定性事实（稳定 `seq`；只读表现层按 `Event.entity` 查表）。
+    fn record_item_fact(
+        &mut self,
+        frame: Frame,
+        kind: ItemShopFactKind,
+        hero: EntityId,
+        instance: EntityId,
+        slot: u8,
+        entity: EntityId,
+        gold_delta: i64,
+        shelf: u32,
+    ) {
+        let mut fact = ItemShopFact {
+            seq: 0,
+            frame: frame.value(),
+            kind,
+            hero,
+            instance,
+            slot,
+            entity,
+            gold_delta,
+            shelf,
+        };
+        self.item_shop.push_fact(&mut fact);
+    }
+
+    /// 显式拒单：不扣费 / 不建实例 / 不改库存 / 不改背包，只登记拒单事实。
+    fn reject_item_command(&mut self, frame: Frame, hero: EntityId, shelf: u32) {
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Rejected,
+            hero,
+            EntityId::NONE,
+            u8::MAX,
+            EntityId::NONE,
+            0,
+            shelf,
+        );
+        self.push_event(frame, hero, EventKind::ItemShopCommandRejected);
+    }
+
+    /// 六格实例背包的只读 owned 拷贝；未登记视为空包。
+    fn item_bag(&self, hero: EntityId) -> ItemBag {
+        self.item_shop.bags.get(&hero).copied().unwrap_or_default()
+    }
+
+    /// 整数坐标半径判据（`isqrt` 整数数学，MUST NOT 用 `f64` / 墙钟，ADR 0002 §1）。
+    fn within_radius(&self, entity: EntityId, x: i64, y: i64, radius: i64) -> bool {
+        let Some(unit) = self.units.get(&entity) else {
+            return false;
+        };
+        let dx = unit.x.raw().saturating_sub(x) as i128;
+        let dy = unit.y.raw().saturating_sub(y) as i128;
+        isqrt(dx * dx + dy * dy) <= i128::from(radius.max(0))
+    }
+
+    /// 拾取地面物品闭环（R1.1 / R7.2 / R7.5 / R13.6）。
+    ///
+    /// 实例以同一 `EntityId` 从 `ground_items` / `neutral` 迁移进六格背包，
+    /// MUST NOT 新建实例或重置充能 / 冷却；第二次拾取因登记已移除而显式拒绝
+    /// （幂等）。地面物品不是 `EntityStore` 实体，MUST NOT 进 `Move` 生成集合。
+    fn submit_pickup(&mut self, hero: EntityId, ground_item: EntityId, player: u8, frame: Frame) {
+        if !self.is_actionable(hero, player) {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let Some(ground) = self.creep_camps.ground_items.get(&ground_item).cloned() else {
+            self.reject_item_command(frame, hero, 0);
             return;
         };
-        if let Some(state) = self.units.get_mut(&unit) {
-            state.gameplay.bag.push(item);
-            // 属性修正统一走结算服务，不直接改权威字段。
-            Settlement::apply_stat_mod(&mut Self::make_vitals(state), def.damage_mod, def.hp_mod);
+        let ownerless = self.creep_camps.neutral.get(&ground_item)
+            == Some(&NeutralCategory::GroundItemOwnerless);
+        let instance_ok = self
+            .creep_camps
+            .item_instances
+            .get(&ground.instance)
+            .is_some_and(|instance| instance.holder.is_none() && instance.slot.is_none());
+        let radius = self.defs.item_shop().constants.pickup_radius_raw;
+        let bag = self.item_bag(hero);
+        let Some(slot) = bag.first_free_slot() else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        if !ownerless || !instance_ok || !self.within_radius(hero, ground.x, ground.y, radius) {
+            self.reject_item_command(frame, hero, 0);
+            return;
         }
+        // 迁移（不建新实例、不刷新充能冷却）。
+        self.creep_camps.ground_items.remove(&ground_item);
+        self.creep_camps.neutral.remove(&ground_item);
+        if let Some(instance) = self.creep_camps.item_instances.get_mut(&ground.instance) {
+            instance.holder = Some(hero);
+            instance.slot = Some(slot);
+        }
+        let mut bag = bag;
+        bag.set(slot, Some(ground.instance));
+        self.item_shop.bags.insert(hero, bag);
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Pickup,
+            hero,
+            ground.instance,
+            slot,
+            ground_item,
+            0,
+            ground.item_def,
+        );
+        self.push_event(frame, hero, EventKind::ItemPickedUp);
+    }
+
+    /// 商店购买费用提交事务（复用 `submit_*` 先例，R7.3 / R9.3）。
+    ///
+    /// 校验「距离 / 解冻 / 库存 / 黄金 / 背包空位」→ 精确扣费 → 冻结扣费
+    /// 登记（`PurchaseCharge`）→ 帧阶段 `advance_purchases` 建实例 / 入包 /
+    /// 库存递减；任一后续失败由 `refund_purchase` 精确退款、恢复库存、
+    /// 不生成半实例。黄金只经本命令面写 `PlayerEconomy.gold`。
+    fn submit_purchase(
+        &mut self,
+        hero: EntityId,
+        shop: u32,
+        shelf_id: u32,
+        player: u8,
+        frame: Frame,
+    ) {
+        let Some(shop_def) = self.defs.item_shop().shop(shop).cloned() else {
+            self.reject_item_command(frame, hero, shelf_id);
+            return;
+        };
+        let Some(shelf) = self.defs.item_shop().shelf(shelf_id).copied() else {
+            self.reject_item_command(frame, hero, shelf_id);
+            return;
+        };
+        let shop_registered = self.defs.item_shop().is_shop_def(shop);
+        let in_shop = shop_def.shelf_ids.contains(&shelf_id);
+        let unlocked = frame.value() >= shelf.unlock_frame;
+        let radius_ok =
+            self.within_radius(hero, shop_def.x, shop_def.y, shop_def.interact_radius_raw);
+        let gold = self
+            .gameplay
+            .players
+            .get(&player)
+            .map(|economy| economy.gold)
+            .unwrap_or(0);
+        let stock = self.item_shop.stock.get(&shelf_id).copied().unwrap_or(0);
+        let bag = self.item_bag(hero);
+        let Some(slot) = bag.first_free_slot() else {
+            self.reject_item_command(frame, hero, shelf_id);
+            return;
+        };
+        if !self.is_actionable(hero, player)
+            || !shop_registered
+            || !in_shop
+            || !unlocked
+            || !radius_ok
+            || gold < shelf.price
+            || stock == 0
+        {
+            self.reject_item_command(frame, hero, shelf_id);
+            return;
+        }
+        // 精确扣费（唯一写入路径）并冻结扣费登记。
+        {
+            let economy = self.gameplay.players.entry(player).or_default();
+            economy.gold -= shelf.price;
+        }
+        let instance =
+            EntityId::new(self.creep_camps.next_ground_item_id).unwrap_or(EntityId::NONE);
+        self.creep_camps.next_ground_item_id =
+            self.creep_camps.next_ground_item_id.saturating_add(1);
+        let seq = self.item_shop.next_charge_seq;
+        self.item_shop.next_charge_seq = seq.saturating_add(1);
+        self.item_shop.charges.insert(
+            seq,
+            PurchaseCharge {
+                owner: player,
+                gold: shelf.price,
+                hero,
+                instance,
+                slot,
+                shelf: shelf_id,
+                shop,
+                frame: frame.value(),
+            },
+        );
+    }
+
+    /// 购买事务性退款：把冻结扣费精确回退到玩家经济，不生成半实例。
+    fn refund_purchase(&mut self, seq: u64, frame: Frame) {
+        let Some(charge) = self.item_shop.charges.remove(&seq) else {
+            return;
+        };
+        let economy = self.gameplay.players.entry(charge.owner).or_default();
+        economy.gold = economy.gold.saturating_add(charge.gold);
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Rejected,
+            charge.hero,
+            EntityId::NONE,
+            u8::MAX,
+            EntityId::NONE,
+            0,
+            charge.shelf,
+        );
+        self.push_event(frame, charge.hero, EventKind::ItemShopCommandRejected);
+    }
+
+    /// 购买事务帧阶段：按稳定 `seq` 顺序提交或退款（R9.3 / ADR 0002 §3）。
+    fn advance_purchases(&mut self, frame: Frame) {
+        let seqs: Vec<u64> = self.item_shop.charges.keys().copied().collect();
+        for seq in seqs {
+            let Some(charge) = self.item_shop.charges.get(&seq).copied() else {
+                continue;
+            };
+            let shelf = self.defs.item_shop().shelf(charge.shelf).copied();
+            let stock = self
+                .item_shop
+                .stock
+                .get(&charge.shelf)
+                .copied()
+                .unwrap_or(0);
+            let bag = self.item_bag(charge.hero);
+            let slot_free = bag.slots.get(charge.slot as usize) == Some(&None);
+            let instance_free = !self
+                .creep_camps
+                .item_instances
+                .contains_key(&charge.instance);
+            let hero_ok = self.is_actionable(charge.hero, charge.owner);
+            let Some(shelf) = shelf else {
+                self.refund_purchase(seq, frame);
+                continue;
+            };
+            if !hero_ok || !slot_free || !instance_free || stock == 0 {
+                self.refund_purchase(seq, frame);
+                continue;
+            }
+            // 提交：建独立实例、入六格背包、库存递减（三者与黄金同帧生效）。
+            self.creep_camps.item_instances.insert(
+                charge.instance,
+                ItemInstanceState {
+                    item_def: shelf.item_def,
+                    charges: shelf.charges,
+                    cooldown_frames: shelf.cooldown_frames,
+                    effect: shelf.effect,
+                    holder: Some(charge.hero),
+                    slot: Some(charge.slot),
+                },
+            );
+            let mut bag = bag;
+            bag.set(charge.slot, Some(charge.instance));
+            self.item_shop.bags.insert(charge.hero, bag);
+            self.item_shop.stock.insert(charge.shelf, stock - 1);
+            self.item_shop.charges.remove(&seq);
+            self.record_item_fact(
+                frame,
+                ItemShopFactKind::Purchase,
+                charge.hero,
+                charge.instance,
+                charge.slot,
+                EntityId::new(shop_fixture_id(charge.shop)).unwrap_or(EntityId::NONE),
+                -charge.gold,
+                charge.shelf,
+            );
+            self.push_event(frame, charge.instance, EventKind::ItemPurchased);
+        }
+    }
+
+    /// 使用道具「先验证有效再提交」（R7.5 / R7.6 / N5）。
+    ///
+    /// 充能 > 0 / 冷却到期 / 目标合法 / 定义层类别已登记；失败不扣次数。
+    /// 效果只经既有 `EffectDef` / `EffectKind` 组合走共享结算服务，
+    /// MUST NOT 执行 JASS / wtg VM、MUST NOT 新增 `EffectKind` 变体。
+    fn submit_use_item(
+        &mut self,
+        hero: EntityId,
+        instance_id: EntityId,
+        target: EntityId,
+        player: u8,
+        frame: Frame,
+    ) {
+        if !self.is_actionable(hero, player) {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let bag = self.item_bag(hero);
+        let Some(slot) = bag.slot_of(instance_id) else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        let Some(instance) = self.creep_camps.item_instances.get(&instance_id).cloned() else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        let target_ok = target == EntityId::NONE || self.is_alive(target);
+        let category = self.defs.item_shop().item_category(instance.item_def);
+        let portal_item = self.defs.item_shop().is_town_portal_item(instance.item_def);
+        if instance.holder != Some(hero)
+            || instance.charges == 0
+            || instance.cooldown_frames != 0
+            || !target_ok
+            || category.is_none()
+            || portal_item
+        {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        // 提交：效果链走既有结算服务（不新增 EffectKind）。
+        let effect_target = if target == EntityId::NONE {
+            hero
+        } else {
+            target
+        };
+        self.apply_effect(effect_target, &instance.effect);
+        // 共享冷却按定义层实例组整数帧推进（同名多实例不共用充能）。
+        let group = self.defs.item_shop().item_cooldown_group(instance.item_def);
+        let group_frames = self
+            .defs
+            .item_shop()
+            .constants
+            .default_cooldown_frames
+            .max(1);
+        let held: Vec<EntityId> = bag.slots.iter().flatten().copied().collect();
+        for held_id in held {
+            let Some(held_instance) = self.creep_camps.item_instances.get_mut(&held_id) else {
+                continue;
+            };
+            if self
+                .defs
+                .item_shop()
+                .item_cooldown_group(held_instance.item_def)
+                != group
+            {
+                continue;
+            }
+            held_instance.cooldown_frames = held_instance.cooldown_frames.max(group_frames);
+        }
+        let charges = instance.charges.saturating_sub(1);
+        let consumable = category == Some(ItemCategory::Consumable);
+        if charges == 0 && consumable {
+            self.creep_camps.item_instances.remove(&instance_id);
+            let mut bag = bag;
+            bag.set(slot, None);
+            self.item_shop.bags.insert(hero, bag);
+        } else if let Some(state) = self.creep_camps.item_instances.get_mut(&instance_id) {
+            state.charges = charges;
+        }
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Use,
+            hero,
+            instance_id,
+            slot,
+            effect_target,
+            0,
+            instance.item_def,
+        );
+        self.push_event(frame, hero, EventKind::ItemUsed);
+    }
+
+    /// 丢弃道具回无主地面物品（R1.1 / R6.2 / R7.5）。
+    ///
+    /// 同一 `EntityId` 实例身份与剩余充能 / 冷却「转交也不能刷新」，
+    /// 位置由英雄当前确定性整数坐标给出，重新登记 `ground_items` / `neutral`。
+    fn submit_drop(&mut self, hero: EntityId, instance_id: EntityId, player: u8, frame: Frame) {
+        if !self.is_actionable(hero, player) {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let bag = self.item_bag(hero);
+        let Some(slot) = bag.slot_of(instance_id) else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        let Some(instance) = self.creep_camps.item_instances.get(&instance_id).cloned() else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        if instance.holder != Some(hero) {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let (x, y) = self
+            .units
+            .get(&hero)
+            .map(|unit| (unit.x.raw(), unit.y.raw()))
+            .unwrap_or((0, 0));
+        if let Some(state) = self.creep_camps.item_instances.get_mut(&instance_id) {
+            state.holder = None;
+            state.slot = None;
+        }
+        let mut bag = bag;
+        bag.set(slot, None);
+        self.item_shop.bags.insert(hero, bag);
+        self.creep_camps.ground_items.insert(
+            instance_id,
+            GroundItemState {
+                item_def: instance.item_def,
+                camp: 0,
+                x,
+                y,
+                instance: instance_id,
+            },
+        );
+        self.creep_camps
+            .neutral
+            .insert(instance_id, NeutralCategory::GroundItemOwnerless);
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Discard,
+            hero,
+            instance_id,
+            slot,
+            instance_id,
+            0,
+            instance.item_def,
+        );
+        self.push_event(frame, hero, EventKind::ItemDiscarded);
+    }
+
+    /// 两英雄间移交同一实例；目标满包或源格不符显式拒绝（R6.2 / R7.5）。
+    fn submit_transfer(
+        &mut self,
+        from_hero: EntityId,
+        to_hero: EntityId,
+        instance_id: EntityId,
+        player: u8,
+        frame: Frame,
+    ) {
+        if !self.is_actionable(from_hero, player) || !self.is_actionable(to_hero, player) {
+            self.reject_item_command(frame, from_hero, 0);
+            return;
+        }
+        let source = self.item_bag(from_hero);
+        let Some(source_slot) = source.slot_of(instance_id) else {
+            self.reject_item_command(frame, from_hero, 0);
+            return;
+        };
+        let Some(instance) = self.creep_camps.item_instances.get(&instance_id).cloned() else {
+            self.reject_item_command(frame, from_hero, 0);
+            return;
+        };
+        let target = self.item_bag(to_hero);
+        let Some(target_slot) = target.first_free_slot() else {
+            self.reject_item_command(frame, from_hero, 0);
+            return;
+        };
+        if instance.holder != Some(from_hero) || from_hero == to_hero {
+            self.reject_item_command(frame, from_hero, 0);
+            return;
+        }
+        let mut source = source;
+        let mut target = target;
+        source.set(source_slot, None);
+        target.set(target_slot, Some(instance_id));
+        self.item_shop.bags.insert(from_hero, source);
+        self.item_shop.bags.insert(to_hero, target);
+        if let Some(state) = self.creep_camps.item_instances.get_mut(&instance_id) {
+            state.holder = Some(to_hero);
+            state.slot = Some(target_slot);
+        }
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Transfer,
+            from_hero,
+            instance_id,
+            target_slot,
+            to_hero,
+            0,
+            instance.item_def,
+        );
+        self.push_event(frame, from_hero, EventKind::ItemTransferred);
+    }
+
+    /// 售卖道具（R7.4 / R9.3）：按实例移出六格背包，精确入账冻结回购价。
+    fn submit_sell(
+        &mut self,
+        hero: EntityId,
+        instance_id: EntityId,
+        shop: u32,
+        player: u8,
+        frame: Frame,
+    ) {
+        if !self.is_actionable(hero, player) {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let shop_ok =
+            self.defs.item_shop().shop(shop).is_some() && self.defs.item_shop().is_shop_def(shop);
+        let bag = self.item_bag(hero);
+        let Some(slot) = bag.slot_of(instance_id) else {
+            self.reject_item_command(frame, hero, shop);
+            return;
+        };
+        let Some(instance) = self.creep_camps.item_instances.get(&instance_id).cloned() else {
+            self.reject_item_command(frame, hero, shop);
+            return;
+        };
+        let Some(price) = self
+            .defs
+            .item_shop()
+            .effective_sell_price(instance.item_def)
+        else {
+            self.reject_item_command(frame, hero, shop);
+            return;
+        };
+        if !shop_ok || instance.holder != Some(hero) {
+            self.reject_item_command(frame, hero, shop);
+            return;
+        }
+        // 实例移出背包并销毁（不残留可再售卖），黄金精确入账。
+        self.creep_camps.item_instances.remove(&instance_id);
+        let mut bag = bag;
+        bag.set(slot, None);
+        self.item_shop.bags.insert(hero, bag);
+        let economy = self.gameplay.players.entry(player).or_default();
+        economy.gold = economy.gold.saturating_add(price);
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::Sell,
+            hero,
+            instance_id,
+            slot,
+            EntityId::new(shop_fixture_id(shop)).unwrap_or(EntityId::NONE),
+            price,
+            instance.item_def,
+        );
+        self.push_event(frame, hero, EventKind::ItemSold);
+    }
+
+    /// 按「友方主城分类」定义层数据驱动选稳定目标（结论 7 / R1.2）。
+    /// 按稳定 `EntityId` 顺序取第一个存活、归属本族、被登记为主城分类的实体。
+    fn friendly_town_hall_target(&self, player: u8) -> Option<EntityId> {
+        for (&entity, &def_id) in &self.item_shop.town_halls {
+            if !self.defs.item_shop().is_town_hall_def(def_id) {
+                continue;
+            }
+            if self
+                .units
+                .get(&entity)
+                .is_some_and(|unit| unit.alive && unit.owner == player)
+            {
+                return Some(entity);
+            }
+        }
+        None
+    }
+
+    /// 回城卷轴独立命令（R7.1 / 结论 7）：目标按友方主城分类选出，
+    /// 无可用友方主城显式拒单、不扣次数；施法帧 / 目标 / 次数作独立
+    /// 权威状态。单英雄传送，MUST NOT 与大法师 MassTeleport 群体传送混淆。
+    fn submit_town_portal(
+        &mut self,
+        hero: EntityId,
+        instance_id: EntityId,
+        player: u8,
+        frame: Frame,
+    ) {
+        if !self.is_actionable(hero, player) {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let bag = self.item_bag(hero);
+        let Some(slot) = bag.slot_of(instance_id) else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        let Some(instance) = self.creep_camps.item_instances.get(&instance_id).cloned() else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        let constants = self.defs.item_shop().constants;
+        let uses = self.item_shop.portal_uses.get(&hero).copied().unwrap_or(0);
+        let portal_item = self.defs.item_shop().is_town_portal_item(instance.item_def);
+        if instance.holder != Some(hero)
+            || !portal_item
+            || instance.charges < constants.town_portal_charge_cost
+            || instance.cooldown_frames != 0
+            || uses >= constants.town_portal_max_uses
+            || self.item_shop.casts.contains_key(&hero)
+        {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        }
+        let Some(target) = self.friendly_town_hall_target(player) else {
+            // 无可用友方主城：显式拒单，不扣次数、不生成半传送状态。
+            self.record_item_fact(
+                frame,
+                ItemShopFactKind::TownPortalCancel,
+                hero,
+                instance_id,
+                slot,
+                EntityId::NONE,
+                0,
+                instance.item_def,
+            );
+            self.push_event(frame, hero, EventKind::TownPortalCancelled);
+            return;
+        };
+        let (target_x, target_y) = self
+            .units
+            .get(&target)
+            .map(|unit| (unit.x.raw(), unit.y.raw()))
+            .unwrap_or((0, 0));
+        self.item_shop.casts.insert(
+            hero,
+            TownPortalCast {
+                caster: hero,
+                instance: instance_id,
+                slot,
+                target,
+                target_x,
+                target_y,
+                start_frame: frame.value(),
+                remaining_frames: constants.town_portal_cast_frames.max(1),
+                total_frames: constants.town_portal_cast_frames.max(1),
+            },
+        );
+        self.item_shop
+            .portal_uses
+            .insert(hero, uses.saturating_add(1));
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::TownPortalStart,
+            hero,
+            instance_id,
+            slot,
+            target,
+            0,
+            instance.item_def,
+        );
+        self.push_event(frame, hero, EventKind::TownPortalStarted);
+    }
+
+    /// 回城施法取消 / 中断结算（R7.5）：清理施法状态、按冻结定义结算
+    /// 次数与充能、不产生半传送位置。
+    fn cancel_town_portal(&mut self, hero: EntityId, frame: Frame) {
+        let Some(cast) = self.item_shop.casts.remove(&hero) else {
+            self.reject_item_command(frame, hero, 0);
+            return;
+        };
+        let cost = self.defs.item_shop().constants.town_portal_charge_cost;
+        self.consume_portal_charge(hero, &cast, cost);
+        self.record_item_fact(
+            frame,
+            ItemShopFactKind::TownPortalCancel,
+            hero,
+            cast.instance,
+            cast.slot,
+            cast.target,
+            0,
+            0,
+        );
+        self.push_event(frame, hero, EventKind::TownPortalCancelled);
+    }
+
+    /// 按冻结定义扣回城卷轴充能；消耗品用完移除实例（R7.1 / R7.5）。
+    fn consume_portal_charge(&mut self, hero: EntityId, cast: &TownPortalCast, cost: u32) {
+        let Some(instance) = self.creep_camps.item_instances.get(&cast.instance).cloned() else {
+            return;
+        };
+        let charges = instance.charges.saturating_sub(cost);
+        let consumable = self.defs.item_shop().item_category(instance.item_def)
+            == Some(ItemCategory::Consumable);
+        if charges == 0 && consumable {
+            self.creep_camps.item_instances.remove(&cast.instance);
+            let mut bag = self.item_bag(hero);
+            bag.set(cast.slot, None);
+            self.item_shop.bags.insert(hero, bag);
+        } else if let Some(state) = self.creep_camps.item_instances.get_mut(&cast.instance) {
+            state.charges = charges;
+        }
+    }
+
+    /// 回城施法帧阶段：按稳定 `EntityId` 顺序递减整数帧；主城被毁 /
+    /// 持有者被打断（阵亡 / 眩晕）显式取消；到 0 完成单英雄整数坐标传送。
+    fn advance_town_portals(&mut self, frame: Frame) {
+        let heroes: Vec<EntityId> = self.item_shop.casts.keys().copied().collect();
+        for hero in heroes {
+            let Some(cast) = self.item_shop.casts.get(&hero).copied() else {
+                continue;
+            };
+            let owner = self.units.get(&hero).map(|unit| unit.owner).unwrap_or(0);
+            let target_ok = self
+                .friendly_town_hall_target(owner)
+                .is_some_and(|target| target == cast.target);
+            let holder_ok = self.is_actionable(hero, owner);
+            if !target_ok || !holder_ok {
+                self.cancel_town_portal(hero, frame);
+                continue;
+            }
+            let remaining = cast.remaining_frames.saturating_sub(1);
+            if remaining != 0 {
+                if let Some(state) = self.item_shop.casts.get_mut(&hero) {
+                    state.remaining_frames = remaining;
+                }
+                continue;
+            }
+            // 完成：只在完成时写整数坐标，不产生半传送位置（R7.5）。
+            self.item_shop.casts.remove(&hero);
+            if let Some(unit) = self.units.get_mut(&hero) {
+                unit.x = SimFixed::from_raw(cast.target_x);
+                unit.y = SimFixed::from_raw(cast.target_y);
+                unit.order = Order::Idle;
+                unit.pending.clear();
+                unit.goal = None;
+                unit.path.clear();
+                unit.path_index = 0;
+                unit.blocked_frames = 0;
+                unit.group = 0;
+            }
+            let cost = self.defs.item_shop().constants.town_portal_charge_cost;
+            self.consume_portal_charge(hero, &cast, cost);
+            self.record_item_fact(
+                frame,
+                ItemShopFactKind::TownPortalComplete,
+                hero,
+                cast.instance,
+                cast.slot,
+                cast.target,
+                0,
+                0,
+            );
+            self.push_event(frame, hero, EventKind::TownPortalCompleted);
+        }
+    }
+
+    /// 系统级市场刷新通知入队（幂等由 `refresh_batches` 保证，R8.6 / Q6）。
+    fn submit_refresh_market(&mut self, shop: u32, batch: u32, player: u8, frame: Frame) {
+        let registered =
+            self.defs.item_shop().shop(shop).is_some() && self.defs.item_shop().is_shop_def(shop);
+        if player != NEUTRAL_OWNER || !registered {
+            self.reject_item_command(
+                frame,
+                EntityId::new(shop_fixture_id(shop)).unwrap_or(EntityId::NONE),
+                shop,
+            );
+            return;
+        }
+        // 只入队，RNG 消费推迟到帧阶段按稳定顺序执行（ADR 0002 §3-4）。
+        self.item_shop
+            .pending_refreshes
+            .insert((frame.value(), shop, batch));
+    }
+
+    /// 市场刷新帧阶段：复用 P8.5c match-owned 整数 LCG 事件驱动流
+    /// （`rng_state` / `rng_draws` / `next_rng_seq`）+ 显式消费序列契约，
+    /// 按稳定 `(frame, shop, batch)` 顺序消费，同一批次幂等不重复消费。
+    fn advance_market_refresh(&mut self, frame: Frame) {
+        let due: Vec<(u64, u32, u32)> = self
+            .item_shop
+            .pending_refreshes
+            .iter()
+            .copied()
+            .filter(|(scheduled, _, _)| *scheduled <= frame.value())
+            .collect();
+        for key in due {
+            self.item_shop.pending_refreshes.remove(&key);
+            let (scheduled, shop, batch) = key;
+            if self.item_shop.refresh_batches.contains(&(shop, batch)) {
+                continue; // 幂等：同批次已消费，不再消耗随机码。
+            }
+            let Some(shop_def) = self.defs.item_shop().shop(shop).cloned() else {
+                continue;
+            };
+            // 复用同一 match-owned 整数 LCG 事件驱动流（seed 随快照）。
+            let rng_before = self.creep_camps.rng_state;
+            let rng_after = next_rng(rng_before);
+            self.creep_camps.rng_state = rng_after;
+            let seq = self.creep_camps.next_rng_seq;
+            self.creep_camps.next_rng_seq = seq.saturating_add(1);
+            let shelf_ids: Vec<u32> = shop_def.shelf_ids.iter().copied().collect();
+            let picked = if shelf_ids.is_empty() {
+                None
+            } else {
+                Some(shelf_ids[(rng_after % shelf_ids.len() as u64) as usize])
+            };
+            let picked_def =
+                picked.and_then(|id| self.defs.item_shop().shelf(id).map(|s| s.item_def));
+            self.creep_camps.rng_draws.insert(
+                seq,
+                RngDraw {
+                    seq,
+                    frame: scheduled,
+                    creep: EntityId::new(shop_fixture_id(shop)).unwrap_or(EntityId::NONE),
+                    table: shop,
+                    set: batch,
+                    rng_before,
+                    rng_after,
+                    roll: rng_after,
+                    picked: picked_def,
+                },
+            );
+            self.item_shop.refresh_draws.insert(
+                seq,
+                ShopRefreshDraw {
+                    seq,
+                    frame: scheduled,
+                    shop,
+                    batch,
+                    rng_before,
+                    rng_after,
+                    roll: rng_after,
+                    picked,
+                },
+            );
+            self.item_shop.refresh_batches.insert((shop, batch));
+            let count = self
+                .item_shop
+                .refresh_counts
+                .get(&shop)
+                .copied()
+                .unwrap_or(0);
+            self.item_shop
+                .refresh_counts
+                .insert(shop, count.saturating_add(1));
+            // 刷新清单：按稳定货架 id 顺序把库存补到冻结上限（确定性整数）。
+            for shelf_id in shelf_ids {
+                if let Some(shelf) = self.defs.item_shop().shelf(shelf_id).copied() {
+                    self.item_shop.stock.insert(shelf_id, shelf.stock_max);
+                }
+            }
+            self.record_item_fact(
+                frame,
+                ItemShopFactKind::MarketRefresh,
+                EntityId::NONE,
+                EntityId::NONE,
+                u8::MAX,
+                EntityId::new(shop_fixture_id(shop)).unwrap_or(EntityId::NONE),
+                0,
+                shop,
+            );
+            self.push_event_raw(frame, shop_fixture_id(shop), EventKind::MarketRefreshed);
+        }
+    }
+
+    /// P8.5d 帧阶段总入口：购买事务提交 / 回城施法 / 市场刷新按稳定顺序推进。
+    fn advance_item_shop(&mut self, frame: Frame) {
+        // 阶段顺序固定：所有命令面在阶段 7 已完成提交，此处只执行效果链。
+        self.advance_purchases(frame);
+        self.advance_town_portals(frame);
+        self.advance_market_refresh(frame);
     }
 
     fn gather(&mut self, unit: EntityId, player: u8) {
@@ -1335,7 +2247,8 @@ impl RtsMatch {
                 self.cancel_train(producer, index)
             }
             GameplayCommandKind::Research { upgrade } => self.research(player, upgrade),
-            GameplayCommandKind::BuyItem { unit, item } => self.buy_item(unit, item),
+            // P8.5d：旧 `BuyItem` 占位保留码 5，但显式拒单、不写权威购买状态。
+            GameplayCommandKind::BuyItem { unit, item } => self.buy_item(unit, item, frame),
             GameplayCommandKind::Gather { unit } => self.gather(unit, player),
             GameplayCommandKind::RegisterBehavior { id, effect } => {
                 self.register_behavior(id, effect)
@@ -1367,6 +2280,39 @@ impl RtsMatch {
             GameplayCommandKind::SeedCreepCamp { camp, script } => {
                 self.seed_creep_camp(camp, script, player, frame)
             }
+            // P8.5d：拾取 / 购买 / 使用 / 丢弃 / 移交 / 售卖 / 回城 / 刷新。
+            // 全部经同一公开命令面按冻结整数帧号入队、同源校验、稳定排序。
+            GameplayCommandKind::PickupGroundItem { hero, ground_item } => {
+                self.submit_pickup(hero, ground_item, player, frame)
+            }
+            GameplayCommandKind::BuyFromShop { hero, shop, shelf } => {
+                self.submit_purchase(hero, shop, shelf, player, frame)
+            }
+            GameplayCommandKind::UseItem {
+                hero,
+                instance,
+                target,
+            } => self.submit_use_item(hero, instance, target, player, frame),
+            GameplayCommandKind::DropItem { hero, instance } => {
+                self.submit_drop(hero, instance, player, frame)
+            }
+            GameplayCommandKind::TransferItem {
+                from_hero,
+                to_hero,
+                instance,
+            } => self.submit_transfer(from_hero, to_hero, instance, player, frame),
+            GameplayCommandKind::SellItem {
+                hero,
+                instance,
+                shop,
+            } => self.submit_sell(hero, instance, shop, player, frame),
+            GameplayCommandKind::UseTownPortal { hero, instance } => {
+                self.submit_town_portal(hero, instance, player, frame)
+            }
+            GameplayCommandKind::CancelTownPortal { hero } => self.cancel_town_portal(hero, frame),
+            GameplayCommandKind::RefreshMarket { shop, batch } => {
+                self.submit_refresh_market(shop, batch, player, frame)
+            }
         }
     }
 
@@ -1393,6 +2339,12 @@ impl RtsMatch {
         max_hp: i64,
     ) {
         self.refund_revive(hero);
+        // P8.5d：英雄阵亡时把六格定长实例背包移入 `death_bags`，
+        // 按实例 `EntityId` 身份保留（充能 / 冷却不刷新），复活时逐项恢复
+        // （R6.3 / R7.5）；MUST NOT 回退为 DefId 序列。
+        if let Some(bag) = self.item_shop.bags.remove(&hero) {
+            self.item_shop.death_bags.insert(hero, bag);
+        }
         self.revive.deaths.insert(
             hero,
             HeroDeathRecord {
@@ -1521,8 +2473,10 @@ impl RtsMatch {
     }
 
     /// 复活完成：恢复同一个英雄实体（同一 `EntityId`），MUST NOT `spawn()`
-    /// 新实体、MUST NOT 得到 `hero=None` 空背包。等级 / 经验 / 技能登记 /
-    /// 6 格背包逐项来自死亡登记快照，按冻结常量恢复生命 / 法力，改到祭坛位置。
+    /// 新实体、MUST NOT 得到 `hero=None` 空背包。等级 / 经验 / 技能登记
+    /// 来自死亡登记快照，六格定长实例背包由 `ItemShopState.death_bags`
+    /// 按实例 `EntityId` 逐项恢复（含剩余充能 / 冷却，R6.3 / R7.5）；
+    /// 按冻结常量恢复生命 / 法力，改到祭坛位置。
     fn complete_revive(&mut self, hero: EntityId, item: &ReviveQueueItem, frame: Frame) {
         let Some(death) = self.revive.deaths.remove(&hero) else {
             return;
@@ -1540,10 +2494,23 @@ impl RtsMatch {
         };
         unit.alive = true;
         unit.hp = restore_by_percent(death.max_hp, constants.hp_restore_percent);
-        // 逐项恢复：hero.level / hero.xp、bag、cooldowns（技能登记）、Buff 等。
+        // 逐项恢复：hero.level / hero.xp、cooldowns（技能登记）、Buff 等。
         unit.gameplay = death.gameplay;
         unit.gameplay.mana =
             restore_by_percent(unit.gameplay.max_mana, constants.mana_restore_percent);
+        // P8.5d：六格实例背包按实例 EntityId 逐项恢复，MUST NOT 回退为
+        // `bag: Vec<DefId>` 的 DefId 序列；实例 holder / slot 同步回填。
+        if let Some(bag) = self.item_shop.death_bags.remove(&hero) {
+            for (slot, slot_instance) in bag.slots.iter().enumerate() {
+                if let Some(instance_id) = slot_instance {
+                    if let Some(instance) = self.creep_camps.item_instances.get_mut(instance_id) {
+                        instance.holder = Some(hero);
+                        instance.slot = Some(slot as u8);
+                    }
+                }
+            }
+            self.item_shop.bags.insert(hero, bag);
+        }
         unit.x = altar_x;
         unit.y = altar_y;
         // 沿用阵亡时的订单 / 路径清理语义，不删实体、不判负。
@@ -1905,6 +2872,11 @@ impl RtsMatch {
             });
         }
         self.units.insert(id, unit);
+        // P8.5d：友方主城分类登记由定义层数据驱动（结论 7 / R1.2），
+        // 只按冻结 DefId 类别判定，MUST NOT 用建筑名白名单或 rawcode。
+        if self.defs.item_shop().is_town_hall_def(unit_def) {
+            self.item_shop.town_halls.insert(id, unit_def);
+        }
         let economy = self.gameplay.players.entry(owner).or_default();
         economy.produced = economy.produced.saturating_add(1);
         economy.supply_used = economy.supply_used.saturating_add(def.supply);
@@ -2404,6 +3376,9 @@ impl RtsMatch {
                                     .item_cooldown_frames
                                     .saturating_add((roll % 4) as u32),
                                 effect,
+                                // P8.5d：掉落实例初始无主、无槽位（R1.1 / Q7）。
+                                holder: None,
+                                slot: None,
                             },
                         );
                         self.creep_camps
@@ -2460,8 +3435,10 @@ impl RtsMatch {
         }
     }
 
-    /// 地面物品实例冷却按稳定 `EntityId` 顺序逐帧推进（R7.5 独立状态）。
-    /// 位置永不变化（R1.4），且地面物品不是 `EntityStore` 实体。
+    /// 物品实例共享冷却按稳定 `EntityId` 顺序逐帧推进（R7.5 独立状态）。
+    /// P8.5c 起覆盖地面物品，P8.5d 起同样覆盖六格背包内的持有实例
+    /// （整数帧、无 `float` / 墙钟）；地面位置永不变化（R1.4），
+    /// 且地面物品不是 `EntityStore` 实体。
     fn advance_ground_items(&mut self) {
         for instance in self.creep_camps.item_instances.values_mut() {
             instance.cooldown_frames = instance.cooldown_frames.saturating_sub(1);
@@ -2561,6 +3538,10 @@ impl RtsMatch {
         // P8.5c：野怪 / 营地 / 中立归属 / 地面物品 / 实例 / 收益 /
         // 确定性随机码消费序列全部权威状态必须进入哈希（Q1 / D5）。
         self.creep_camps.hash(&mut hasher);
+        // P8.5d：六格定长实例背包 / 复活死亡背包 / 事实 / 库存 / 刷新 /
+        // 回城传送 / 消费序列 / 购买扣费登记全部权威状态必须进入哈希
+        // （Q4 / Q7 / D1 / D5 / ADR 0002 §6）。
+        self.item_shop.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -2627,6 +3608,10 @@ impl RtsMatch {
         }
         // P8.5c：野怪营地与掉落全部权威状态按同一稳定顺序定位首个差异字段。
         if let Some(field) = self.creep_camps.first_difference(&other.creep_camps) {
+            return Some(field);
+        }
+        // P8.5d：物品 / 商店 / 回城全部权威状态按同一稳定顺序定位首个差异字段。
+        if let Some(field) = self.item_shop.first_difference(&other.item_shop) {
             return Some(field);
         }
         None
@@ -2715,6 +3700,10 @@ impl RtsMatch {
             // P8.5c：帧 N 提交后的完整状态必须含野怪营地与掉落权威状态
             // （含事件驱动随机流状态与消费序列，ADR 0002 §6-8 / Q6）。
             creep_camps: self.creep_camps.clone(),
+            // P8.5d：帧 N 提交后的完整状态必须含六格实例背包 / 复活死亡背包 /
+            // 事实 / 库存 / 刷新 / 回城传送 / 消费序列 / 购买扣费登记，
+            // 恢复后从 N+1 继续不残留、不重复购买或刷新（ADR 0002 §6-8 / R11.5）。
+            item_shop: self.item_shop.clone(),
         }
     }
 
@@ -2867,6 +3856,7 @@ impl RtsMatch {
             revive: snapshot.revive.clone(),
             town_hall: snapshot.town_hall.clone(),
             creep_camps: snapshot.creep_camps.clone(),
+            item_shop: snapshot.item_shop.clone(),
         })
     }
 }
@@ -3203,12 +4193,12 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本为 6（P8.5c 新增野怪营地与掉落权威状态），只读视图消费与快照往返均不
+    /// 快照版本为 7（P8.5d 新增物品 / 商店 / 回城权威状态），只读视图消费与快照往返均不
     /// 改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 6, "snapshot version must be 6");
-        assert_eq!(SIM_VERSION, 6, "sim version must be 6");
+        assert_eq!(SNAPSHOT_VERSION, 7, "snapshot version must be 7");
+        assert_eq!(SIM_VERSION, 7, "sim version must be 7");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -3282,9 +4272,9 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 6"
+            "snapshot version must stay 7"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 6");
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 7");
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

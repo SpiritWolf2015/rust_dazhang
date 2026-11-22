@@ -41,7 +41,7 @@ tools:
 - 新增依赖前检查许可证与 GPLv3 兼容性；`Cargo.lock` 提交；第三方代码在 `NOTICE.md` 登记（交 `docs-owner`，本 agent 不自行编写）。
 - git 提交信息描述一律中文（Conventional Commits 英文 type 前缀保留），一个改动一个 commit。
 - 工具脚本一律用跨平台 Python / Node（`tools/*.py` / `tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`。
-- **参考项目对照（强制，`UPSTREAM.md` 矩阵 T1 / T6）**：确定性帧编排（T1）与网络传输 / UDP 可靠层 / relay 广播重传（T6）动笔前 MUST 经 `reference-researcher` 定位 `vera20k` 的 `src/net/`、`services/relay-protocol/`、`docs/`；本项目自有 `W3N1` 25 字节帧头与 protobuf payload 契约（ADR 0005）为准，不照搬其线格式。对照结论 MUST 带锚写进 `design.md`「参考项目对照」，由 `critic` 第 12 项复核。四个参考项目只读、禁止复制代码；`WarsmashModEngine`（AGPLv3）仅借鉴语义。
+- **参考项目对照（强制，`UPSTREAM.md` 矩阵 T1 / T6）**：确定性帧编排（T1）与网络传输 / UDP 可靠层 / relay 广播重传（T6）动笔前 MUST 经 `reference-researcher` 定位 `vera20k` 的 `src/net/`、`services/relay-protocol/`、`docs/`；本项目自有 `W3N1` 25 字节帧头与 protobuf payload 契约（ADR 0005）为准，不照搬其线格式。对照结论 MUST 带锚写进 `design.md`「参考项目对照」，由 `critic` 第 12 项复核。五个参考项目只读、禁止复制代码；`WarsmashModEngine`（AGPLv3）仅借鉴语义。T7 `ConcordRTS` 的 `src/network/lockstep/`、`src/network/snapshots/` 可作 C++ 实现的可选交叉参考，主参考仍为 `vera20k`、自有 `W3N1` / ADR 0005 契约不变。
 
 ## 验收（改动必跑）
 

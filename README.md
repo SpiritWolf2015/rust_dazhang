@@ -105,7 +105,7 @@ P0 只建 `w3-core` 一个 crate；P1 增加 `w3-content`（内容读取），P2
 
 ## 参考的上游项目
 
-四者均为**只读参考**，不复制其代码进本仓库，也不作为 git submodule 引入；本地路径与固定提交记录在 `docs/references/UPSTREAM.md`。
+五者均为**只读参考**，不复制其代码进本仓库，也不作为 git submodule 引入；本地路径与固定提交记录在 `docs/references/UPSTREAM.md`。
 
 | 项目 | 许可证 | 借鉴内容 |
 |---|---|---|
@@ -113,8 +113,9 @@ P0 只建 `w3-core` 一个 crate；P1 增加 `w3-content`（内容读取），P2
 | `godot_warcraft3` | MIT | MPQ / SLK / BLP / MDX / W3X 格式规格、资产三车道与"工具入库、资产留本机"的合规模型；过渡期直接读其导出 JSON |
 | `rts_kernel_cs` | MIT | 模拟内核 API 契约、唯一状态所有者、每帧阶段顺序、命令稳定排序、快照与状态哈希设计 |
 | `WarsmashModEngine` | AGPLv3 | Java / LibGDX 的 WC3 模拟器：JASS / 触发器语义、MPQ 与 CASC 数据源、单位与技能玩法行为（只读参考，不复制代码） |
+| `ConcordRTS` | GPL-3.0-only | C++20 的 RA2/YR RTS 引擎工程：无窗口确定性核心与表现层分离、锁步/状态哈希/快照恢复/回放、平台适配与跨平台逐字节验收方法论、视野/迷雾工程实践（只读参考，不复制代码；RA2 专属格式/规则不作 WC3 事实来源） |
 
-致谢与版权声明见 `NOTICE.md`。四者均不含游戏资产，本项目的资产合规模型与它们一致；`WarsmashModEngine` 为 AGPLv3，与本项目 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。
+致谢与版权声明见 `NOTICE.md`。五者均不含游戏资产，本项目的资产合规模型与它们一致；`WarsmashModEngine` 为 AGPLv3，与本项目 GPLv3 组合有条件，未经 ADR 复核不得引入其代码。`ConcordRTS` 为 GPL-3.0-only，与本项目 GPLv3 同许可族，只读参考、不复制代码、不引入依赖或子模块；其 RA2/YR 名称、商标、原版程序及素材归各自权利人，源码许可不覆盖原版内容（见 `docs/references/UPSTREAM.md`「2026-11-22 准入复核」）；其 `README.md` 自述验收结论不作本项目已验证事实。
 
 ## 贡献
 

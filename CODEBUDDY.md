@@ -7,7 +7,7 @@
 - GPLv3、Rust edition 2024 虚拟 workspace；`w3-core`（零依赖确定性模拟内核）、`w3-content`（读取本机导出 JSON）。
 - **1.0 版本范围（用户 2026-11-14 拍板，同日再澄清）**：只做**局域网联机对战**（含**真人 VS AI 敌人玩家**，AI 玩家全部功能属 1.0 必做；仅不做**纯本地单机对局形态**）与**回放录像保存 / 加载**，把**4 个种族、各种道具、地图野怪、中立建筑**功能做完，**战争迷雾 / 隐身纳入 1.0**（表现层只读派生，不进权威状态 / 哈希 / 快照）；**不做**地图编辑器、RPG 自定义地图、剧情战役。完整范围、规则编号 `R-x.y` 与张力处置见 `docs/references/WC3-MELEE-RULES.md` §0（业务规则单一权威，玩法实现 / review / 单测 MUST 引用其规则编号）。
 - 阶段：P0–P6 全部已实施并归档；当前 active OpenSpec change 与主 specs 以 `openspec list` / `openspec list --specs` 为准（不在本文件枚举，易过时）。`melee-playable-loop` 已归档（`2026-11-14-melee-playable-loop`），其单机对 AI 能力已按用户拍板保留为 1.0 联机对战的 AI 玩家功能、本地窗口作开发夹具，处置见 `WC3-MELEE-RULES.md` §0.3 T1。
-- 参考项目只读（共四个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
+- 参考项目只读（共五个）：`vera20k`(GPLv3)、`godot_warcraft3`(MIT)、`rts_kernel_cs`(MIT)、`WarsmashModEngine`(AGPLv3)、`ConcordRTS`(GPL-3.0-only)，见 `docs/references/UPSTREAM.md` 与 `NOTICE.md`。
 - 架构设计原则（SRP / OCP / LSP / DIP / ISP / LoD / CARP 与本项目硬红线）已内联到 `openspec/config.yaml` 的 context 与 `critic.md` 审查清单；本文件与 ADR 为单一权威，不另立独立原则文档。
 
 ## 2. 编码与换行（硬性基线）
@@ -100,13 +100,13 @@
 | `asset-pipeline` | 跑上游 dev-setup、验证导出、记录 schema 变化 | 只读上游仓库，产物留本机 |
 | `critic` | 审查确定性、所有权、许可证、编码、资产入库 | **只读，不写任何文件** |
 | `docs-owner` | README / NOTICE / CONTRIBUTING / UPSTREAM 同步，维护参考项目矩阵 | 文档文件 |
-| `reference-researcher` | 按 `docs/references/UPSTREAM.md` 矩阵对四个参考项目做只读调研，产出带证据锚的对照报告 | **只读，不写任何文件** |
+| `reference-researcher` | 按 `docs/references/UPSTREAM.md` 矩阵对五个参考项目（矩阵 T1–T7）做只读调研，产出带证据锚的对照报告 | **只读，不写任何文件** |
 
 - 定义文件在 `.codebuddy/agents/`；每个 subagent 声明 own files 与 tools，继承 `permissions.deny`；critic 只读；Agent Team 的 leader 只编排不写。
-- 串联（**一次参考对照 + 一次规格门 + 一次代码门**）：`reference-researcher` 按 `docs/references/UPSTREAM.md` 矩阵出「参考对照报告」（凡 T1–T6 命中的 change MUST 有）→ `/opsx:propose` → `spec-steward` 产出四件套（含 `design.md`「## 参考项目对照」）与 `decision-memo.md` → **规格门**：`critic` 按清单第 7 / 10 项与 §8 四件套一致性审规格，按输出格式出报告，**由人拍板**（不拿沉默当授权）；批准记录（`status: approved` + 四件套指纹）写进 `decision-memo.md` 的「规格门」小节（格式见 `openspec/decision-memo.template.md`），此后**规格锁定**并由 `verify_all.py` 机械校验 → `/opsx:apply`（对应 owner）→ `critic` 代码门（全清单）→ 本地 commit → **人工 push** → CI 在 Windows / Linux 双平台跑 `python tools/verify_all.py` 门禁 → `/opsx:archive`。
+- 串联（**一次参考对照 + 一次规格门 + 一次代码门**）：`reference-researcher` 按 `docs/references/UPSTREAM.md` 矩阵出「参考对照报告」（凡 T1–T7 命中的 change MUST 有）→ `/opsx:propose` → `spec-steward` 产出四件套（含 `design.md`「## 参考项目对照」）与 `decision-memo.md` → **规格门**：`critic` 按清单第 7 / 10 项与 §8 四件套一致性审规格，按输出格式出报告，**由人拍板**（不拿沉默当授权）；批准记录（`status: approved` + 四件套指纹）写进 `decision-memo.md` 的「规格门」小节（格式见 `openspec/decision-memo.template.md`），此后**规格锁定**并由 `verify_all.py` 机械校验 → `/opsx:apply`（对应 owner）→ `critic` 代码门（全清单）→ 本地 commit → **人工 push** → CI 在 Windows / Linux 双平台跑 `python tools/verify_all.py` 门禁 → `/opsx:archive`。
 - **规格锁定与重审**：实现期确需改动四件套任一 artifact 即视为解锁（指纹失配由 `verify_all.py` 判定），MUST 按 §8 同步回查其余三份，由 `spec-steward` 修订后**重走规格门**（重新出报告、重新由人拍板），不得由实现方自行放行。目标与方向已清楚的小改动、纯文档 / 规则改动可显式声明省略规格门，但人工清单如实标注与 `verify_all.py` 门禁不可省。
 - **Rust 源码格式化门禁（所有写 Rust 的 subagent）**：写代码时即按 `rustfmt` 默认风格组织；写完后先 `cargo fmt --all`，提交前 `cargo fmt --all -- --check`；`critic` 在提交前 review MUST 复跑该校验，不通过不得提交。提交信息描述按第 3 节用中文。
-- **只读参考项目共四个**（见第 1 节 / `docs/references/UPSTREAM.md`）：按「按任务类型的强制参考矩阵」**融入工作流**——凡 T1–T6 命中的 change MUST 经 `reference-researcher` 出对照报告、MUST 在 `design.md` 落「## 参考项目对照」、由 `critic` 第 12 项复核；`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考，四个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 0001 复核不得引入其代码。
+- **只读参考项目共五个**（见第 1 节 / `docs/references/UPSTREAM.md`）：按「按任务类型的强制参考矩阵」**融入工作流**——凡 T1–T7 命中的 change MUST 经 `reference-researcher` 出对照报告、MUST 在 `design.md` 落「## 参考项目对照」、由 `critic` 第 12 项复核；`WarsmashModEngine` 是 Java / LibGDX 的 WC3 模拟器、AGPLv3，仅作 JASS / 玩法 / 格式语义参考，五个项目均不复制代码进仓库，AGPLv3 与 GPLv3 组合有条件，未经 ADR 0001 复核不得引入其代码；`ConcordRTS` 是 C++20 的 RA2/YR 引擎、GPL-3.0-only，仅作通用 RTS 引擎架构 / 确定性内核与表现层分离 / 平台适配与跨平台验收方法论参考（矩阵 T7），其 RA2/YR 专属格式、规则、数值、玩法 MUST NOT 作 WC3 事实来源（WC3 业务规则仍以 `WC3-MELEE-RULES.md` 为唯一权威）。
 - **工具脚本跨平台（所有 subagent）**：需要脚本时用 Python（`tools/*.py`）或 Node（`tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断，不维护两套。规则与理由见第 2 节。
 
 - **WC3 业务规则基线（全局，所有 subagent 适用）**：`docs/references/WC3-MELEE-RULES.md` 是玩法实现的**需求源**，含 1.0 范围 S1–S6 与规则编号 `R-x.y`。凡涉及玩法 / 单位 / 建筑 / 资源 / 英雄 / 道具 / 野怪 / 中立建筑 / 联机 / 回放的 change，MUST 在 proposal / design / specs / tasks 引用规则编号；`critic` 按清单第 13 项复核符合性。规则与本机导出数据不符时先标 `[待核]` 并回到人拍板，不静默改规则（见该文 §14）。**特别注意 R1 实体分类与命令可移动性**——金矿 / 树木 / 主基地等建筑与资源点 MUST NOT 响应 `Move`。

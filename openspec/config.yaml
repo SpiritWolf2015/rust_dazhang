@@ -18,8 +18,10 @@ context: |
   资产与法律边界（ADR 0001）：仓库不含暴雪资产，也不含 MPQ 派生的
   JSON/PNG/GLB/音效。玩家自备经典 1.27a 客户端；导出数据留在
   C:/open_rts/godot_warcraft3/assets，通过被 gitignore 的 config.toml 路径读取。
-  只读参考项目共四个：vera20k (GPLv3)、godot_warcraft3 (MIT)、
-  rts_kernel_cs (MIT)、WarsmashModEngine (AGPLv3，仅参考、不复制代码)，
+  只读参考项目共五个：vera20k (GPLv3)、godot_warcraft3 (MIT)、
+  rts_kernel_cs (MIT)、WarsmashModEngine (AGPLv3，仅参考、不复制代码)、
+  ConcordRTS (GPL-3.0-only，C++20 的 RA2/YR RTS 引擎，只读参考、不复制代码、不引入依赖；
+  仅借通用 RTS 引擎架构与平台工程实践，其 RA2 专属格式与规则不作 WC3 事实来源)，
   见 docs/references/UPSTREAM.md 与 NOTICE.md。
 
   验收命令：cargo test --workspace；cargo fmt --all -- --check。
@@ -61,7 +63,7 @@ rules:
     - 每个决策列出考虑过的备选方案。
     - 对照本文件 context 的架构设计原则，说明对确定性契约与分层依赖的影响。
     - 玩法决策 MUST 声明所依据的业务规则编号 `R-x.y` 与核实状态（[已核] / [待核] / [取舍]）；`[待核]` 数值不得冻结进权威定义。
-    - 凡涉及 `docs/references/UPSTREAM.md`「按任务类型的强制参考矩阵」T1–T6 的 change，MUST 有「## 参考项目对照」小节：逐条列本次参考的项目 / 路径 / 借鉴了什么 / 明确不借鉴什么（含许可证理由）/ 可核验锚；参考项目只读、不复制代码（ADR 0001），`WarsmashModEngine` 为 AGPLv3 仅借鉴语义。参考缺口如实登记并回到人拍板，不臆造。
+    - 凡涉及 `docs/references/UPSTREAM.md`「按任务类型的强制参考矩阵」T1–T7 的 change，MUST 有「## 参考项目对照」小节：逐条列本次参考的项目 / 路径 / 借鉴了什么 / 明确不借鉴什么（含许可证理由）/ 可核验锚；参考项目只读、不复制代码（ADR 0001），`WarsmashModEngine` 为 AGPLv3 仅借鉴语义，`ConcordRTS` 为 GPL-3.0-only 只读参考、其 RA2/YR 专属格式与规则 MUST NOT 冒充 WC3 玩法 / 格式 / 数值 / 规则事实且 README 自述验收不作已验证事实。参考缺口如实登记并回到人拍板，不臆造。
   tasks:
     - 每条任务必须是复选框 `- [ ] X.Y ...`。
     - 涉及确定性代码的改动必须包含重跑 tests/determinism.rs 的任务。

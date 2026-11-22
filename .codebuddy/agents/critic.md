@@ -19,7 +19,7 @@ tools:
 1. **确定性（ADR 0002）**：是否有 `f32`/`f64` 进入权威状态；新增字段是否同时进入状态哈希、快照与 `first_difference()`；是否引入 `HashMap` 迭代、墙钟、异步完成顺序；命令排序键是否改变；`step()` 是否接受 delta。
 2. **状态所有权**：是否出现竞争状态、副本、旁路写入、暴露可变内部集合；`w3-core` 是否反向依赖其他层。
 3. **编码与语言**：UTF-8 无 BOM、LF；源码注释（含 `pub` rustdoc）是否中文；日志 / 错误 / `panic!` 是否英文且结构化；UI 文案是否走 i18n；**git 提交信息描述是否中文**（英文 type 前缀保留）。
-4. **资产与法律（ADR 0001）**：`git ls-files` 里是否混入 `*.mpq` / 导出 JSON / PNG / GLB / 音效；`config.toml` 是否 gitignored；新增依赖许可证是否兼容 GPLv3；`NOTICE.md` 是否需更新；只读参考项目是否按许可证登记（`WarsmashModEngine` 为 AGPLv3，不得复制代码）。
+4. **资产与法律（ADR 0001）**：`git ls-files` 里是否混入 `*.mpq` / 导出 JSON / PNG / GLB / 音效；`config.toml` 是否 gitignored；新增依赖许可证是否兼容 GPLv3；`NOTICE.md` 是否需更新；只读参考项目是否按许可证登记（`WarsmashModEngine` 为 AGPLv3，不得复制代码；`ConcordRTS` 为 GPL-3.0-only、与本项目 GPLv3 同许可族，只读、不复制代码、不引入依赖或子模块，无需按 AGPLv3 类项目走 ADR 0001 复核点重评）；核查是否有 RA2/YR 资产（SHP / VXL / TMP / MIX / INI）或其格式解析代码误入库。
 5. **Git 边界**：改动是否涉及 push / fetch / pull / clone 或权限配置；提交信息是否符合 Conventional Commits（英文 type 前缀 + 中文描述）。
 6. **测试与门禁（提交前必查）**：`cargo fmt --all -- --check` 必须通过（Rust 源码一律 rustfmt 默认风格，写完须先 `cargo fmt --all`）；`cargo test --workspace`、`python tools/verify_all.py`、`openspec validate` 是否通过；改动 `w3-core` 时 determinism 测试是否跑过。
 7. **规范一致性**：ADR 与 OpenSpec spec 是否互相矛盾；spec 是否引用 ADR 编号。
@@ -28,7 +28,7 @@ tools:
 10. **Spec 与决策纪要质量**（内容层，补齐 `verify_all.py` 的 `decision_memo_check()` 只做存在性校验的缺口）：① `decision-memo.md` 每条承重约束的证据锚（`file:line` / commit / 命令输出）MUST 实际打开核验，不采信转述或「我记得写着」；② `design.md` 的 alternatives considered 与纪要「被否方向台账」是否一致，有无沿用前提已翻转的旧否决；③ `specs/**` 每条 `#### Scenario:` 是否对应至少一处可执行验证（单测 / determinism / 人工清单），是否存在「代码无 Scenario 要求」或「Scenario 无验证」；④ 人工清单与 `tasks.md` 无证据项是否如实标注「未执行 / 待补验」，MUST NOT 标为通过。
 11. **整体调用路径与集成一致性**（补齐逐维度 / 逐任务审查看不见的集成漏洞）：① MUST 审本 change 的**全部 diff**而非逐任务，把跨模块 / 跨 crate 调用关系连起来看，`grep` 被改动的常量 / 谓词 / 字符串的所有消费者，确认改动在**每个**调用点都生效（典型：锁只接进「打开」却被「新建 / 删除」绕过；密钥先转义导致按原文脱敏失效）；② 涉及 `w3-core` 的改动 MUST 沿调用链核到 `step()` / 状态哈希 / 快照，确认**所有**提交路径都按冻结帧与稳定排序键执行，不因单测全绿放行；③ **测试本身也要审**：断言是否真能失败、有无「实现写完再补测试」（与第 10 项③互补）；④ 修完只复审改过的部分，**最多两轮**；发现被裁掉 MUST 写理由，未完成的留下记录交人，不以「多派几个 agent」或测试全绿当作结果保证。
 
-12. **参考项目对照（`docs/references/UPSTREAM.md` 矩阵）**：`design.md`「## 参考项目对照」与 `decision-memo.md` 的参考锚是否真实可打开、是否按任务类型 T1–T6 命中正确参考项目；是否误把 `WarsmashModEngine`（AGPLv3）代码或 `rts_kernel_cs` 的 `double` 路线带进设计；是否把 `godot_warcraft3` 的原创三族设定冒充经典人族 / 兽族复刻；是否出现「参考缺口」却臆造结论。凡涉及 T1–T6 的 change 却无参考对照小节，按 **blocker** 处理。
+12. **参考项目对照（`docs/references/UPSTREAM.md` 矩阵）**：`design.md`「## 参考项目对照」与 `decision-memo.md` 的参考锚是否真实可打开、是否按任务类型 T1–T7 命中正确参考项目；是否误把 `WarsmashModEngine`（AGPLv3）代码或 `rts_kernel_cs` 的 `double` 路线带进设计；是否把 `godot_warcraft3` 的原创三族设定冒充经典人族 / 兽族复刻；是否出现「参考缺口」却臆造结论；T7 `ConcordRTS` 边界核查：是否把 RA2/YR 专属格式 / 规则 / 数值 / 玩法冒充 WC3 玩法 / 格式 / 数值 / 规则的事实来源、是否把 `README.md` 自述「开发验收完成 N 项」「逐字节一致」当本项目已验证事实、是否误把 GPL-3.0-only（与本项目 GPLv3 同族）当作需 ADR 0001 复核点重评的 AGPLv3 类项目。凡涉及 T1–T7 的 change 却无参考对照小节，按 **blocker** 处理。
 13. **WC3 业务规则符合性（`docs/references/WC3-MELEE-RULES.md`）**：玩法 change 的 proposal / design / specs / tasks 是否引用规则编号 `R-x.y`、是否落在 1.0 范围 S1–S6 且不触碰 N1–N6；实现是否符合 **R1 实体分类与命令可移动性**（金矿 / 树木 / 主基地 / 建筑 / 资源点 MUST NOT 响应 `Move`，框选含建筑时只给可移动单位生成 `Move`）；`[待核]` 数值是否被误冻结进权威定义；规则与代码不符时是否先登记 `[待核]` 而非静默改规则。凡涉及玩法却无规则编号引用，或违反 R1 可移动性，按 **blocker** 处理。
 
 ## 输出格式

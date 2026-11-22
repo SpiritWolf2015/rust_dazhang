@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""统一门禁：编码、格式、测试、OpenSpec 校验、决策纪要与资产扫描。
+"""统一门禁：编码、格式、测试、OpenSpec 校验、决策纪要、规则文档同步与资产扫描。
 
 本地与 CI 共用同一入口：python tools/verify_all.py
 所有输出为英文（日志/错误规则）。任一步失败返回非零退出码。
@@ -32,6 +32,12 @@ MEMO_OMISSION_SECTION = "省略说明"
 # 规格门小节；规则（cf18151）生效前已开工的 change 不追溯，不得新增。
 SPEC_GATE_SECTION = "规格门"
 LEGACY_SPEC_GATE_CHANGES = {"melee-playable-loop"}
+# 已过规格门的玩法 change 须在决策纪要给出的「规则文档同步」结论小节（按标题前缀匹配）。
+# 只做结构存在性校验：结论是否真实、覆盖对照是否更新由 critic 内容层复核（不进机械门禁）。
+RULE_DOC_SYNC_SECTION = "规则文档同步"
+# design.md 出现规则编号 R-x.y（或 R<章节>）即视为玩法 change，与 config.yaml 玩法引用规则同源。
+# 此处不写死 config.yaml 行号：活文档插入规则后行号会漂移，只作语义同源声明。
+RULE_REF_PATTERN = re.compile(r"\bR\d+(?:\.\d+)?\b")
 
 
 def run(label: str, command: list[str]) -> bool:
@@ -247,6 +253,47 @@ def spec_gate_check() -> bool:
     return True
 
 
+def rule_doc_sync_check() -> bool:
+    """校验已过规格门的玩法 change 是否给出「规则文档同步」结论（仅结构，语义由 critic 复核）。
+
+    触发条件：active change 的 design.md 引用了 R-x.y（玩法 change）且规格门
+    status 为 approved。pending / waived / legacy-exempt / 省略说明 / 非玩法
+    change 一律豁免，避免与规格门 fail-closed 信号叠加、不误伤未归档提案与
+    历史归档 change。只校验小节存在且非空，不校验结论真伪（诚实边界）。
+    """
+    problems: list[str] = []
+    for name in active_change_names():
+        change_dir = CHANGES_DIR / name
+        if not (change_dir / "proposal.md").is_file():
+            continue
+        design = change_dir / "design.md"
+        if not design.is_file() or not RULE_REF_PATTERN.search(
+            design.read_text(encoding="utf-8")
+        ):
+            continue  # 非玩法 change，不需要规则文档同步结论
+        memo = change_dir / "decision-memo.md"
+        if not memo.is_file():
+            continue  # 缺失已由 decision_memo_check 报告，不重复
+        sections = memo_sections(memo.read_text(encoding="utf-8"))
+        if memo_section_body(sections, MEMO_OMISSION_SECTION) is not None:
+            continue  # 小改动省略说明同时豁免
+        gate = memo_section_body(sections, SPEC_GATE_SECTION)
+        if gate is None or gate_field(gate, "status") != "approved":
+            continue  # 未过规格门（含 pending）不要求收尾同步结论
+        body = memo_section_body(sections, RULE_DOC_SYNC_SECTION)
+        if body is None:
+            problems.append(f"{name}: missing section '{RULE_DOC_SYNC_SECTION}'")
+        elif not body:
+            problems.append(f"{name}: section '{RULE_DOC_SYNC_SECTION}' is empty")
+    if problems:
+        print("[fail] rule doc sync:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        return False
+    print("[check] rule doc sync OK")
+    return True
+
+
 def fingerprint_cli(change_name: str) -> int:
     """只读输出指定 active change 的四件套指纹；失败以英文结构化信息报错。"""
     if change_name not in active_change_names():
@@ -292,6 +339,7 @@ def main() -> int:
     ok &= asset_scan()
     ok &= decision_memo_check()
     ok &= spec_gate_check()
+    ok &= rule_doc_sync_check()
 
     if not ok:
         print("Verification FAILED", file=sys.stderr)

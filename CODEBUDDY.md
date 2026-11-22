@@ -110,6 +110,7 @@
 - **工具脚本跨平台（所有 subagent）**：需要脚本时用 Python（`tools/*.py`）或 Node（`tools/*.mjs`），不写 `.ps1` / `.sh` / `.bat` / `.cmd`；平台差异在脚本内判断，不维护两套。规则与理由见第 2 节。
 
 - **WC3 业务规则基线（全局，所有 subagent 适用）**：`docs/references/WC3-MELEE-RULES.md` 是玩法实现的**需求源**，含 1.0 范围 S1–S6 与规则编号 `R-x.y`。凡涉及玩法 / 单位 / 建筑 / 资源 / 英雄 / 道具 / 野怪 / 中立建筑 / 联机 / 回放的 change，MUST 在 proposal / design / specs / tasks 引用规则编号；`critic` 按清单第 13 项复核符合性。规则与本机导出数据不符时先标 `[待核]` 并回到人拍板，不静默改规则（见该文 §14）。**特别注意 R1 实体分类与命令可移动性**——金矿 / 树木 / 主基地等建筑与资源点 MUST NOT 响应 `Move`。
+- **规则文档同步（正式规则，2026-11-22 用户拍板固化）**：`docs/references/WC3-MELEE-RULES.md` 是玩法实现的需求源，玩法 change 收尾 MUST 在 `decision-memo.md` 的「## 规则文档同步」小节给出「是否需同步本文」的结论并更新附录「规则 → 实现覆盖对照」与 §15 变更记录（见该文 §14 第 5 条）。`tools/verify_all.py::rule_doc_sync_check()` 做结构门禁——仅对过规格门 `status: approved` 且 `design.md` 引用 `R-x.y` 的玩法 change 校验该小节存在且非空，`pending` / `waived` / `legacy-exempt` / 省略说明 / 非玩法 change 豁免，不误伤历史归档 change；`openspec/config.yaml` 的 `rules.proposal` / `rules.tasks` 与 `openspec/decision-memo.template.md` 承载强制约定与骨架，`critic` 按清单第 13 项做内容层复核。结论的语义真实性（是否真同步、是否把规则编号引用冒充已实现、真窗口人工清单是否未标通过）由 `critic` 复核，机械门禁只校验结构、不冒充语义验证。
 
 ## 10. AI 与人工的责任边界
 

@@ -184,6 +184,100 @@ class FingerprintTests(unittest.TestCase):
         self.assertIn("problem=bad arguments", result.stderr)
 
 
+class RuleDocSyncTests(unittest.TestCase):
+    """`rule_doc_sync_check()` 的触发 / 豁免结构门禁单元测试。
+
+    用临时目录 monkeypatch `CHANGES_DIR`，不触碰真实仓库 change。缺陷态
+    （approved 玩法 change 缺 / 空同步小节）必判红，正常态与各豁免态必通过，
+    构成「改坏验红」反向验证（形态①：测试内反例 + 元断言）。
+    """
+
+    BASE_MEMO = (
+        "## 承重约束\n\n| # | 约束 | 锚 |\n|---|---|---|\n| C1 | x | `a:1` |\n\n"
+        "## 拍板决策\n\n- P1 x.\n\n## 待确认项\n\n无.\n\n"
+    )
+    PLAY_DESIGN = "## Context\n\n玩法 change，依据 R4.1 / R8.6 实现。\n"
+    INFA_DESIGN = "## Context\n\n纯工具链改动，无业务规则编号。\n"
+    SYNC_SECTION = "## 规则文档同步\n\n- 触及 R4.1，覆盖对照已更新。\n"
+
+    @staticmethod
+    def _gate(status: str) -> str:
+        return f"## 规格门\n\n- status: {status}\n- fingerprint: deadbeef\n"
+
+    def check(self, design: str, memo: str) -> tuple[bool, str]:
+        """在隔离的临时 active-change 目录跑一次门禁，返回 (结果, stderr)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            files = {
+                "proposal.md": "## Why\n\nx\n",
+                "design.md": design,
+                "decision-memo.md": memo,
+            }
+            make_change(Path(tmp), files)
+            err = io.StringIO()
+            with mock.patch.object(v, "CHANGES_DIR", Path(tmp)), contextlib.redirect_stdout(
+                io.StringIO()
+            ), contextlib.redirect_stderr(err):
+                result = v.rule_doc_sync_check()
+        return result, err.getvalue()
+
+    def test_approved_gameplay_missing_section_is_red(self):
+        """缺陷态 A：approved 玩法 change 缺同步小节 MUST 判红（反向验红）。"""
+        ok, err = self.check(self.PLAY_DESIGN, self.BASE_MEMO + self._gate("approved"))
+        self.assertFalse(ok, "reason=missing_sync_section_must_fail")
+        self.assertIn("missing section", err)
+
+    def test_approved_gameplay_empty_section_is_red(self):
+        """缺陷态 F：同步小节存在但为空 MUST 判红（反向验红）。"""
+        ok, err = self.check(
+            self.PLAY_DESIGN,
+            self.BASE_MEMO + self._gate("approved") + "## 规则文档同步\n\n",
+        )
+        self.assertFalse(ok, "reason=empty_sync_section_must_fail")
+        self.assertIn("is empty", err)
+
+    def test_approved_gameplay_with_section_passes(self):
+        """正常态 B：approved 玩法 change 含非空同步小节通过。"""
+        ok, _ = self.check(
+            self.PLAY_DESIGN,
+            self.BASE_MEMO + self._gate("approved") + self.SYNC_SECTION,
+        )
+        self.assertTrue(ok)
+
+    def test_pending_gameplay_is_exempt(self):
+        """豁免态 C：pending 玩法 change 未过规格门，不要求收尾同步结论。"""
+        ok, _ = self.check(self.PLAY_DESIGN, self.BASE_MEMO + self._gate("pending"))
+        self.assertTrue(ok)
+
+    def test_infra_change_is_exempt(self):
+        """豁免态 D：design 无 R-x.y 的非玩法 change 不要求同步结论。"""
+        ok, _ = self.check(self.INFA_DESIGN, self.BASE_MEMO + self._gate("approved"))
+        self.assertTrue(ok)
+
+    def test_omission_section_is_exempt(self):
+        """豁免态 E：显式省略说明的 change 不要求同步结论。"""
+        ok, _ = self.check(self.PLAY_DESIGN, "## 省略说明\n\n小改动省略。\n")
+        self.assertTrue(ok)
+
+    def test_reverse_validation_defect_vs_fixed(self):
+        """反向验证（A-B）：同一 change 仅补 / 不补同步小节，缺陷态必红、修复态通过，
+        并加元断言证明「缺陷态判红」这条断言本身在正式态不成立（非恒真门）。"""
+        base = self.BASE_MEMO + self._gate("approved")
+        red, _ = self.check(self.PLAY_DESIGN, base)
+        green, _ = self.check(self.PLAY_DESIGN, base + self.SYNC_SECTION)
+        self.assertFalse(red, "reason=defect_state_must_be_red")
+        self.assertTrue(green, "reason=fixed_state_must_pass")
+        with self.assertRaises(AssertionError):
+            self.assertFalse(green, "reason=green_state_must_not_be_red")
+
+    def test_real_repo_pending_change_adds_no_new_fail(self):
+        """真实仓库：当前唯一 active change `p9-undead-foundation` 为 pending，
+        门禁 MUST 豁免、判绿（不与规格门 fail-closed 信号叠加新红）。"""
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            result = v.rule_doc_sync_check()
+        self.assertTrue(result, err.getvalue())
+
+
 class ValidateAllFallbackTests(unittest.TestCase):
     """全量门禁的 `openspec validate --all` 主 specs 兜底（R3）。"""
 
@@ -220,6 +314,7 @@ class ValidateAllFallbackTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(v, "asset_scan", return_value=True))
             stack.enter_context(mock.patch.object(v, "decision_memo_check", return_value=True))
             stack.enter_context(mock.patch.object(v, "spec_gate_check", return_value=True))
+            stack.enter_context(mock.patch.object(v, "rule_doc_sync_check", return_value=True))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             if fallback_override is not None:
                 stack.enter_context(

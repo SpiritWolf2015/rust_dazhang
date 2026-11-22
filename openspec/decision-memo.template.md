@@ -45,6 +45,13 @@
 2. 待确认项已清空或显式豁免。
 3. 不以「预设问题问完」「问了 N 轮」当收敛。
 
+## 规则文档同步
+
+- 玩法 change 必填：本次实现是否触及 `docs/references/WC3-MELEE-RULES.md` 的 `R-x.y` 实现状态 / §13.7 现状 / §15 变更记录 / 参考项目数量。
+- 需同步：写明已同步了什么（附录「规则 → 实现覆盖对照」对应行 / §15 变更记录）；无需同步：写明依据。
+- 非玩法 change 或显式省略的 change 可写「不适用 + 依据」。
+- `tools/verify_all.py::rule_doc_sync_check()` 对本小节做「存在且非空」的结构门禁（仅对过规格门的玩法 change 生效）；结论真实性由 `critic` 清单第 13 项复核。
+
 ## 规格门
 
 - status: approved
@@ -54,4 +61,4 @@
 - reason: <waived / legacy-exempt 时必填；approved 时写批准依据或留空>
 ```
 
-> 诚实边界：本模板提供的是**结构性改善，不是机械保证**。`tools/verify_all.py` 的 `decision_memo_check()` 校验「纪要存在 + 三个必填小节非空（或有非空理由的 `## 省略说明`）」，`spec_gate_check()` 校验「规格门状态 + 四件套指纹未失配」；两者都不能证明发生过对抗拷问，也不校验证据锚是否可核验或批准是否真由人拍板——后者靠 `critic` 报告与人工核对。`spec_gate_check()` 会把 `tasks.md` 的复选框翻转归一化，正常实施打勾不触发解锁。
+> 诚实边界：本模板提供的是**结构性改善，不是机械保证**。`tools/verify_all.py` 的 `decision_memo_check()` 校验「纪要存在 + 三个必填小节非空（或有非空理由的 `## 省略说明`）」，`spec_gate_check()` 校验「规格门状态 + 四件套指纹未失配」；两者都不能证明发生过对抗拷问，也不校验证据锚是否可核验或批准是否真由人拍板——后者靠 `critic` 报告与人工核对。`spec_gate_check()` 会把 `tasks.md` 的复选框翻转归一化，正常实施打勾不触发解锁。`rule_doc_sync_check()` 只校验「过规格门的玩法 change 含非空『规则文档同步』小节」这一结构，不校验结论是否真实、不校验覆盖对照是否真的更新——后者靠 `critic` 报告与人工核对；`pending` / `waived` / 省略说明 / 非玩法 change 豁免。

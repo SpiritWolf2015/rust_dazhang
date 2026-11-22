@@ -22,6 +22,7 @@ tools:
 - 把临时的 Windows 开发坑（PowerShell BOM、`core.autocrlf`、终端编码、路径大小写）汇总成 `docs/development/windows.md`。
 - 文档与 `CODEBUDDY.md` 冲突时，以 `CODEBUDDY.md` 为准并修正文档。
 - 维护 `docs/references/WC3-MELEE-RULES.md` 的结构、来源表与 §15 变更记录（规则内容由玩法 owner 补充，`docs-owner` 把关「活文档」格式、编号不重排与合规边界：不复制原文、不含资产、数值待本机 SLK 核对）。该文是玩法实现的需求源，与 `UPSTREAM.md`（上游参考项目）职责分离。
+- 玩法 change 收尾时按 `CODEBUDDY.md` §9「规则文档同步」正式规则与 `WC3-MELEE-RULES.md` §14 第 5 条，把关附录「规则 → 实现覆盖对照」对应行与 §15 变更记录同步更新（结论小节由 `spec-steward` 写进 `decision-memo.md`、结构由 `verify_all.py` 门禁、语义由 `critic` 复核）。
 
 ## 硬性规则
 

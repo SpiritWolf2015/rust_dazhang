@@ -168,3 +168,24 @@
 **未为变绿做任何降级**：`tools/verify_all.py` / `gpu_headless.rs` / `real_map_e2e.rs` / `.github/` / `openspec/config.yaml` 全部零 diff；日志如实打印 `Verification FAILED`；不放宽任何确定性 / 资产 / 编码约束、不改测试、不静默降级、不用离屏 / CPU 回归冒充真窗口验收。
 
 **用户拍板（2026-11-22 `AskUserQuestion`，不拿沉默当授权）**：第 1 问「本机 GPU 驱动层 `STATUS_ACCESS_VIOLATION` 令 `verify_all.py` 的 `cargo test` 崩溃（干净 HEAD A/B 铁证同样崩、非本 change 回归；9/10 门禁检查项全绿含 `spec gate OK`；所有 CPU 测试 `0 failed`；`critic` 判环境性 blocker 1、条件批准），如何处置」→ **「登记已知限制后放行（推荐）」**；第 2 问「若按推荐放行收尾提交，提交后的下一步」→ **「直接归档并继续 1.0（推荐）」**。据此 leader 按 `CODEBUDDY.md §4/§10` 完成回填、勾选、本地提交与归档；**本机门禁 FAIL 非全绿如实登记、不冒充通过**；`push` / CI 双平台 / 跨平台 golden hash 比对 / 真窗口人工验收仍由人工独占、本会话未执行、未收到确认。真窗口 8.1–8.7 保持 `- [ ]`「未执行 / 待人工」，归档豁免来自用户本轮第 2 问显式拍板、不拿沉默当授权。
+
+## 归档处置（2026-11-22，用户拍板「直接归档并继续 1.0」，leader 回填）
+
+> 边界：本小节只写进 `decision-memo.md`（不在 `spec_artifact_fingerprint` 哈希集合），归档前追加；四件套正文一个字未改，指纹保持 `28e0e7eab0338139fa481f1d1607a0c5666249aeb5e7c6077345e165d73c9f54`。
+
+**用户显式豁免与拍板**：2026-11-22 `AskUserQuestion` 第 2 问用户选「直接归档并继续 1.0（推荐）」，是对「真窗口清单未逐项勾选前不得归档」（`tasks.md` 第 8 组 / Q11）的**显式豁免**，但 MUST NOT 解读为真窗口人工验收已通过或 CI 双平台已绿；结合第 1 问「登记已知限制后放行（推荐）」，本机 GPU 环境性 `verify_all.py` FAIL 已如实登记为已知限制后放行本地提交与归档，不改门禁 / 不改测试 / 不冒充全绿、不拿沉默当授权。
+
+**归档当下状态（如实登记）**：本地 HEAD `48e5223 feat: 实现 p8-fog-of-war 表现层只读派生战争迷雾（P8.5e）`；`origin/main` 仍为 `b39091b`（提案提交，已由人工在本会话间隙同步），**`48e5223` 归档当下尚未 push**、本地领先 `origin/main` 1 个提交；归档后本地 commit 仍待人工 push。CI 双平台 `verify_all.py` 本会话未运行、`48e5223` 未收到 GitHub Action run 链接 / 成功确认；本机 `verify_all.py` 为本机 GPU 环境性 `Verification FAILED`（非全绿，见「本机 GPU 环境限制与人工拍板」小节），CI 无 GPU adapter 时会走既有 `no_adapter` 跳过、是否全绿须人工 push 后确认、AI 不冒充。
+
+**未勾任务逐条登记**：`tasks.md` 归档前 `24/33 tasks`，9 项保持 `- [ ]`：
+- 4.4「全量回归与格式门禁」：因本机 `cargo test --workspace` 挂在 GPU `STATUS_ACCESS_VIOLATION`（干净 HEAD A/B 铁证同样崩、非本 change 回归），「各命令输出全绿」判据未达，保持未勾；CPU 定向 / 格式 / 编码 / OpenSpec / 资产 / 规格门检查项均全绿、如实登记。
+- 5.3「按 Q7 拍板结论落地重连 / 中途加入 / 变速 / 多视角一致性契约」：Q7 结论未定、降级契约已在 `reconnect_explored_layer_degrades_from_current_frame_until_q7_is_decided` 与 `decision-memo.md` 显式登记为已知限制，未臆造为「已核」，保持未勾。
+- 8.1–8.7 真窗口人工清单：全部 `- [ ]`「未执行 / 待人工」，离屏 `render_headless_rgba` + `ViewImage` 自证与 CPU 回归均未替代真窗口验收，不用其冒充通过；CI MUST NOT 声称已验证 GPU。
+
+**真窗口当前可达性**：本期纯表现层只读派生已接进 `ClientApp::render_one` / `hud_model` 真实装配主路径，但真窗口 egui overlay / 真 GPU 画面下三态遮罩 / 已探索层 / 小地图单位点 / 野怪商店地面物品可见性 / 敌方变化不可见 / `Resized` / 高刷 30 Hz 均未由人工在真窗口逐项验收；Q2 / Q3 范围外项（隐身反隐 / 昼夜全量 / 回血 / 视野阻挡玩法行为 / 暗夜特色 / 野怪睡眠）在真窗口 UI / AI 触发层不可达，显式登记为后续 change / P9+ 四族承接待办；1.0 字面「一并做完」与本期最小闭环的张力保持显式呈现、不静默窄化用户 2026-11-14 已拍板的 1.0 范围。
+
+**已知限制承接**：见「应用阶段处置」R-1～R-11（`design.md:186` 27/28 Scenario 笔误、历史 / 夹具路径未注入 fog、Q9 退化态构造边界、`FOG_FLYING_DEF_IDS` 撞值、行号锚偏移、参考报告未落盘、`collect` 旧入口、跨平台 v4–v7 Debian 侧 / macOS / ARM64 / 其它 rustc 待验证等）；P8.5a–d 既有已知限制（真窗口 UI / AI 接线、`U` 键 / 命令卡升级格位、frame-0 `SeedCreepCamp` / 商店回城键位接线、中文 `assert_eq!` 消息惯例、`>500 characters` / `>1000 characters` warning、`model_index` 固定临时目录并发 FAILED 需串行单实例、`vera20k` HEAD 偏离固定提交 823 commits 等）一并承接，由后续独立 change 收口，不在本 change 扩范围。
+
+**主 specs 合并去向**：`openspec archive p8-fog-of-war -y` 合并新增 `fog-of-war` 主 capability（12 ADDED Requirements / 28 Scenario）+ 6 份 `## MODIFIED Requirements` delta（`rts-command-hud` / `playable-client` / `3d-rendering` / `creep-camps` / `item-shop-town-portal` / `melee-match`，7 条 requirement / 18 Scenario）；其余主 specs 历史「`SNAPSHOT_VERSION` 仍 3」/ `## Purpose` 概述文字按 Q10 登记为已知限制、不冒充已全量对齐。
+
+**人工边界**：AI 仅执行本地 `git add` / `commit` 与归档；`push` / `fetch` / `pull` / `clone` 及任何远端同步、CI 双平台、真窗口人工验收、跨平台 golden hash 比对全部人工独占、本会话未执行；归档后按用户第 2 问拍板继续朝 1.0 后续目标开发（具体方向届时按路线图 / 范围再拍板）。

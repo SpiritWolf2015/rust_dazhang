@@ -33,6 +33,22 @@ pub struct FrameInput<'a> {
     pub events: &'a [Event],
 }
 
+/// 一帧表现层迷雾可见性输入（P8.5e / R10.1 / R10.5）。
+///
+/// 调用方在本 crate 之外从只读 `WorldView` 与表现层三态网格派生两组编号；
+/// 本结构只携带 owned 整数集合，不持有 `RtsMatch`、不进权威状态 / 状态哈希 /
+/// 快照 / `first_difference()`。`visible_entity_ids` 按本帧只读视图重建，
+/// `remembered_entity_ids` 只用于 FOGGED 格冻结上一已知态；MASKED 格不在
+/// 任一集合内，既不绘制也不冻结。`BTreeSet` 保证稳定顺序、无 `HashMap`
+/// 迭代顺序 / 墙钟 / 渲染帧率 / 独立随机源。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderFogVisibility {
+    /// 当前 VISIBLE 格内可呈现的实体编号（己方单位由调用方恒纳入）。
+    pub visible_entity_ids: BTreeSet<u64>,
+    /// FOGGED 格内按上一已知态冻结呈现的实体编号。
+    pub remembered_entity_ids: BTreeSet<u64>,
+}
+
 /// 纹理采样模式（写入顶点 `tex_mode`，由片元着色器分支）。
 /// - `0` 顶点色：`color` 即最终颜色（程序化几何 / 无贴图资产 / 纯色水体）。
 /// - `1` 纹理不透明：采样 `texture_2d_array` 第 `tex_layer` 层。
@@ -182,6 +198,14 @@ pub struct Scene {
     /// 静默回退退化开关（仅供 tasks 6.1 ④ 反向验证注入）。
     /// 默认 `false` = 显式可诊断；`true` = 静默吞掉日志 = 缺陷态。
     silent_fallback: bool,
+    /// 可选迷雾可见性；`None` 表示资源缺失 / 旧入口，不绘制雾遮罩。
+    /// 纯表现层 owned 整数集合，MUST NOT 进权威状态 / 哈希 / 快照。
+    fog_visibility: Option<RenderFogVisibility>,
+    /// FOGGED 格冻结的上一已知态；VISIBLE 重新进入时改读当前 `instances`。
+    /// 纯表现层缓存，MUST NOT 写回 `RtsMatch` / 进快照 / 状态哈希。
+    remembered_instances: BTreeMap<u64, Instance>,
+    /// 迷雾资源缺失日志去重位；仍以英文结构化 `key=value` 明确报告一次。
+    fog_missing_reported: bool,
 }
 
 fn switch_sequence(instance: &mut Instance, library: &ModelLibrary, name: &str) {
@@ -807,6 +831,32 @@ impl Scene {
             });
             self.applied_events += 1;
         }
+        // 4. 迷雾缓存：只把本帧 VISIBLE 实例刷新为「上一已知态」。
+        //    FOGGED 期间 `instances` 的移动 / 新建 / 阵亡 / 外观变化不写缓存，
+        //    MASKED 实体不进缓存；重新 VISIBLE 时上一行已同步本帧只读视图。
+        if let Some(fog) = self.fog_visibility.clone() {
+            let current: Vec<(u64, Instance)> = self
+                .instances
+                .iter()
+                .map(|(&id, instance)| (id, instance.clone()))
+                .collect();
+            for (id, instance) in current {
+                if fog.visible_entity_ids.contains(&id) {
+                    if instance.alive {
+                        self.remembered_instances.insert(id, instance);
+                    } else {
+                        self.remembered_instances.remove(&id);
+                    }
+                }
+            }
+            self.remembered_instances.retain(|id, instance| {
+                instance.alive
+                    && (fog.visible_entity_ids.contains(id)
+                        || fog.remembered_entity_ids.contains(id))
+            });
+        } else {
+            self.remembered_instances.clear();
+        }
         self.last_tick = view.tick;
     }
 
@@ -814,6 +864,76 @@ impl Scene {
     /// 供 CPU 回归核对「缺资产显式可诊断回退」（tasks 6.1 ④）。
     pub fn fallback_diagnostics(&self) -> &BTreeMap<u64, &'static str> {
         &self.fallback_diagnostics
+    }
+
+    /// 注入一帧迷雾可见性；`None` 表示资源缺失并降级为不绘制雾遮罩。
+    ///
+    /// 资源缺失 MUST 以英文结构化 `key=value` 日志明确报告一次，随后只跳过
+    /// 对应表现层元素，MUST NOT 静默降级、MUST NOT 改变模拟推进或写回
+    /// 权威状态（R10.5 / `CODEBUDDY.md` §3）。
+    pub fn set_fog_visibility(&mut self, visibility: Option<RenderFogVisibility>) {
+        if visibility.is_none() {
+            self.remembered_instances.clear();
+            if !self.fog_missing_reported {
+                log::warn!(
+                    target: "w3_render",
+                    "fog visibility unavailable: reason=missing_resource scope=presentation_only action=skip_fog_overlay"
+                );
+                self.fog_missing_reported = true;
+            }
+        } else {
+            self.fog_missing_reported = false;
+        }
+        self.fog_visibility = visibility;
+    }
+
+    /// 当前迷雾可见性输入（owned 值拷贝，只读验收用）。
+    pub fn fog_visibility(&self) -> Option<RenderFogVisibility> {
+        self.fog_visibility.clone()
+    }
+
+    /// 当前会呈现的动态实例编号（稳定 `EntityId` 顺序，只读验收用）。
+    pub fn presented_instance_ids(&self) -> Vec<u64> {
+        self.drawable_instances()
+            .into_iter()
+            .map(|instance| instance.id)
+            .collect()
+    }
+
+    /// 当前会呈现的动态实例 owned 值拷贝（稳定顺序，只读验收用）。
+    pub fn presented_instances(&self) -> Vec<Instance> {
+        self.drawable_instances().into_iter().cloned().collect()
+    }
+
+    /// 按迷雾可见性筛选动态实例：纯函数、稳定顺序、无随机源。
+    ///
+    /// VISIBLE 格取本帧 `instances` 的最新只读视图投影；FOGGED 格取上一
+    /// 已知态缓存；MASKED 格不呈现。重新进入 VISIBLE 时天然按当前实例重建，
+    /// 不会把冻结态写回 `instances` 或任何权威状态。
+    fn drawable_instances(&self) -> Vec<&Instance> {
+        let Some(fog) = &self.fog_visibility else {
+            return self
+                .instances
+                .values()
+                .filter(|instance| instance.alive)
+                .collect();
+        };
+        let mut drawable: BTreeMap<u64, &Instance> = BTreeMap::new();
+        for (&id, instance) in &self.instances {
+            if instance.alive && fog.visible_entity_ids.contains(&id) {
+                drawable.insert(id, instance);
+            }
+        }
+        for (&id, instance) in &self.remembered_instances {
+            if instance.alive
+                && fog.remembered_entity_ids.contains(&id)
+                && !fog.visible_entity_ids.contains(&id)
+                && !drawable.contains_key(&id)
+            {
+                drawable.insert(id, instance);
+            }
+        }
+        drawable.into_values().collect()
     }
 
     /// 注入「静默回退」退化实现（仅供反向验证，tasks 6.1 ④）。
@@ -909,9 +1029,9 @@ impl Scene {
     /// 绑定的真实网格按实例位姿展开；两者缺失时才回退程序化几何。
     pub fn build_vertices(&self, terrain: &TerrainMesh) -> Vec<SceneVertex> {
         let tiles = self.terrain_tiles.as_deref();
-        let dynamic_model_estimate: usize = self
-            .instances
-            .values()
+        let drawable = self.drawable_instances();
+        let dynamic_model_estimate: usize = drawable
+            .iter()
             .filter(|i| i.alive)
             .filter_map(|i| i.model_key.as_deref())
             .filter_map(|key| self.entity_models.get(key))
@@ -939,7 +1059,7 @@ impl Scene {
         } else {
             vertices.extend_from_slice(&self.static_model_vertices);
         }
-        for instance in self.instances.values() {
+        for instance in drawable {
             if !instance.alive {
                 continue;
             }
@@ -998,7 +1118,7 @@ impl Scene {
         projection: &crate::gpu::ScreenProjection,
     ) -> BTreeMap<u64, ([f64; 2], [f64; 2])> {
         let mut out = BTreeMap::new();
-        for instance in self.instances.values() {
+        for instance in self.drawable_instances() {
             if !instance.alive {
                 continue;
             }
@@ -1773,6 +1893,99 @@ mod tests {
                 .entity_screen_boxes(&mesh, &projection)
                 .contains_key(&1),
             "死亡实体不应有屏幕包围盒"
+        );
+    }
+
+    /// 合成一帧只读迷雾可见性输入；集合按键稳定、无 `HashMap` 顺序。
+    fn fog_visibility(visible: &[u64], remembered: &[u64]) -> RenderFogVisibility {
+        RenderFogVisibility {
+            visible_entity_ids: visible.iter().copied().collect(),
+            remembered_entity_ids: remembered.iter().copied().collect(),
+        }
+    }
+
+    #[test]
+    fn fog_visibility_freezes_fogged_and_rebuilds_on_reentry() {
+        let mut scene = Scene::default();
+        let library = ModelLibrary::default();
+        // 帧 1：己方与敌方都 VISIBLE，缓存敌方上一已知态 x=20。
+        scene.set_fog_visibility(Some(fog_visibility(&[1, 2], &[])));
+        scene.consume(
+            FrameInput {
+                view: &view(1, vec![entity(1, 1, 0), entity(2, 2, 20)]),
+                events: &[],
+            },
+            &library,
+        );
+        assert_eq!(
+            scene.presented_instance_ids(),
+            vec![1, 2],
+            "reason=visible_entities_are_presented"
+        );
+
+        // 帧 2：敌方移到 x=40 但格状态为 FOGGED；呈现仍冻结 x=20。
+        scene.set_fog_visibility(Some(fog_visibility(&[1], &[2])));
+        scene.consume(
+            FrameInput {
+                view: &view(2, vec![entity(1, 1, 0), entity(2, 2, 40)]),
+                events: &[],
+            },
+            &library,
+        );
+        let frozen = scene.presented_instances();
+        assert_eq!(
+            frozen
+                .iter()
+                .map(|instance| instance.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "reason=fogged_entity_uses_last_known_state"
+        );
+        assert_eq!(
+            frozen[1].target_x,
+            world_to_f32(20),
+            "reason=fogged_position_does_not_follow_hidden_change"
+        );
+
+        // 帧 3：重新进入 VISIBLE 后按本帧只读视图重建到 x=40。
+        scene.set_fog_visibility(Some(fog_visibility(&[1, 2], &[])));
+        scene.consume(
+            FrameInput {
+                view: &view(3, vec![entity(1, 1, 0), entity(2, 2, 40)]),
+                events: &[],
+            },
+            &library,
+        );
+        let rebuilt = scene.presented_instances();
+        assert_eq!(
+            rebuilt[1].target_x,
+            world_to_f32(40),
+            "reason=reentered_entity_rebuilds_from_current_view"
+        );
+    }
+
+    #[test]
+    fn fog_visibility_none_degrades_without_filter() {
+        let mut scene = Scene::default();
+        let library = ModelLibrary::default();
+        // `None` 是资源缺失显式降级：旧入口仍按在场性呈现，不套用迷雾过滤。
+        scene.set_fog_visibility(None);
+        scene.consume(
+            FrameInput {
+                view: &view(1, vec![entity(1, 1, 0), entity(2, 2, 20)]),
+                events: &[],
+            },
+            &library,
+        );
+        assert_eq!(
+            scene.presented_instance_ids(),
+            vec![1, 2],
+            "reason=missing_fog_resource_skips_visibility_filter"
+        );
+        assert_eq!(
+            scene.fog_visibility(),
+            None,
+            "reason=missing_fog_resource_is_explicit"
         );
     }
 }

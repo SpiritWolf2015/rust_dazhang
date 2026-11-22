@@ -36,8 +36,8 @@ pub use model_geometry::{
     gltf_to_world,
 };
 pub use scene::{
-    DisplayHints, FrameInput, Instance, LORDAERON_SUMMER_TILES, Scene, SceneVertex, StaticMarker,
-    StaticShape, TEX_MODE_ALPHA_TEST, TEX_MODE_COLOR, TEX_MODE_TEXTURE, TerrainTextureLayers,
-    UNIT_MARKER_SIZE, display_hints, facing_to_radians, world_to_f32,
+    DisplayHints, FrameInput, Instance, LORDAERON_SUMMER_TILES, RenderFogVisibility, Scene,
+    SceneVertex, StaticMarker, StaticShape, TEX_MODE_ALPHA_TEST, TEX_MODE_COLOR, TEX_MODE_TEXTURE,
+    TerrainTextureLayers, UNIT_MARKER_SIZE, display_hints, facing_to_radians, world_to_f32,
 };
 pub use terrain::{TerrainMesh, TerrainVertex};

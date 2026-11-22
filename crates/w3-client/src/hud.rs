@@ -17,11 +17,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use w3_content::RgbaImage;
 use w3_core::{
-    BAG_SLOTS, DefId, Event, EventKind, LeashPhase, SCALE, Snapshot, TownHallTier, WorldView,
+    BAG_SLOTS, DefId, Event, EventKind, LeashPhase, NEUTRAL_OWNER, SCALE, Snapshot, TownHallTier,
+    WorldView,
 };
 use w3_render::{display_hints, team_color};
 
 use crate::faction::FactionSelection;
+use crate::fog::{FogCounts, FogGrid, FogNeutralCategory, FogNeutralMarker, overlay_opacity};
 use crate::i18n::Texts;
 use crate::input::ScreenMapper;
 use crate::melee::EntityKind;
@@ -613,6 +615,49 @@ impl ItemShopHudModel {
     }
 }
 
+/// 战争迷雾 HUD 的只读投影模型（P8.5e / R10.1 / R10.5 / tasks 2.1）。
+///
+/// 与 `ReviveHudModel` / `TownHallUpgradeHudModel` / `CreepCampHudModel` /
+/// `ItemShopHudModel` 同构：只消费只读 `Snapshot`、事实事件拷贝与表现层本地
+/// [`FogGrid`] 的 owned 值拷贝，不持有 `RtsMatch`，结构上无法反写模拟状态。
+/// 本结构 MUST NOT 进 FNV-1a 状态哈希、v7 快照或 `first_difference()`。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FogHudModel {
+    /// 最近一次只读快照帧号。
+    pub snapshot_tick: u64,
+    /// 最近一次迷雾重算帧号；`None` 表示该 HUD 数据未接迷雾派生。
+    pub last_tick: Option<u64>,
+    /// 本地视角编号（表现层专属，不进权威状态）。
+    pub local_player: u8,
+    /// 昼夜相位稳定编码（0 昼 / 1 夜；R10.2）。
+    pub phase_code: u8,
+    /// 三态格计数；`explored` 单调不减。
+    pub counts: FogCounts,
+    /// 本批次事实事件拷贝条数（只读消费）。
+    pub event_count: usize,
+    /// 当前 VISIBLE 格内的野怪 / 商店 / 地面物品标记（只读 Snapshot 查表）。
+    pub visible_markers: Vec<FogNeutralMarker>,
+}
+
+impl FogHudModel {
+    /// 从只读快照、事实事件拷贝与表现层迷雾网格派生 HUD 数据；纯只读。
+    ///
+    /// `derive(snapshot, events)` 范式在本期多接一个表现层网格参数：网格
+    /// 本身由只读 `WorldView` / `Snapshot` 派生，仍不携带权威写句柄。
+    /// 全部集合走 `Vec` / `BTreeMap` 稳定顺序，无墙钟 / `HashMap` / `f64`。
+    pub fn derive(snapshot: &Snapshot, events: &[Event], grid: &FogGrid) -> Self {
+        Self {
+            snapshot_tick: snapshot.tick,
+            last_tick: grid.last_tick(),
+            local_player: grid.local_player(),
+            phase_code: grid.phase().code(),
+            counts: grid.counts(),
+            event_count: events.len(),
+            visible_markers: grid.visible_markers().to_vec(),
+        }
+    }
+}
+
 /// 命令卡动作（由选中集合与实体类型只读派生）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandAction {
@@ -650,6 +695,34 @@ pub struct SelectionPanel {
     pub owner: u8,
 }
 
+/// 小地图只读点的来源类别（R10.1 / R8.1 / R9.1）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MinimapPointCategory {
+    /// `WorldView.entities` 的在场实体。
+    #[default]
+    Entity,
+    /// 野怪营地 home 锚点（`Snapshot.creep_camps.camps`）。
+    CreepCamp,
+    /// 野怪单位（`Snapshot.creep_camps.creeps`）。
+    Creep,
+    /// 地面掉落物品（不是 `EntityStore` 实体、不在 `read_view()`）。
+    GroundItem,
+    /// 中立商店（冻结定义表 + `Snapshot.item_shop` 活跃登记）。
+    Shop,
+}
+
+impl MinimapPointCategory {
+    /// 由迷雾中立标记类别映射成小地图点类别；稳定单值、无字符串白名单。
+    pub const fn from_fog_category(category: FogNeutralCategory) -> Self {
+        match category {
+            FogNeutralCategory::CreepCamp => Self::CreepCamp,
+            FogNeutralCategory::Creep => Self::Creep,
+            FogNeutralCategory::GroundItem => Self::GroundItem,
+            FogNeutralCategory::Shop => Self::Shop,
+        }
+    }
+}
+
 /// 小地图上的只读实体点（归一化到 `[0, 1]`）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MinimapPoint {
@@ -657,6 +730,8 @@ pub struct MinimapPoint {
     pub ny: f32,
     pub owner: u8,
     pub selected: bool,
+    /// 来源类别；实体点与 Snapshot 中立标记在喂入前分别做可见性过滤。
+    pub category: MinimapPointCategory,
 }
 
 /// 小地图底图的 CPU 降采样颜色网格（纯表现层数据，无 GPU 纹理句柄）。
@@ -714,6 +789,15 @@ pub fn minimap_backdrop(image: &RgbaImage, grid: usize) -> MinimapBackdrop {
     MinimapBackdrop { grid, colors }
 }
 
+/// 小地图雾遮罩的 CPU 网格（纯表现层，无 GPU 纹理 / 文件 IO）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MinimapFog {
+    /// 每边网格数；`opacities.len() == grid * grid`，行优先。
+    pub grid: usize,
+    /// 三态格透明度（0..255）；VISIBLE 为 0、FOGGED / MASKED 取合成常量。
+    pub opacities: Vec<u8>,
+}
+
 /// 小地图只读模型。
 #[derive(Clone, Debug, PartialEq)]
 pub struct MinimapModel {
@@ -722,6 +806,8 @@ pub struct MinimapModel {
     pub extent: f32,
     /// 真实小地图底图（CPU 降采样颜色网格）；`None` 时用纯色底。
     pub backdrop: Option<MinimapBackdrop>,
+    /// 可选雾遮罩；底图 / 相机视口框独立于迷雾遮罩（R10.1）。
+    pub fog: Option<MinimapFog>,
 }
 
 /// 一帧 HUD 的全部只读展示数据；纯派生、owned，不持有权威状态句柄。
@@ -749,6 +835,10 @@ pub struct HudModel {
     /// （P8.5d / tasks 6.2）；纯表现层派生，MUST NOT 反写权威状态、
     /// 进状态哈希 / 快照 / `first_difference()`（ADR 0002 §5）。
     pub item_shop: ItemShopHudModel,
+    /// 三态迷雾网格 / 当前可见 / 已探索层 / 中立标记的只读 HUD 投影
+    /// （P8.5e / tasks 2.1）；纯表现层派生，MUST NOT 进权威状态 / 哈希 /
+    /// 快照 / `first_difference()`（R10.5 / ADR 0002 §5）。
+    pub fog: FogHudModel,
     pub selected_count: usize,
     pub event_count: usize,
     /// 本地玩家编号，用于按队伍区分 HUD 标记颜色。
@@ -787,23 +877,62 @@ fn normalize_world(raw: i64, extent: f32) -> f32 {
     (world / extent.max(1.0) as f64 + 0.5).clamp(0.0, 1.0) as f32
 }
 
-/// 从只读视图派生小地图数据；不写回任何权威状态。
-fn derive_minimap(view: &WorldView, selection: &BTreeSet<u64>, extent: f32) -> MinimapModel {
-    let points = view
-        .entities
-        .iter()
-        .filter(|entity| entity.alive)
-        .map(|entity| MinimapPoint {
+/// 从只读视图派生小地图数据；在喂入 `points` 前完成迷雾可见性过滤。
+///
+/// 「在场性」先看 `EntityView.alive`，「可见性」再看本地视角迷雾网格：
+/// 己方单位恒呈现，敌方 / 中立实体只在 VISIBLE 格进入 `points`；
+/// MASKED / FOGGED 格敌方单位点 MUST NOT 泄露（R10.1 / R10.5）。
+/// P8.5c / P8.5d 的野怪 / 营地 / 地面物品 / 商店位置来自只读 Snapshot
+/// 查表后写入 `FogGrid.visible_markers()`，这里只做 owned 值拷贝，
+/// 底图与相机视口框独立于雾遮罩，点击仍只平移表现层相机（R13.6）。
+fn derive_minimap(
+    view: &WorldView,
+    selection: &BTreeSet<u64>,
+    extent: f32,
+    fog: Option<&FogGrid>,
+    local_player: u8,
+) -> MinimapModel {
+    let visible_ids = fog
+        .map(|grid| grid.visible_entity_ids(view))
+        .unwrap_or_default();
+    let mut points = Vec::new();
+    for entity in &view.entities {
+        if !entity.alive {
+            continue;
+        }
+        let visible =
+            fog.is_none() || entity.owner == local_player || visible_ids.contains(&entity.id);
+        if !visible {
+            continue;
+        }
+        points.push(MinimapPoint {
             nx: normalize_world(entity.x, extent),
             ny: normalize_world(entity.y, extent),
             owner: entity.owner,
             selected: selection.contains(&entity.id),
-        })
-        .collect();
+            category: MinimapPointCategory::Entity,
+        });
+    }
+    if let Some(grid) = fog {
+        for marker in grid.visible_markers() {
+            points.push(MinimapPoint {
+                nx: normalize_world(marker.x, extent),
+                ny: normalize_world(marker.y, extent),
+                owner: NEUTRAL_OWNER,
+                selected: false,
+                category: MinimapPointCategory::from_fog_category(marker.category),
+            });
+        }
+    }
+    let fog_overlay = fog.map(|grid| MinimapFog {
+        grid: grid.side(),
+        opacities: grid.cells().iter().copied().map(overlay_opacity).collect(),
+    });
     MinimapModel {
         points,
         extent,
         backdrop: None,
+        fog: fog_overlay,
     }
 }
 
@@ -909,12 +1038,10 @@ fn derive_selection_panel(
 }
 
 impl HudModel {
-    /// 从只读视图、事实事件拷贝与只读快照派生 HUD 数据。
+    /// 从只读视图、事实事件拷贝与只读快照派生 HUD 数据（兼容旧入口）。
     ///
-    /// `WorldView` 提供单位生命 / 位置 / 归属；只读 `Snapshot` 提供资源与
-    /// 生产队列（这些字段不在 `WorldView` 内）。两者都是只读 API，本函数
-    /// MUST NOT 写回任何权威状态。`ScreenMapper` 的投影输出是物理像素，
-    /// HUD 绘制在 egui 逻辑空间，故 MUST 经 `to_logical` 换算。
+    /// 旧入口不注入表现层迷雾网格，`fog` 投影保持 `Default`、小地图不做
+    /// 可见性过滤；真实装配 MUST 用 [`HudModel::collect_with_fog`]。
     pub fn collect(
         view: &WorldView,
         snapshot: &Snapshot,
@@ -922,6 +1049,54 @@ impl HudModel {
         events: &[Event],
         mapper: &ScreenMapper,
         local_player: u8,
+    ) -> Self {
+        Self::collect_impl(
+            view,
+            snapshot,
+            selection,
+            events,
+            mapper,
+            local_player,
+            None,
+        )
+    }
+
+    /// 真实装配入口：附带表现层本地迷雾网格的只读 owned 值拷贝。
+    ///
+    /// 迷雾网格只来自 `FogGrid::observe()` 的表现层派生，MUST NOT 反写
+    /// `RtsMatch`、进状态哈希 / 快照 / `first_difference()`（R10.5）。
+    pub fn collect_with_fog(
+        view: &WorldView,
+        snapshot: &Snapshot,
+        selection: &BTreeSet<u64>,
+        events: &[Event],
+        mapper: &ScreenMapper,
+        local_player: u8,
+        fog: &FogGrid,
+    ) -> Self {
+        Self::collect_impl(
+            view,
+            snapshot,
+            selection,
+            events,
+            mapper,
+            local_player,
+            Some(fog),
+        )
+    }
+
+    /// 单一派生真值源：`WorldView` 提供单位生命 / 位置 / 归属；只读
+    /// `Snapshot` 提供资源与生产队列（这些字段不在 `WorldView` 内）。
+    /// `ScreenMapper` 的投影输出是物理像素，HUD 绘制在 egui 逻辑空间，
+    /// 故 MUST 经 `to_logical` 换算。全程只读取、无权威状态写入路径。
+    fn collect_impl(
+        view: &WorldView,
+        snapshot: &Snapshot,
+        selection: &BTreeSet<u64>,
+        events: &[Event],
+        mapper: &ScreenMapper,
+        local_player: u8,
+        fog_grid: Option<&FogGrid>,
     ) -> Self {
         let units: Vec<HudUnit> = view
             .entities
@@ -971,6 +1146,10 @@ impl HudModel {
             .collect();
         let extent = mapper.world_span as f32;
         let kinds = BTreeMap::new();
+        let fog_hud = match fog_grid {
+            Some(grid) => FogHudModel::derive(snapshot, events, grid),
+            None => FogHudModel::default(),
+        };
 
         Self {
             tick: view.tick,
@@ -989,6 +1168,8 @@ impl HudModel {
             // 只读派生：只消费 `snapshot.item_shop` 与十一类事实事件拷贝，
             // 不写回模拟状态，也不进入状态哈希 / 快照。
             item_shop: ItemShopHudModel::derive(snapshot, events),
+            // 只读派生：只消费表现层迷雾网格的 owned 值拷贝（R10.5）。
+            fog: fog_hud,
             selected_count: selection.len(),
             event_count: events.len(),
             local_player,
@@ -997,7 +1178,7 @@ impl HudModel {
             entity_defs: BTreeMap::new(),
             active_card: CardId::Main,
             selection_panel: None,
-            minimap: derive_minimap(view, selection, extent),
+            minimap: derive_minimap(view, selection, extent, fog_grid, local_player),
             winner: snapshot.gameplay.victory.winner,
             faction: FactionSelection::default(),
             faction_overlay: false,
@@ -1459,6 +1640,40 @@ pub fn draw_with_minimap(
         }
         ui.separator();
 
+        // 战争迷雾 HUD：三态计数 / 昼夜相位 / 中立标记都只来自 `FogHudModel`
+        // 的 owned 值拷贝；文案走 i18n，不进日志 / 权威状态 / 状态哈希。
+        if model.fog.last_tick.is_some() {
+            let phase = if model.fog.phase_code == 0 {
+                texts.fog_day
+            } else {
+                texts.fog_night
+            };
+            ui.label(texts.fog_of_war);
+            ui.label(format!(
+                "{} {} | {} {} | {} {} | {} {}",
+                texts.fog_masked,
+                model.fog.counts.masked,
+                texts.fog_fogged,
+                model.fog.counts.fogged,
+                texts.fog_visible,
+                model.fog.counts.visible,
+                texts.fog_explored,
+                model.fog.counts.explored,
+            ));
+            ui.label(format!(
+                "{}: {} {}: {} | {}: {} | {}: {}",
+                texts.tick,
+                model.fog.last_tick.unwrap_or(0),
+                texts.fog_phase,
+                phase,
+                texts.fog_markers,
+                model.fog.visible_markers.len(),
+                texts.item_shop_events,
+                model.fog.event_count,
+            ));
+            ui.separator();
+        }
+
         // 小地图：只读实体点 + 相机视口框；点击只返回归一化坐标。
         ui.label(texts.minimap);
         let size = egui::vec2(160.0, 160.0);
@@ -1482,6 +1697,37 @@ pub fn draw_with_minimap(
             }
         } else {
             painter.rect_filled(rect, egui::CornerRadius::ZERO, egui::Color32::from_gray(24));
+        }
+        // 雾遮罩叠在底图之上、单位点之下；相机视口框在后面单独绘制，
+        // 与遮罩互不影响。遮罩网格缺失时显式报告并跳过对应元素。
+        if let Some(fog) = &model.minimap.fog {
+            if fog.grid > 0 && fog.opacities.len() == fog.grid * fog.grid {
+                let cell_w = rect.width() / fog.grid as f32;
+                let cell_h = rect.height() / fog.grid as f32;
+                for (index, opacity) in fog.opacities.iter().enumerate() {
+                    if *opacity == 0 {
+                        continue;
+                    }
+                    let gx = (index % fog.grid) as f32;
+                    let gy = (index / fog.grid) as f32;
+                    let cell = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x + gx * cell_w, rect.min.y + gy * cell_h),
+                        egui::vec2(cell_w.ceil(), cell_h.ceil()),
+                    );
+                    painter.rect_filled(
+                        cell,
+                        egui::CornerRadius::ZERO,
+                        egui::Color32::from_black_alpha(*opacity),
+                    );
+                }
+            } else {
+                log::warn!(
+                    target: "w3_client",
+                    "fog overlay unavailable: reason=invalid_grid scope=presentation_only action=skip_fog_overlay grid={} cells={}",
+                    fog.grid,
+                    fog.opacities.len()
+                );
+            }
         }
         for point in &model.minimap.points {
             let center = egui::pos2(
@@ -1663,13 +1909,19 @@ mod tests {
         };
         let mut selection = BTreeSet::new();
         selection.insert(1u64);
-        let minimap = derive_minimap(&view, &selection, 256.0);
+        let minimap = derive_minimap(&view, &selection, 256.0, None, 1);
         assert_eq!(minimap.points.len(), 1);
         assert!((minimap.points[0].nx - 0.5).abs() < 1.0e-6);
         assert!(minimap.points[0].selected);
+        assert_eq!(
+            minimap.points[0].category,
+            MinimapPointCategory::Entity,
+            "reason=entity_point_category"
+        );
         assert_eq!(minimap.extent, 256.0);
-        // 纯派生路径不注入底图；底图由装配层显式注入。
+        // 纯派生路径不注入底图 / 雾遮罩；两者由装配层显式注入。
         assert!(minimap.backdrop.is_none());
+        assert!(minimap.fog.is_none());
     }
 
     fn solid_rgba(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {

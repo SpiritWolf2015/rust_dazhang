@@ -9,7 +9,9 @@ use w3_core::{
     Command, CommandKind, EntityId, Event, EventKind, Frame, MatchConfig, RtsMatch,
     SNAPSHOT_VERSION, SimFixed, StaticWorld,
 };
-use w3_render::{FrameInput, Model, ModelLibrary, Scene, TerrainMesh, TerrainVertex};
+use w3_render::{
+    FrameInput, Model, ModelLibrary, RenderFogVisibility, Scene, TerrainMesh, TerrainVertex,
+};
 
 /// 带一个动画序列与一条平移轨道的最小模型（上游转换规格 JSON）。
 const MODEL_DOC: &str = r#"{
@@ -605,5 +607,113 @@ fn item_shop_events_do_not_change_state_hash() {
             plain.read_view(),
             "reason=item_shop_event_consumption_keeps_read_view"
         );
+    }
+}
+
+/// P8.5e 战争迷雾：可见性过滤 / 重复事实事件投递 / 多帧重绘只读隔离。
+///
+/// 本测试不新增任何 `EventKind`：重复投递 P8.5c / P8.5d 既有事实事件，
+/// 并在 `Scene` 上切换只读迷雾可见性；MUST NOT 改变内核哈希、v7 快照、
+/// `read_view()` / `drain_events()` 输出或 `first_difference()`。
+#[test]
+fn fog_of_war_events_do_not_change_state_hash() {
+    let mut rendered = build_match();
+    let mut plain = build_match();
+    submit_move(&mut rendered);
+    submit_move(&mut plain);
+    let mut scene = Scene::default();
+    let library = ModelLibrary::default();
+    let terrain = simple_terrain();
+    let fog_events = vec![
+        Event {
+            frame: 0,
+            sequence: 50_001,
+            entity: 1,
+            kind: EventKind::CreepCampSeeded,
+        },
+        Event {
+            frame: 0,
+            sequence: 50_002,
+            entity: 1,
+            kind: EventKind::ItemDropped,
+        },
+        Event {
+            frame: 0,
+            sequence: 50_003,
+            entity: 1,
+            kind: EventKind::MarketRefreshed,
+        },
+    ];
+    let snapshot_bytes = |snapshot: &w3_core::Snapshot| format!("{snapshot:?}").into_bytes();
+
+    for _ in 0..16 {
+        rendered.step();
+        plain.step();
+        let view_a = rendered.read_view();
+        let events_a = rendered.drain_events();
+        let view_b = plain.read_view();
+        let events_b = plain.drain_events();
+        let visibility = RenderFogVisibility {
+            visible_entity_ids: view_a
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.owner == 0)
+                .map(|entity| entity.id)
+                .collect(),
+            remembered_entity_ids: view_a
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.owner == 1)
+                .map(|entity| entity.id)
+                .collect(),
+        };
+        scene.set_fog_visibility(Some(visibility));
+        for _ in 0..3 {
+            scene.consume(
+                FrameInput {
+                    view: &view_a,
+                    events: &fog_events,
+                },
+                &library,
+            );
+        }
+        scene.interpolate_all(0.5);
+        let _vertices = scene.build_vertices(&terrain);
+        assert_eq!(
+            scene.applied_events(),
+            fog_events.len() as u64,
+            "reason=fog_related_events_are_deduplicated"
+        );
+        assert_eq!(
+            rendered.compute_state_hash(),
+            plain.compute_state_hash(),
+            "reason=fog_visibility_keeps_state_hash"
+        );
+        assert_eq!(
+            rendered.capture_snapshot(),
+            plain.capture_snapshot(),
+            "reason=fog_visibility_keeps_snapshot"
+        );
+        assert_eq!(
+            snapshot_bytes(&rendered.capture_snapshot()),
+            snapshot_bytes(&plain.capture_snapshot()),
+            "reason=fog_visibility_keeps_snapshot_bytes"
+        );
+        assert_eq!(
+            rendered.first_difference(&plain),
+            None,
+            "reason=fog_visibility_keeps_first_difference_none"
+        );
+        assert_eq!(view_a, view_b, "reason=fog_visibility_keeps_read_view");
+        assert_eq!(
+            events_a, events_b,
+            "reason=fog_visibility_keeps_drained_events"
+        );
+        assert_eq!(
+            rendered.capture_snapshot().version,
+            SNAPSHOT_VERSION,
+            "reason=fog_snapshot_stays_v7"
+        );
+        assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
     }
 }

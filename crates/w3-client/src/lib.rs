@@ -45,6 +45,7 @@ pub mod app;
 pub mod camera;
 pub mod client;
 pub mod faction;
+pub mod fog;
 pub mod hud;
 pub mod i18n;
 pub mod input;
@@ -63,9 +64,18 @@ pub use app::{ClientApp, ClientError, HostClock, StepDriver};
 pub use camera::{CameraAction, CameraState};
 pub use client::FixedStepClient;
 pub use faction::{FactionSelection, assemble_from_selection};
+pub use fog::{
+    FOG_CELL_SPAN_RAW, FOG_DAY_FRAMES, FOG_DETECT_RADIUS_RAW, FOG_FLYING_DEF_IDS, FOG_GRID_SIDE,
+    FOG_HALF_EXTENT_RAW, FOG_NIGHT_FRAMES, FOG_OVERLAY_OPACITY_FOGGED, FOG_OVERLAY_OPACITY_MASKED,
+    FOG_OVERLAY_OPACITY_VISIBLE, FOG_SIGHT_DAY_RAW, FOG_SIGHT_FLYING_RAW, FOG_SIGHT_NIGHT_RAW,
+    FOG_STEALTH_TRIGGER_RADIUS_RAW, FOG_VISION_BLOCK_RADIUS_RAW, FogCell, FogCounts, FogGrid,
+    FogNeutralCategory, FogNeutralMarker, FogPhase, day_phase, overlay_opacity, sight_radius_raw,
+    visible_neutral_markers,
+};
 pub use hud::{
-    CreepCampHudModel, CreepHudBar, HudAssetError, HudAssets, HudItemBag, HudItemShopFact,
-    HudModel, HudReviveItem, HudTownPortalCast, HudUpgradeItem, ItemShopHudModel, ReviveHudModel,
+    CreepCampHudModel, CreepHudBar, FogHudModel, HudAssetError, HudAssets, HudItemBag,
+    HudItemShopFact, HudModel, HudReviveItem, HudTownPortalCast, HudUpgradeItem, ItemShopHudModel,
+    MinimapFog, MinimapModel, MinimapPoint, MinimapPointCategory, ReviveHudModel,
     TownHallUpgradeHudModel, draw,
 };
 pub use i18n::{Texts, ZH};

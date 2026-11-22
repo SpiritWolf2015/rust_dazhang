@@ -18,6 +18,7 @@
 //! - 命令只经 `submit_command` / `submit_gameplay_command` 提交，失败显式报错；
 //! - HUD 只读，选中集合 / 相机位姿 / 累加器余数一律表现层专属。
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -26,8 +27,8 @@ use egui_wgpu::ScreenDescriptor;
 use w3_content::RgbaImage;
 use w3_core::{CommandError, DefId, Event, GameplayCommandError, Snapshot, WorldView};
 use w3_render::{
-    BakedModel, Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError, Scene,
-    SceneVertex, StaticMarker, TerrainMesh, TerrainTextureLayers,
+    BakedModel, Camera, FrameInput, FrameProducer, GpuContext, ModelLibrary, RenderError,
+    RenderFogVisibility, Scene, SceneVertex, StaticMarker, TerrainMesh, TerrainTextureLayers,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -39,10 +40,12 @@ use crate::accumulator::{FrameAdvance, TICKS_PER_SECOND};
 use crate::camera::{CameraAction, CameraState, PAN_STEP, YAW_STEP, ZOOM_STEP};
 use crate::client::FixedStepClient;
 use crate::faction::FactionSelection;
+use crate::fog::FogGrid;
 use crate::hud::{self, HudAssets, HudModel, MinimapBackdrop, minimap_backdrop};
 use crate::i18n::{Texts, ZH};
 use crate::input::{
-    AimState, ClientCommand, InputAction, InputError, InputState, MovabilityMap, ScreenMapper,
+    AimState, ClientCommand, InputAction, InputError, InputState, LOCAL_PLAYER, MovabilityMap,
+    ScreenMapper,
 };
 use crate::melee::EntityKind;
 use crate::melee::command_card::CommandCatalog;
@@ -234,6 +237,11 @@ pub struct ClientApp<P: StepDriver> {
     clock: HostClock,
     cursor: [f64; 2],
     dragging: bool,
+    /// 每个本地视角一份的表现层三态迷雾网格（P8.5e / R10.1 / R10.5）。
+    /// 只由 `FogGrid::observe()` 从只读视图 / 快照 / 事实事件拷贝累积，
+    /// MUST NOT 进 `RtsMatch` / 状态哈希 / 快照 / `first_difference()`。
+    /// `RefCell` 只服务 `hud_model(&self)` 的本地只读派生，不引入异步或并行。
+    fog_grid: RefCell<FogGrid>,
     last_events: Vec<Event>,
     max_frames: u32,
     frames: u32,
@@ -275,6 +283,7 @@ impl<P: StepDriver + 'static> ClientApp<P> {
             clock: HostClock::new(),
             cursor: [0.0; 2],
             dragging: false,
+            fog_grid: RefCell::new(FogGrid::new(LOCAL_PLAYER)),
             last_events: Vec::new(),
             max_frames,
             frames: 0,
@@ -439,19 +448,55 @@ impl<P: StepDriver + 'static> ClientApp<P> {
         &self.input
     }
 
+    /// 只读当前表现层迷雾网格（验收用；owned 值拷贝）。
+    ///
+    /// Q7 已知限制：重连 / 中途加入 / 变速 / 多视角观战尚未拍板，
+    /// 当前实现只按「从当前实例首次观察到的整数帧号起算」累积已探索层；
+    /// 回放从帧 0 重放可重建完整已探索层，中途加入降级契约 MUST NOT
+    /// 臆造为「已核」（R12.3 / R12.5 / design D5）。
+    pub fn fog_grid(&self) -> FogGrid {
+        self.fog_grid.borrow().clone()
+    }
+
+    /// 只从只读视图 / 快照 / 事实事件拷贝重算本地迷雾；同一 `tick` 幂等。
+    ///
+    /// 相机操作、重绘、插值帧丢失、网络帧抖动 / 乱序 / 重传 MUST NOT
+    /// 驱动本派生；`FogGrid::observe()` 只按整数帧号推进（ADR 0002 §2-3）。
+    fn observe_fog(&self, view: &WorldView, snapshot: &Snapshot, events: &[Event]) -> FogGrid {
+        let mut grid = self.fog_grid.borrow_mut();
+        grid.observe(
+            view,
+            snapshot,
+            events,
+            &self.entity_defs,
+            self.input.local_player(),
+        );
+        grid.clone()
+    }
+
+    /// 把表现层三态网格投影成 `Scene` 的两组只读整数编号。
+    fn render_fog_visibility(view: &WorldView, fog: &FogGrid) -> RenderFogVisibility {
+        RenderFogVisibility {
+            visible_entity_ids: fog.visible_entity_ids(view),
+            remembered_entity_ids: fog.remembered_entity_ids(view),
+        }
+    }
+
     /// 只读当前 HUD 展示数据；不改变任何权威状态。
     pub fn hud_model(&self) -> HudModel {
         let view = self.driver.view();
         let snapshot = self.driver.snapshot();
+        let fog = self.observe_fog(&view, &snapshot, &self.last_events);
         let (width, height) = self.viewport_size();
         let mapper = self.mapper(width, height);
-        HudModel::collect(
+        HudModel::collect_with_fog(
             &view,
             &snapshot,
             self.input.selection(),
             &self.last_events,
             &mapper,
             self.input.local_player(),
+            &fog,
         )
         .with_kinds(self.entity_kinds.clone())
         .with_entity_defs(self.entity_defs.clone())
@@ -608,6 +653,11 @@ impl<P: StepDriver + 'static> ClientApp<P> {
 
         // 只交出当前只读视图与事件拷贝；逻辑帧推进绝不在此发生。
         let (view, events) = self.driver.next_frame();
+        let snapshot = self.driver.snapshot();
+        // 迷雾只由整数帧号与只读输入派生；随后把两组编号交给 `Scene`。
+        let fog = self.observe_fog(&view, &snapshot, &events);
+        self.scene
+            .set_fog_visibility(Some(Self::render_fog_visibility(&view, &fog)));
         self.scene.consume(
             FrameInput {
                 view: &view,
@@ -623,14 +673,14 @@ impl<P: StepDriver + 'static> ClientApp<P> {
 
         let (width, height) = self.viewport_size();
         let mapper = self.mapper(width, height);
-        let snapshot = self.driver.snapshot();
-        let hud_model = HudModel::collect(
+        let hud_model = HudModel::collect_with_fog(
             &view,
             &snapshot,
             self.input.selection(),
             &events,
             &mapper,
             self.input.local_player(),
+            &fog,
         )
         .with_kinds(self.entity_kinds.clone())
         .with_entity_defs(self.entity_defs.clone())
@@ -1006,6 +1056,10 @@ impl<P: StepDriver + 'static> ApplicationHandler<()> for ClientApp<P> {
         // 再逐个调用无参 step()。RedrawRequested / VSync / GPU 耗时不参与。
         let ticks = self.clock.poll_ticks();
         self.driver.advance_ticks(ticks);
+        // 网络帧到达 / 抖动 / 重传 / 乱序只改命令到达，不改这里的整数 tick
+        // 与 `step()` 次数；迷雾在下次呈现按当前 `tick` 重算。一次推进多帧
+        // 时中间帧的已探索层只从当前实例首次观察起算，Q7 降级契约见
+        // [`ClientApp::fog_grid`]，MUST NOT 冒充「从帧 0 重放派生」已核。
         if let Some(window) = &self.window {
             window.request_redraw();
         }

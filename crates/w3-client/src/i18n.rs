@@ -160,6 +160,24 @@ pub struct Texts {
     pub item_shop_refreshed: &'static str,
     /// 物品商店命令拒单事实事件标签。
     pub item_shop_rejected: &'static str,
+    /// 战争迷雾 HUD 标题（P8.5e / R10.1）。
+    pub fog_of_war: &'static str,
+    /// 未探索格标签。
+    pub fog_masked: &'static str,
+    /// 已探索但当前不可见格标签。
+    pub fog_fogged: &'static str,
+    /// 当前可见格标签。
+    pub fog_visible: &'static str,
+    /// 已探索层标签。
+    pub fog_explored: &'static str,
+    /// 昼夜相位标签。
+    pub fog_phase: &'static str,
+    /// 白昼相位值标签。
+    pub fog_day: &'static str,
+    /// 夜晚相位值标签。
+    pub fog_night: &'static str,
+    /// 当前可见中立标记标签。
+    pub fog_markers: &'static str,
 }
 
 /// 第一版本地化：ASCII 文案，保证内置开源字体可显示。
@@ -247,4 +265,13 @@ pub const ZH: Texts = Texts {
     item_shop_portal_cancelled: "Portal Cancelled",
     item_shop_refreshed: "Refreshed",
     item_shop_rejected: "Rejected",
+    fog_of_war: "Fog of War",
+    fog_masked: "Masked",
+    fog_fogged: "Fogged",
+    fog_visible: "Visible",
+    fog_explored: "Explored",
+    fog_phase: "Phase",
+    fog_day: "Day",
+    fog_night: "Night",
+    fog_markers: "Markers",
 };

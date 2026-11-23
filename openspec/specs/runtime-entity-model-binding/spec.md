@@ -9,32 +9,34 @@
 
 ### Requirement: 运行时新实体按族段与单位/建筑粒度派生真实两族 glTF 模型键
 
-运行时 `Train` / `Build` 新实体 SHALL 按只读 `EntityView.owner`（1 本地 / 2 AI / 其它中立）→ `FactionSelection` 族段（`1xx` / `2xx` / `9xx`）+ `EntityView.speed==0` 判建筑 → 编译期常量 `SEGMENT_MODEL_KEYS` 段代表键 → `ModelCatalog::lookup` → `BakedModel` → `Scene::expand_model` 真实 glTF 网格；MUST NOT 一律回落 `"default"` 四面体（R2 / R4 / C9）。`crates/w3-core/` 零 diff、不扩展视图字段下 `EntityView` 无 `def_id`、`complete_production` 不发 `Spawned`，无法获得运行时精确 `DefId`，故 MUST NOT 声称「按精确 `DefId` 关联解析」（C21）。解析 MUST NOT 进权威状态 / 状态哈希 / 快照（ADR 0002）。
+运行时 `Train` / `Build` 产出的新实体 SHALL 按 `DefId` 族段（人 `1xx` / 兽 `2xx` / **不死族 `3xx`** / **暗夜族 `4xx`** / 中立 `9xx`，Q1' 已拍板双族全量）与单位 / 建筑粒度派生真实 glTF 模型键；`SEGMENT_HUMAN=100` / `SEGMENT_ORC=200` / `SEGMENT_NEUTRAL=900`（`runtime_models.rs:69-71`）SHALL 按表增设 `SEGMENT_UNDEAD=300` 与 `SEGMENT_NIGHT_ELF=400`，`SEGMENT_MODEL_KEYS`（`:89-111`）**5 段**与 `race_segment()`（`:169-172`）按表扩展、`def_id >= SEGMENT_*` 段判定（`:148-156`）同步覆盖 `3xx` / `4xx`，`ENTITY_MODEL_FILES`（`crates/w3-content/src/model_index.rs:58-74`）SHALL 增设不死 / 暗夜**逻辑路径字符串合成键表**（非资产内容、不含真实导出数据，R2 / R4 / ADR 0001 / ADR 0004 / Q1' / Q5'）。段键映射 MUST 保持只读派生、稳定顺序、不反写权威状态 / 状态哈希 / 快照（ADR 0002 §5 / R10.5 / R13.6）；Q2 新增族特色机制顶层权威状态与模型键只读派生严格区分、MUST NOT 把模型键 / fog 可见性带进权威状态（Q2' 已拍板）。
+
+> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题（含字面「真实两族」「兽族运行时新实体」等历史措辞）作 OpenSpec 归档合并身份键、字面保留不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 与本 requirement 新正文为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。
 
 #### Scenario: 族段 → 段代表真实模型键的映射与烘焙（R2 / R4 / C16–C18 / C21）
 
-- **WHEN** 以人族 / 兽族各装配并枚举 `SEGMENT_MODEL_KEYS` 段表、`ENTITY_MODEL_FILES` 表项与 `BakedModel` 烘焙结果
-- **THEN** 人族 `1xx` / 兽族 `2xx` / 中立 `9xx` 三段各有 1 个单位段代表键 + 1 个建筑段代表键（人族 `soldier` / `town-hall`、兽族 `orc-grunt` / `orc-great-hall`、中立 `tree` / `gold-mine`）；`ENTITY_MODEL_FILES` 14 键（人族 5 + 中立 1 + 兽族 8）经 `model_assembly.rs:304-311` 全部烘焙为真实网格（`real_map_e2e.rs:235-263` 严格 `assert_eq!(...,14)` + 逐键 `triangle_count()>0`）；兽族 8 键磁盘产物非空且 `asset.version=2.0`、含 mesh、`missingBin=0` / `missingImageUri=0`（补跑「转换 64 跳过 2 错误 0」EXIT 0 / 全库 `.gltf` 922→988 / 新增 66 兽族网格，锚 `proposal.md`「## 资产侧前置事实」第 2 / 3 条）。**烘焙全命中不代表运行时全可达**，见下方 R-1 加宽 Scenario
+- **WHEN** 枚举 4 族（含不死 `3xx` / 暗夜 `4xx`）与中立共 5 段的 `SEGMENT_MODEL_KEYS` 并烘焙运行时新实体模型键
+- **THEN** 每段均映射到段代表逻辑模型键、新增 `SEGMENT_UNDEAD=300` / `SEGMENT_NIGHT_ELF=400` 与既有 `1xx` / `2xx` / `8xxx` / `9xxx` 段判定不冲突，`race_segment()` 仍是单一查表处、由数据驱动不散落 `if race` 白名单；按 Q3 bump 8 的 `SNAPSHOT_VERSION` 快照契约下模型键仍只读派生（R2 / R4 / R1.2 / D6 / Q1' / Q3 / Q5' / C16–C18 / C21）
 
 #### Scenario: 大小写归一命中真实大小写磁盘文件（C18，不是待修缺陷）
 
-- **WHEN** 以小写逻辑路径 `units/orc/grunt/grunt` 查询 `ModelCatalog::resolve_entity_key` → `lookup`
-- **THEN** `crates/w3-content/src/model_index.rs:109-111` 的 `normalize()`（`to_ascii_lowercase()` + `\`→`/`）已在 `scan_gltf():290` 对磁盘 stem 归一、`:296` `by_path.insert(key, path)` 记录真实磁盘路径、在 `lookup():189` 对输入 `file` 归一，`by_path` 键与查询键都是全小写 → 小写逻辑路径命中 `Units/Orc/Grunt/grunt.gltf`，大小写敏感文件系统也成立；`lookup` 返回的 `PathBuf` 是真实磁盘路径。**MUST NOT 改归一逻辑**、不写成待修缺陷（C18）
+- **WHEN** 以不死 / 暗夜段键经 `normalize()` 双侧归一查 `ENTITY_MODEL_FILES` 逻辑路径
+- **THEN** 全小写归一逻辑路径由既有归一机制命中真实大小写磁盘文件（本机导出目录、gitignored、不入库）；归一命中是既成事实不是待修缺陷，第 3 / 4 族键表沿用同一机制（C18 / ADR 0001 / ADR 0004 / Q1' / Q5'）
 
 #### Scenario: 兽族运行时新实体呈现真实 glTF 网格而非四面体（R2 / R4 / C9 / C21）
 
-- **WHEN** 以本地兽族开局并经 `Train` / `Build` 产出新实体，且本机 gitignored `config.toml` 指向含 8 键的 `asset-converted/`
-- **THEN** `resolve_with_reason`（`model.rs:582-609`）按 `EntityView.owner=1` → `FactionSelection` 兽族 `2xx` 段 + `speed==0` 判建筑 → 段代表键（`orc-grunt` / `orc-great-hall`）→ `BakedModel` → `Scene::expand_model` 呈现真实兽族 glTF 网格，MUST NOT 因回落 `"default"` 变成四面体；人族开局新实体同理按 `1xx` 段命中 `soldier` / `town-hall`。两族段代表键不同 → Q3 验收层口径达成（C7 / C9）
+- **WHEN** 4 族（人 / 兽 / 不死 / 暗夜）各自运行时 `Train` 产出新实体并离屏渲染
+- **THEN** 各族按段代表键呈现真实 glTF 网格而非四面体占位，不死 / 暗夜新实体按 `3xx` / `4xx` 段键呈现且不影响人 / 兽既有网格；无本机资产时按既有显式可诊断回退、不冒充验证真实网格（R2 / R4 / C9 / C21 / Q1' / Q5' / C12）
 
 #### Scenario: 静态摆放链路保持不变（ADR 0004 / C7）
 
-- **WHEN** 复核 `units.json` / `doodads.json` 静态摆放的解析路径
-- **THEN** 仍走 `ModelCatalog::resolve_unit` / `resolve_doodad_paths` 预展开（`crates/w3-content/src/model_index.rs:201-258`），不改写静态摆放解析顺序、不引入 staging / `.cache` 回退（godot `ASSET_LANES.md:53-58`）；动态实体链路本次只**新增 `ENTITY_MODEL_FILES` 表项**，`resolve_entity_key` / `lookup` / `scan_gltf` 解析逻辑零改动
+- **WHEN** 校验 frame-0 静态摆放链路与 4 族段表扩展、Q2 / Q3 bump 8 的关系
+- **THEN** 静态摆放链路保持不变、4 族扩展只作用于运行时动态实体的段键派生，不改写装配期 `DefId→Def` 冻结边界；`w3-content` 原始 `f64` 坐标不进哈希 / 快照，按 Q3 的 `SNAPSHOT_VERSION` bump 8 与 Q2 新增权威状态段均不改变该边界（ADR 0004 / ADR 0002 / Q2 / Q3 / C7 / Q1'）
 
 #### Scenario: R-1 加宽：八类走段代表键、6 键不可达、reason=None 为已知限制（C21 / C22，用户 2026-11-18 拍板接受）
 
-- **WHEN** 核对 R-1 八类 `ORC_SIEGE`(206) / `ORC_HERO`(210) + 人族六类 `HUMAN_RANGED/SIEGE/FARM/ALTAR/SMITHY/HERO` 的运行时解析，以及 8 个兽族键的生产可达性
-- **THEN** 如实登记为**加宽的已知限制**：① 8 个兽族键中仅 `orc-grunt` / `orc-great-hall` 两个段代表键在生产解析路径可达，其余 6 个（`orc-peon` / `orc-headhunter` / `orc-barracks` / `orc-burrow` / `orc-altar` / `orc-war-mill`）烘焙为真实网格却永不被实例解析到；② 上述 8 类运行时静默取得所属段代表键的（错误类别）真实网格、`ModelResolution.reason == None`、无 `reason=model_key_missing` 诊断（`model.rs:613-628`）；③ `def_segment` / `def_id_to_model_key` / `R1_UNMAPPED_DEFS` 精确 `DefId → 模型键` 查表零生产调用者（仅测试，`runtime_models.rs:135-191`）；④ `real_map_e2e.rs:235-263` 的 `assert_eq!(...,14)` 只证明烘焙、不证明运行时可达。**MUST NOT 写成「R-1 八类已走显式可诊断回退」或「8 键覆盖 8/10 兽族 DefId」**；精确类别级真实 / 缺键需内核只读视图或事件携带 DefId、触发规格解锁重走门，由后续独立 change 承接
+- **WHEN** 复核运行时实体模型绑定的覆盖判定与已知限制
+- **THEN** 八类走段代表键、6 键不可达、`reason=None` 的既有已知限制按用户 2026-11-18 拍板接受的口径保留、不冒充已消除；本期新增不死 / 暗夜段键按同一判定登记、不扩范围修复既有不可达键、不静默降级（C21 / C22 / ADR 0001 / Q1' / Q9' 已拍板登记已知限制）
 
 ### Requirement: 缺键 / 本机资产缺失时显式、可诊断回退
 

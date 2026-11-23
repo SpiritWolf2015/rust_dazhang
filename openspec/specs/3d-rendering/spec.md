@@ -9,24 +9,24 @@
 
 ### Requirement: Render from read-only simulation view
 
-渲染层 SHALL 只读取 `read_view()`、事实事件与 P8.5e 表现层只读派生的三态迷雾网格 / 当前可见集合；MUST NOT 持有或反写任何权威模拟状态；缺帧或未创建模型 MUST NOT 改变模拟推进。`FrameProducer::next_frame()` SHALL 只交出当前逻辑帧的只读 `WorldView` 与事件拷贝，MUST NOT 调用 `RtsMatch::step()`；模拟推进 SHALL 由客户端的固定 30 Hz 整数帧累加器独家驱动（ADR 0002 §2、§5）。呈现 SHALL 通过 `Scene::interpolate_all(alpha)` 在相邻逻辑帧之间插值，`alpha` 与插值结果 MUST NOT 写回权威状态、进入 FNV-1a 状态哈希或由 `SNAPSHOT_VERSION`（当前 7，含 `defs_hash` 头）定义的快照（R10.5 / ADR 0002 §6-8 / Q4）。本 change P8.5e 的雾遮罩呈现与动态实例可见性过滤 SHALL 只在 `build_vertices` 喂入顶点 **之前**按格状态过滤 / 冻结上一已知态（R10.1），是只读表现层派生结果、纯函数稳定顺序无随机源，MUST NOT 反写 `RtsMatch` / 进状态哈希 / 快照 / `first_difference()`（R10.5 / ADR 0002 §5 / `scene.rs:904-933`）；迷雾遮罩独立于地形底图与权威状态，`SNAPSHOT_VERSION` / `SIM_VERSION` / `PROTOCOL_VERSION` 保持 7 不 bump、golden hash `0x940cb016f6630f1e` 不变、`w3-core` 零改动（R10.5 / ADR 0002 §6-8）。
+渲染 SHALL 只读取只读 `WorldView` / 只读 `Snapshot`（含按 Q2 新增的族特色机制顶层字段）与表现层只读派生结果构建顶点与动态实例（`Scene::build_vertices` 纯函数、稳定顺序、无随机源），MUST NOT 反写 `RtsMatch`、进 FNV-1a 状态哈希或由 `SNAPSHOT_VERSION`（按 Q3 bump 8）定义的快照（ADR 0002 §5 / R13.6）。本 change P9 把 **4 族**（Q1' 已拍板双族全量）模型键 / 几何呈现按表接入：人 `1xx` / 兽 `2xx` / 不死 `3xx` / 暗夜 `4xx` / 中立 `9xx` 共 5 段与 `SEGMENT_MODEL_KEYS` / `ENTITY_MODEL_FILES` 逻辑路径字符串合成键表同构、按 Q5' 推荐；**仅逻辑路径键表、非资产内容、零 MPQ 派生数据 / 真实导出 JSON / PNG / GLB 入库**（R2 / R4 / ADR 0001 / ADR 0004）。Q4 已拍板全量机制本期纳入，其呈现 MUST 仍只读（4 族 / Q4 口径并入本 Requirement 与既有 Scenario，MUST NOT 新增第 9 份 MODIFIED delta、2 ADDED + 8 MODIFIED = 10 份）。**P8.5e 迷雾遮罩 / 可见性过滤保持表现层只读呈现、fog 可见性 MUST NOT 进权威状态（R10.5 / §0.3 T3 / Q2' 已拍板、不抹平 vera20k fog 进哈希 D1 对照差异）**；1.0 字面「一并做完」与本期双族全量的张力按 Q4' 已拍板七处显式如实登记、不静默窄化、不冒充已解决。
 
-> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题作 OpenSpec 归档合并身份键、字面不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。历史 requirement 正文含「`SNAPSHOT_VERSION`（当前 3）」概述口径，按 Q10 推荐如实登记为已知限制、由 `docs-owner` 后续独立 change 统一收口。
+> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题作 OpenSpec 归档合并身份键、字面保留不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 与本 requirement 新正文为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。
 
 #### Scenario: 模型加载失败
 
-- **WHEN** 某个单位的模型资源缺失，或迷雾遮罩纹理 / 网格资源缺失
-- **THEN** 该单位 / 该遮罩元素不显示，但模拟状态哈希与另一无渲染实例一致；降级 MUST NOT 把「不可见」写回权威状态或改变模拟推进（R10.1 / R10.5 / ADR 0002 §5）
+- **WHEN** 不死 `3xx` / 暗夜 `4xx` 段模型键未命中库 / 本机无导出资产 / glTF 加载失败
+- **THEN** MUST 以英文结构化 `key=value` 日志明确报告并降级为不绘制该元素（或既有四面体占位）、MUST NOT 静默降级或反写权威状态；CI 无本机资产不冒充验证真实网格、按 Q3 bump 8 的快照契约下逐帧 `compute_state_hash()` / `capture_snapshot()` 字节不变（ADR 0001 / ADR 0004 / ADR 0002 §5 / Q1' / Q3 / C9 / C12 / Q5'）
 
 #### Scenario: 重绘与逻辑帧解耦
 
-- **WHEN** 窗口在 144 Hz 显示器上连续触发 `RedrawRequested`，并在重绘间反复刷新迷雾过滤结果
-- **THEN** `next_frame()` 不推进模拟，逻辑帧仍按固定 30 Hz 累加器递增，逐帧状态哈希与 30 Hz 基准实例一致；当前可见每帧重算只依赖整数帧 `tick` 与只读视图、不受渲染帧率 / 墙钟影响（R10.1 / R10.5 / ADR 0002 §2-3）
+- **WHEN** 高刷新率 / 卡顿追帧下连续重绘含 4 族实体、Q4 全量机制呈现与迷雾遮罩的画面
+- **THEN** 渲染帧率与 30 Hz 整数逻辑帧解耦、动态实例按只读视图稳定顺序展开、4 族段键派生无墙钟 / `HashMap` 迭代顺序 / `f64` / 表现层独立随机源，不改变模拟推进或逐帧哈希（ADR 0002 §2-3 / §5 / R12.4 / Q1' / Q2 / Q4 / Q5'）
 
 #### Scenario: 插值不进权威状态
 
-- **WHEN** 以不同 `alpha` 调用 `Scene::interpolate_all` 并重复渲染，且叠加雾遮罩呈现
-- **THEN** `compute_state_hash()` 与快照字节和未插值 / 无雾遮罩实例相同，三态网格 / 已探索层为表现层本地只读派生、不进状态哈希 / 快照 / `first_difference()`（R10.5 / ADR 0002 §5 / Q9 形态①隔离回归 / `crates/w3-render/tests/isolation.rs`）
+- **WHEN** 以表现层插值 alpha 呈现 4 族单位 / 建筑动画、Q4 全量机制效果并叠加迷雾遮罩
+- **THEN** 插值 / 动画 / 4 族模型键 / 雾遮罩全是表现层只读派生、不进权威状态 / 状态哈希 / 由 `SNAPSHOT_VERSION`（8）定义的快照 / `first_difference()`，逐帧 `compute_state_hash()` 与捕获的快照字节和 v8 新基线一致；Q2 族特色机制权威状态只在 `w3-core` 结算、fog 可见性 MUST NOT 进权威状态（R10.5 / R13.6 / ADR 0002 §5-8 / Q1' / Q2 / Q2' / Q3 / Q4 / Q5'）
 
 ### Requirement: Skeletal animation and team color
 

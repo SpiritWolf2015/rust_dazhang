@@ -9,22 +9,24 @@
 
 ### Requirement: 表现层选族入口与装配期传参
 
-系统 SHALL 提供开局前可见的本地族 / AI 族选择入口（**Q1 已拍板：窗口内 egui overlay**，R2 / R12.7），其结果是**表现层本地只读状态**；确认后 SHALL 把 `(local_race, ai_race)` 经装配期传给既有 `MeleeSetup::with_races`，使本地席位实体 `def_ids` 落 `local_race` 段、AI 席位落 `ai_race` 段、中立资源恒 `9xx`（R2）。系统 MUST NOT 新增 `Player.race` / `RtsMatch.race` 或任何权威状态字段；选族状态 MUST NOT 进权威状态 / 状态哈希 / 由 `SNAPSHOT_VERSION`（当前 3）定义的快照（ADR 0002）。以上全部只读派生，不改写 `w3-core` 命令面。
+系统 SHALL 提供开局前选族 overlay（**4 族：人 / 兽 / 不死 / 暗夜**，Q1' 已拍板不死 + 暗夜双族全量 + P8 两族不重做；`3xx` / `4xx` 段）与 `FactionSelection` 纯表现层只读状态，经 `MeleeSetup::with_races` / `with_faction_selection` / `apply_faction_selection` 派生开局与 `CommandCatalog::for_race` 注入（`faction.rs:28-35,86-103`、`app.rs:330-360`、R2 / S1 / S3 / R13.1）。`i18n`（`i18n.rs:38-50,205-211`）与 overlay / 命令卡目录 SHALL 按表扩展 4 族文案键；选族 MUST 只停表现层本地只读状态、不新增 `w3-core` 分类权威字段、不进状态哈希 / 快照 / `first_difference()`（ADR 0002 §5 / Q6 / Q2 / R13.6）。未选族时 SHALL 回落既有默认人族段（R2 / R12.7）。
+
+> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题作 OpenSpec 归档合并身份键、字面保留不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 与本 requirement 新正文为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。
 
 #### Scenario: 选族后开局 DefId 分段正确（R2 / S1 / S3）
 
-- **WHEN** 在表现层分别选择人族 / 兽族为本地族并装配开局
-- **THEN** 本地席位实体 `def_ids` 落在 `1xx`（人族）或 `2xx`（兽族）段、AI 席位落在所选 `ai_race` 段、中立金矿 / 树木恒 `9xx`；`MeleeSetup::new()` / `with_race` 既有入口的 `Spawn` / `gameplay_commands` 字节逐字节不变（R12.7 / C2）
+- **WHEN** 分别以 4 族（人 / 兽 / 不死 / 暗夜）选族 overlay 确认并装配开局，且未选族时走默认入口
+- **THEN** 双方 `Spawn` 关联的 `def_ids` 落在所选族段（`1xx` / `2xx` / `3xx` / `4xx`）、中立恒 `9xx`，4 族命令卡目录 / i18n 中文键 / 模型键段按表命中，`Race` 4 变体不进 `w3-core` 分类字段（Q2 族特色机制以独立顶层权威状态段表达、不复用）；未选族回落人族段（R2 / S1 / S3 / R13.1 / Q1' / Q5' / Q6 / Q2）
 
 #### Scenario: 选族是表现层只读状态、不新增权威字段（ADR 0002）
 
-- **WHEN** 校验选族装配后的权威状态字段集合与 `SNAPSHOT_VERSION`
-- **THEN** 无 `race` / `ai_race` 或任何新增权威状态字段，`SNAPSHOT_VERSION` 仍 3，选族 / HUD 刷新不进状态哈希 / 快照 / `first_difference()`；`git diff -- crates/w3-core/` 为空（ADR 0002 §6-8 / C1）
+- **WHEN** 连续切换 4 族选族 / 相机 / HUD 并校验 `RtsMatch` / `Player` 字段集合与 `SNAPSHOT_VERSION`
+- **THEN** `FactionSelection` / `faction_overlay` 只在 `crates/w3-client/` 本地只读状态、无 `race` 分类权威字段、选族动作本身逐帧 `compute_state_hash()` / `capture_snapshot()` 字节与不选族基线一致；**历史口径「`SNAPSHOT_VERSION` 仍为 3」不作行为断言**：按用户 Q2 / Q3 已拍板 `SNAPSHOT_VERSION` bump 8、`w3-core` 新增族特色机制顶层权威状态段且四处同步（非空 diff 属预期），选族 / HUD 只读派生不反写（ADR 0002 §5-8 / Q2 / Q3 / Q6 / R13.6）
 
 #### Scenario: 未选族时回落既有默认（R2 / R12.7）
 
-- **WHEN** 未作任何选族直接开局
-- **THEN** 回落 `MeleeSetup::new()`（本地人族 / AI 兽族），`race_does_not_change_authoritative_spawn_commands` 等既有回落基线测试仍绿、不静默放宽断言（§14）
+- **WHEN** 既有 `playable` 入口不传种族参数或不触发 overlay 确认
+- **THEN** 行为与改动前一致、回落人族段且一局仍能装配并打完（逐帧哈希与 v8 新基线一致），4 族扩展与 Q2 / Q4 机制不改变既有回落路径、不静默改既有测试（R2 / R12.7 / Q3 / Q5' / Q1'）
 
 ### Requirement: 确定性契约零冲击与内核零 diff
 
@@ -47,17 +49,19 @@
 
 ### Requirement: 范围边界与承接 P8.3 遗留
 
-本 capability SHALL 承接主 `openspec/specs/dual-faction/spec.md:106/:108-111` 明确移交的「HUD 选族可见 / 选族 UI」与「真窗口人工验收」遗留；命令卡按族分派落在 `rts-command-hud` 的 ADDED Requirement、Q3 真实两族 glTF 模型绑定落在 `runtime-entity-model-binding`（含 `w3-content::ENTITY_MODEL_FILES` 表项新增）。中文上屏 / CJK 字体、JASS / wtg VM（N5）、联机底座重做、真窗口人工验收的替代、P8.5 五个深度玩法子系统、不死 / 暗夜两族（P9+）MUST NOT 纳入本 change（§0.2 N1–N6 / §14 / R13.6 范围限定）。Q2 已拍板：选族相关键位 / 图标语义一律 `[待核]`、不冻结进 `FrozenDefinitions`、不入库（ADR 0001 / ADR 0004）。
+本 change SHALL 按用户已拍板口径做 4 族选族入口与按表扩展、不重做 R13 命令卡 / 快捷键全集；**1.0 范围张力 MUST 如实呈现、不静默窄化、不冒充已解决**：`WC3-MELEE-RULES.md:27`（S3）/ `:34`（§0）/ `:54`（§0.3 T2）/ `:223-226`（R10.2 / R10.3 / R10.4）字面「暗夜夜间隐身 / 昼夜 / 隐身反隐随迷雾纳入 1.0 一并做完」，而 P8.5e 规格门 Q2「最小闭环」曾把它们登记为「后续 change / P9+ 四族承接」（`2026-11-22-p8-fog-of-war/decision-memo.md:80,128`）。**Q4 已由用户 2026-11-22 明确拍板本期含全量（不是 AI 推荐、不是静默窄化）、Q1' 已拍板双族全量、Q4' 已拍板张力保留显式**——暗夜 overlay / 夜间隐身 / 昼夜全量按 Q2 / Q4 本期纳入、不再写「后续 change 承接」；这是已拍板后的如实登记、不是待拍板项。零资产 / `[待核]` 数值不冒充经典（R2 / ADR 0001 / §14 / Q3'）。
+
+> 身份键说明（随归档并入主 spec）：历史 `### Requirement:` / `#### Scenario:` 标题作 OpenSpec 归档合并身份键、字面保留不代表本 change 的行为断言；行为口径一律以各 Scenario 的 THEN 与本 requirement 新正文为准（参照主 `openspec/specs/gameplay-systems/spec.md:10` 与本 change `design.md` Context 末「MODIFIED delta 的身份键说明」）。
 
 #### Scenario: 承接关系清晰、不重做 R13 命令卡（S1 / S3 / R13.1）
 
-- **WHEN** 核对本 change 与 `docs/roadmap/P8-human-orc-melee.md §3 P8.4`、`dual-faction/spec.md:106/:108-111` 的承接关系
-- **THEN** 仅交付表现层选族入口、命令卡按族分派、运行时实体真实 glTF 模型绑定三项；既有 `command-hotkeys` / `rts-command-hud` 的 12 格定义表 / 键位解耦 / 两级 chords 契约不改写，不冒充已解决范围外项（C5 / C6 / Q1–Q4 已拍板）
+- **WHEN** 校验本 change 的能力边界与 R13 命令卡 / 快捷键的承接关系
+- **THEN** 4 族只经按表扩展命令卡目录 / i18n / overlay，不重写 R13 全集、不把 Q2 / Q3 新增 `GameplayCommandKind` 码 24 起塞进快捷键白名单；Q4 已拍板本期含全量机制（R10.2 / R10.3 / R10.4 / R5.6 / S3 / R8.4）按 Q2 权威状态 / Q1' 双族全量纳入、不再登记为「后续 change 承接」，但 1.0 字面「一并做完」与本期双族全量的张力按 Q4' 已拍板七处显式如实登记、不预设结论、不静默窄化 1.0 范围（S1 / S3 / R13.1 / R10.2-5 / Q1' / Q4'）
 
 #### Scenario: 零资产入库与 `[待核]` 不冒充经典（R2 / ADR 0001 / §14 / Q3 拍板）
 
-- **WHEN** 在不含 `config.toml` 与导出目录的干净环境运行**选族装配**路径
-- **THEN** 选族装配零文件 IO、零新增定义 / 依赖 / 资产入库，两族差异是既有 `[取舍]` 合成原创常量相对大小，不复制参考项目单位名 / 数值 / rawcode、不冒充经典事实；Q3 真实 glTF 一律留 gitignored 本机、不入库（`w3-content` 仅 `ENTITY_MODEL_FILES` 表项新增，见 `runtime-entity-model-binding`）；N1–N6 不纳入，联机 / 回放 / AI 玩家 / 迷雾是已在能力或 1.0 范围、不是不做项
+- **WHEN** 在干净环境运行 4 族选族装配并核对常量落点
+- **THEN** 零文件 IO / 零资产入库，4 族文案 / 数值为 `[待核]` 合成原创常量、不冒充原版；按 Q2 / Q3 已拍板 `SNAPSHOT_VERSION` bump 8、族特色机制冻结常量经 `compute_defs_hash` 进 `defs_hash` / `content_hash` 快照头部，两套昼夜常量口径未统一与全量机制 B 类 `[待核]` 数值按 Q3' 已拍板由人核对（实施期数值核对、非规格门待拍板范围 / 架构 Q）、不静默改规则（R2 / ADR 0001 / ADR 0004 / §14 / Q2 / Q3 / Q3'）
 
 ### Requirement: CPU 回归与反向验证
 

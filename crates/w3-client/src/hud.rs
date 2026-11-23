@@ -492,7 +492,7 @@ pub struct HudItemShopFact {
 /// 只从只读 [`w3_core::Snapshot::item_shop`] 的 `bags` / `stock` / `casts` /
 /// `facts` 与 `drain_events()` 的十一类事实事件拷贝派生：六格背包、货架库存、
 /// 回城施法进度、购买 / 拾取 / 使用 / 拒单事实都只是整数值拷贝。本结构不持有
-/// `RtsMatch`，结构上无法反写模拟状态，也不进入 FNV-1a 状态哈希、v7 快照或
+/// `RtsMatch`，结构上无法反写模拟状态，也不进入 FNV-1a 状态哈希、v8 快照或
 /// `first_difference()`（ADR 0002 §5 / R10.5 / R13.5）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ItemShopHudModel {
@@ -620,7 +620,7 @@ impl ItemShopHudModel {
 /// 与 `ReviveHudModel` / `TownHallUpgradeHudModel` / `CreepCampHudModel` /
 /// `ItemShopHudModel` 同构：只消费只读 `Snapshot`、事实事件拷贝与表现层本地
 /// [`FogGrid`] 的 owned 值拷贝，不持有 `RtsMatch`，结构上无法反写模拟状态。
-/// 本结构 MUST NOT 进 FNV-1a 状态哈希、v7 快照或 `first_difference()`。
+/// 本结构 MUST NOT 进 FNV-1a 状态哈希、v8 快照或 `first_difference()`。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FogHudModel {
     /// 最近一次只读快照帧号。
@@ -1798,6 +1798,9 @@ fn draw_faction_overlay(
             ));
             ui.separator();
 
+            // P9 / Q1'：选族 overlay 本地 / AI 席位各 4 族按钮，文案全部
+            // 走 i18n 边界（不进日志 / 权威状态 / 状态哈希）。点击只回传
+            // `Option<Race>` 表现层只读状态，由 `ClientApp` 装配期处理。
             ui.label(texts.faction_local);
             ui.horizontal(|ui| {
                 if ui.button(texts.faction_human).clicked() {
@@ -1805,6 +1808,12 @@ fn draw_faction_overlay(
                 }
                 if ui.button(texts.faction_orc).clicked() {
                     interaction.faction_local = Some(Race::Orc);
+                }
+                if ui.button(texts.faction_undead).clicked() {
+                    interaction.faction_local = Some(Race::Undead);
+                }
+                if ui.button(texts.faction_night_elf).clicked() {
+                    interaction.faction_local = Some(Race::NightElf);
                 }
             });
 
@@ -1816,6 +1825,12 @@ fn draw_faction_overlay(
                 if ui.button(texts.faction_orc).clicked() {
                     interaction.faction_ai = Some(Race::Orc);
                 }
+                if ui.button(texts.faction_undead).clicked() {
+                    interaction.faction_ai = Some(Race::Undead);
+                }
+                if ui.button(texts.faction_night_elf).clicked() {
+                    interaction.faction_ai = Some(Race::NightElf);
+                }
             });
 
             ui.separator();
@@ -1826,10 +1841,14 @@ fn draw_faction_overlay(
 }
 
 /// 选族的只读 ASCII 展示标签（走 i18n 边界，不进日志 / 权威状态 / 哈希）。
+/// P9 / Q1' 四族标签按 `match Race` 单一查表点分派，MUST NOT 散落
+/// `if race` 白名单；`Texts` 常量由 i18n 层提供，中文上屏留后续 change。
 fn race_label(race: Race, texts: &Texts) -> &'static str {
     match race {
         Race::Human => texts.faction_human,
         Race::Orc => texts.faction_orc,
+        Race::Undead => texts.faction_undead,
+        Race::NightElf => texts.faction_night_elf,
     }
 }
 
@@ -1965,5 +1984,24 @@ mod tests {
         assert!(minimap_backdrop(&image, 0).colors.is_empty());
         // 网格数大于像素数时仍不 panic、尺寸正确。
         assert_eq!(minimap_backdrop(&image, 16).colors.len(), 256);
+    }
+
+    /// P9 / Q1'：四族选族标签全部走 i18n 边界（只读、互不重复），
+    /// 不进日志 / 权威状态 / 状态哈希；`race_label` 单一 `match Race` 查表。
+    #[test]
+    fn four_race_labels_are_i18n_read_only() {
+        use crate::i18n::ZH;
+        let labels: [&str; 4] = [
+            race_label(Race::Human, &ZH),
+            race_label(Race::Orc, &ZH),
+            race_label(Race::Undead, &ZH),
+            race_label(Race::NightElf, &ZH),
+        ];
+        assert_eq!(labels[0], ZH.faction_human);
+        assert_eq!(labels[1], ZH.faction_orc);
+        assert_eq!(labels[2], ZH.faction_undead);
+        assert_eq!(labels[3], ZH.faction_night_elf);
+        let distinct: BTreeSet<&str> = labels.into_iter().collect();
+        assert_eq!(distinct.len(), 4, "reason=four_race_labels_distinct");
     }
 }

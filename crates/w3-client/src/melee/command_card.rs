@@ -5,17 +5,19 @@
 //! `slot = y * 4 + x` 落格，键位字母与命令语义解耦。当前卡由「选中集合类型 +
 //! 表现层子菜单栈」决定，每次换卡重建「键 → action」表。
 //!
-//! 硬红线（ADR 0001 / ADR 0002 / C6）：
+//! 硬红线（ADR 0001 / ADR 0002 / C6 / P9 Q1'）：
 //! - 全表为合成 / 原创编译期整数常量，零文件 IO、零真实导出 JSON、
 //!   零新增依赖，**不冻结进 `FrozenDefinitions`**；具体经典键位字母一律
 //!   `[待核 / 待用户拍板]`、以本机导出 SLK 命令卡热键字段或原版客户端核对，
 //!   不冒充原版、不照搬 Warsmash rawcode / 暴雪 abilId / 参考项目原创单位名。
 //! - 按钮标识 `def_id` 是表现层装配用的合成整数命名空间（避开冻结定义的
-//!   `1xx` / `2xx` / `9xx` 段与类别内唯一 ID），**不是权威 `DefId`**，
-//!   MUST NOT 进入权威状态 / FNV-1a 状态哈希 / `SNAPSHOT_VERSION`（当前 7）
-//!   快照；命令卡 12 格、键→action 表、子菜单栈全是 HUD 只读派生。
+//!   `1xx` / `2xx` / `3xx` / `4xx` / `9xx` 段与类别内唯一 ID），**不是权威
+//!   `DefId`**，MUST NOT 进入权威状态 / FNV-1a 状态哈希 /
+//!   `SNAPSHOT_VERSION`（当前 8）快照；命令卡 12 格、键→action 表、
+//!   子菜单栈全是 HUD 只读派生。
 //! - 第二键列表由定义表记录驱动，MUST NOT 用建筑名字符串硬编码白名单
-//!   （R1.2 / R13.3）；人族六类新单位 / 建筑各有定义表条目。
+//!   （R1.2 / R13.3）；四族各类新单位 / 建筑各有定义表条目，定义表
+//!   4 行 × 9 列按 [`race_row`] 单一 `match Race` 查表点分派。
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,8 +26,12 @@ use w3_core::{DefId, FrozenDefinitions, TownHallTier};
 use super::defs::{
     BARRACKS, GOLD_MINE, HUMAN_ALTAR, HUMAN_BARRACKS, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT,
     HUMAN_RANGED, HUMAN_SIEGE, HUMAN_SMITHY, HUMAN_SOLDIER, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE,
-    NEUTRAL_TREE, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_PEASANT, ORC_RANGED, ORC_SIEGE,
-    ORC_SMITHY, ORC_SOLDIER, ORC_TOWN_HALL, PEASANT, Race, SOLDIER, TOWN_HALL, TREE,
+    NEUTRAL_TREE, NIGHT_ELF_ALTAR, NIGHT_ELF_BARRACKS, NIGHT_ELF_FARM, NIGHT_ELF_HERO,
+    NIGHT_ELF_PEASANT, NIGHT_ELF_RANGED, NIGHT_ELF_SIEGE, NIGHT_ELF_SMITHY, NIGHT_ELF_SOLDIER,
+    NIGHT_ELF_TOWN_HALL, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_PEASANT, ORC_RANGED,
+    ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER, ORC_TOWN_HALL, PEASANT, Race, SOLDIER, TOWN_HALL, TREE,
+    UNDEAD_ALTAR, UNDEAD_BARRACKS, UNDEAD_FARM, UNDEAD_HERO, UNDEAD_PEASANT, UNDEAD_RANGED,
+    UNDEAD_SIEGE, UNDEAD_SMITHY, UNDEAD_SOLDIER, UNDEAD_TOWN_HALL,
 };
 
 /// 命令卡列数。
@@ -235,8 +241,9 @@ impl TrainCategory {
     }
 }
 
-/// 定义表行数：两族各一行（人族 `1xx` / 兽族 `2xx`）。
-pub const RACE_ROWS: usize = 2;
+/// 定义表行数：四族各一行（人族 `1xx` / 兽族 `2xx` / 不死 `3xx` /
+/// 暗夜 `4xx`，P9 / Q1' 双族全量）。
+pub const RACE_ROWS: usize = 4;
 
 /// 按族只读查表的编译期整数 `DefId` 定义表类型：行 = 种族段，列 = 目标类别。
 ///
@@ -246,11 +253,12 @@ pub const RACE_ROWS: usize = 2;
 /// （ADR 0001 / ADR 0004 / Q2 拍板 `[待核]`）。
 pub type RaceTargetTable = [[Option<DefId>; TrainCategory::COUNT]; RACE_ROWS];
 
-/// 两族训练 / 建造目标定义表（编译期常量）。
+/// 四族训练 / 建造目标定义表（编译期常量）。
 ///
-/// 人族行全部落在 `1xx` 段、兽族行全部落在 `2xx` 段；Producer / Build /
-/// Train 卡的 `TrainUnit { unit_def, .. }` 一律经本表查表得到，MUST NOT
-/// 在卡片构造处写死某一族的 `DefId`（Q2 / R2 / R4 / R13.3）。
+/// 人族行全部落在 `1xx` 段、兽族行 `2xx`、不死行 `3xx`、暗夜行 `4xx`；
+/// Producer / Build / Train 卡的 `TrainUnit { unit_def, .. }` 一律经本表
+/// 查表得到，MUST NOT 在卡片构造处写死某一族的 `DefId`（Q2 / R2 / R4 /
+/// R13.3 / Q1'）。行序与 [`race_row`] 的查表映射一一对应。
 pub const RACE_TRAIN_TARGETS: RaceTargetTable = [
     [
         Some(HUMAN_SOLDIER),
@@ -274,6 +282,28 @@ pub const RACE_TRAIN_TARGETS: RaceTargetTable = [
         Some(ORC_SMITHY),
         Some(ORC_TOWN_HALL),
     ],
+    [
+        Some(UNDEAD_SOLDIER),
+        Some(UNDEAD_RANGED),
+        Some(UNDEAD_SIEGE),
+        Some(UNDEAD_HERO),
+        Some(UNDEAD_ALTAR),
+        Some(UNDEAD_FARM),
+        Some(UNDEAD_BARRACKS),
+        Some(UNDEAD_SMITHY),
+        Some(UNDEAD_TOWN_HALL),
+    ],
+    [
+        Some(NIGHT_ELF_SOLDIER),
+        Some(NIGHT_ELF_RANGED),
+        Some(NIGHT_ELF_SIEGE),
+        Some(NIGHT_ELF_HERO),
+        Some(NIGHT_ELF_ALTAR),
+        Some(NIGHT_ELF_FARM),
+        Some(NIGHT_ELF_BARRACKS),
+        Some(NIGHT_ELF_SMITHY),
+        Some(NIGHT_ELF_TOWN_HALL),
+    ],
 ];
 
 /// 缺表项 / 未知族的明确默认回落（人族段编译期整数常量）。
@@ -292,14 +322,18 @@ pub const DEFAULT_COMMAND_TARGETS: [DefId; TrainCategory::COUNT] = [
     HUMAN_TOWN_HALL,
 ];
 
-/// 本地族 → 定义表行（唯一一处 `match race`，新增族只改定义表与此映射）。
+/// 本地族 → 定义表行（**唯一一处 `match race`**，四族查表点）。
 ///
 /// 这是表索引查表、不是玩法规则分支：卡片构造处一律通过
-/// [`table_target`] 取目标，MUST NOT 散落 `if race { HUMAN_* } else { ORC_* }`。
+/// [`table_target`] 取目标，MUST NOT 散落 `if race { HUMAN_* } else { ORC_* }`
+/// 白名单（R1.2 / R13.3 / D6）。P9 / Q1' 扩为四行，人族 / 兽族行序不变，
+/// 新增不死 / 暗夜两行只改定义表与此映射。
 const fn race_row(race: Race) -> usize {
     match race {
         Race::Human => 0,
         Race::Orc => 1,
+        Race::Undead => 2,
+        Race::NightElf => 3,
     }
 }
 
@@ -339,10 +373,11 @@ impl CommandCatalog {
         Self::for_race(Race::Human)
     }
 
-    /// 按本地族只读查表构造目录（Q2 生产入口）。
+    /// 按本地族只读查表构造目录（Q2 / Q1' 生产入口）。
     ///
-    /// 目标 `DefId` 全部来自 [`RACE_TRAIN_TARGETS`]：人族 `1xx` / 兽族 `2xx`。
-    /// 卡片 12 格 / `slot = y * 4 + x` / 键位解耦 / 两级 chords / 子菜单栈 /
+    /// 目标 `DefId` 全部来自 [`RACE_TRAIN_TARGETS`] 四行：人族 `1xx` /
+    /// 兽族 `2xx` / 不死 `3xx` / 暗夜 `4xx`。卡片 12 格 /
+    /// `slot = y * 4 + x` / 键位解耦 / 两级 chords / 子菜单栈 /
     /// `Esc` 取消一律原样保留（不是重做 R13 命令卡，C5 / C8）。
     pub fn for_race(race: Race) -> Self {
         Self::for_race_with_targets(race, RACE_TRAIN_TARGETS)
@@ -552,10 +587,10 @@ impl CommandCatalog {
             cards.insert(card.id, card);
         }
 
-        // `DefId → 选中集合类型` 查表：覆盖既有 6 基线、人兽两族段、
-        // P8.1 人族六类与 P8.2 兽族六类新定义（Q2 补齐两族登记，design
-        // 「逐锚核对差异」差异 2）；未登记 `DefId` 由 `kind_of` 回退通用
-        // 类型，运行时动态实体也能按只读查表派生（Risks / tasks 1.4）。
+        // `DefId → 选中集合类型` 查表：覆盖既有 6 基线、四族段、
+        // P8.1 人族六类、P8.2 兽族六类与 P9 不死 `3xx` / 暗夜 `4xx`
+        // 双族新定义（Q1' / Q2 按表补齐四族登记）；未登记 `DefId` 由
+        // `kind_of` 回退通用类型，运行时动态实体也能按只读查表派生。
         // 表只读派生，MUST NOT 反写权威状态 / 进哈希 / 快照（ADR 0002）。
         let def_kinds: BTreeMap<DefId, CardKind> = [
             (SOLDIER, CardKind::Combat),
@@ -584,6 +619,26 @@ impl CommandCatalog {
             (ORC_ALTAR, CardKind::Producer),
             (ORC_SMITHY, CardKind::Producer),
             (ORC_HERO, CardKind::Hero),
+            (UNDEAD_PEASANT, CardKind::Worker),
+            (UNDEAD_SOLDIER, CardKind::Combat),
+            (UNDEAD_TOWN_HALL, CardKind::Producer),
+            (UNDEAD_BARRACKS, CardKind::Producer),
+            (UNDEAD_RANGED, CardKind::Combat),
+            (UNDEAD_SIEGE, CardKind::Combat),
+            (UNDEAD_FARM, CardKind::Producer),
+            (UNDEAD_ALTAR, CardKind::Producer),
+            (UNDEAD_SMITHY, CardKind::Producer),
+            (UNDEAD_HERO, CardKind::Hero),
+            (NIGHT_ELF_PEASANT, CardKind::Worker),
+            (NIGHT_ELF_SOLDIER, CardKind::Combat),
+            (NIGHT_ELF_TOWN_HALL, CardKind::Producer),
+            (NIGHT_ELF_BARRACKS, CardKind::Producer),
+            (NIGHT_ELF_RANGED, CardKind::Combat),
+            (NIGHT_ELF_SIEGE, CardKind::Combat),
+            (NIGHT_ELF_FARM, CardKind::Producer),
+            (NIGHT_ELF_ALTAR, CardKind::Producer),
+            (NIGHT_ELF_SMITHY, CardKind::Producer),
+            (NIGHT_ELF_HERO, CardKind::Hero),
             (NEUTRAL_GOLD_MINE, CardKind::Resource),
             (NEUTRAL_TREE, CardKind::Resource),
         ]
@@ -735,12 +790,13 @@ mod tests {
 
     use crate::melee::defs::{
         HUMAN_ALTAR, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT, HUMAN_RANGED, HUMAN_SIEGE,
-        HUMAN_SMITHY, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE,
+        HUMAN_SMITHY, HUMAN_SOLDIER, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE, NIGHT_ELF_SOLDIER,
+        ORC_SOLDIER, Race, UNDEAD_SOLDIER,
     };
 
     use super::{
         ButtonDef, CARD_SLOTS, CardCommand, CardId, CardKind, CommandCatalog, GRID_HEIGHT,
-        GRID_WIDTH, slot,
+        GRID_WIDTH, RACE_ROWS, RACE_TRAIN_TARGETS, RaceTargetTable, TrainCategory, slot,
     };
 
     /// 人族六类新 `DefId`（tasks 1.4：各有定义表条目）。
@@ -862,6 +918,125 @@ mod tests {
         assert_eq!(
             catalog.primary_card(&[CardKind::Combat, CardKind::Producer]),
             CardId::Producer
+        );
+    }
+
+    /// P9 Q1'：定义表 4 行 × 9 列，四族各自 `for_race` 查表产出本族段
+    /// 训练目标；`def_kinds` 四族登记齐全（3.5）。无 `if race` 白名单。
+    #[test]
+    fn four_race_rows_dispatch_to_own_segment() {
+        assert_eq!(RACE_ROWS, 4);
+        assert_eq!(RACE_TRAIN_TARGETS.len(), 4);
+        let segments: [(Race, std::ops::Range<DefId>, DefId); 4] = [
+            (Race::Human, 100..200, HUMAN_SOLDIER),
+            (Race::Orc, 200..300, ORC_SOLDIER),
+            (Race::Undead, 300..400, UNDEAD_SOLDIER),
+            (Race::NightElf, 400..500, NIGHT_ELF_SOLDIER),
+        ];
+        for (race, segment, soldier) in segments {
+            let catalog = CommandCatalog::for_race(race);
+            let targets = catalog.trained_def_ids();
+            assert!(
+                !targets.is_empty(),
+                "reason=catalog_not_empty race={race:?}"
+            );
+            assert!(
+                targets.iter().all(|id| segment.contains(id)),
+                "reason=all_targets_in_race_segment race={race:?}"
+            );
+            assert!(
+                targets.contains(&soldier),
+                "reason=soldier_target_present race={race:?} def={soldier}"
+            );
+            // 定义表登记：四族工人 / 主城都能查到选中集合类型。
+            assert_eq!(catalog.kind_of(race.peasant()), CardKind::Worker);
+            assert_eq!(catalog.kind_of(race.town_hall()), CardKind::Producer);
+            assert_eq!(catalog.kind_of(race.hero()), CardKind::Hero);
+        }
+        // 表四行逐行 9 列全 `Some`，且四行目标两两不相交。
+        for row in RACE_TRAIN_TARGETS {
+            assert!(row.iter().all(Option::is_some));
+        }
+        let rows: Vec<BTreeSet<DefId>> = RACE_TRAIN_TARGETS
+            .iter()
+            .map(|row| row.iter().filter_map(|id| *id).collect())
+            .collect();
+        for (index, a) in rows.iter().enumerate() {
+            for b in rows.iter().skip(index + 1) {
+                assert!(a.is_disjoint(b), "reason=race_rows_disjoint");
+            }
+        }
+    }
+
+    /// 被反向验证的断言：给定族的命令卡训练目标全部落在该族段内
+    /// （四族按表分派的形式化判据）。
+    fn catalog_targets_own_segment(catalog: &CommandCatalog, race: Race) -> bool {
+        let (lo, hi) = match race {
+            Race::Human => (100, 200),
+            Race::Orc => (200, 300),
+            Race::Undead => (300, 400),
+            Race::NightElf => (400, 500),
+        };
+        let targets = catalog.trained_def_ids();
+        !targets.is_empty() && targets.iter().all(|id| (lo..hi).contains(id))
+    }
+
+    /// 退化定义表（缺陷态 1：「散落 `if race` 白名单」）：四行都写死
+    /// 人族目标（等价旧实现「所有族都返回 `HUMAN_*`」），仍经真实
+    /// [`CommandCatalog::for_race_with_targets`] 生产路径注入，非旁路模拟。
+    fn degenerate_human_only_table() -> RaceTargetTable {
+        [RACE_TRAIN_TARGETS[0]; RACE_ROWS]
+    }
+
+    /// 退化定义表（缺陷态 2：「`RACE_TRAIN_TARGETS` 缺行 / 回落静默」）：
+    /// 不死 / 暗夜两行整行 `None`，模拟新族行缺登记且静默回落到人族段。
+    fn degenerate_missing_p9_rows_table() -> RaceTargetTable {
+        let mut table = RACE_TRAIN_TARGETS;
+        table[2] = [None; TrainCategory::COUNT];
+        table[3] = [None; TrainCategory::COUNT];
+        table
+    }
+
+    /// 反向验证·修复态（形态①）：正式四族查表目录全部通过「本族段」断言。
+    #[test]
+    fn reverse_validation_four_race_formal_passes_own_segment() {
+        for race in [Race::Human, Race::Orc, Race::Undead, Race::NightElf] {
+            assert!(
+                catalog_targets_own_segment(&CommandCatalog::for_race(race), race),
+                "reason=formal_four_race_passes race={race:?}"
+            );
+        }
+    }
+
+    /// 反向验证·缺陷态（形态①，元断言防退化）：退化实现「散落白名单」
+    /// 与「缺行 / 回落静默」在 `for_race_with_targets` 生产路径下，令
+    /// 不死 / 暗夜族的「本族段」断言必然失败；正式实现仍通过（元断言）。
+    /// 退化实现须真经 `race_row()` / `table_target` 生产路径，非旁路模拟。
+    #[test]
+    fn reverse_validation_whitelist_and_missing_rows_degenerate_fail_the_same_assertion() {
+        let white = degenerate_human_only_table();
+        let missing = degenerate_missing_p9_rows_table();
+        for race in [Race::Undead, Race::NightElf] {
+            let degenerate_white = CommandCatalog::for_race_with_targets(race, white);
+            let degenerate_missing = CommandCatalog::for_race_with_targets(race, missing);
+            assert!(
+                !catalog_targets_own_segment(&degenerate_white, race),
+                "reason=whitelist_degenerate_must_fail race={race:?}"
+            );
+            assert!(
+                !catalog_targets_own_segment(&degenerate_missing, race),
+                "reason=missing_rows_degenerate_must_fail race={race:?}"
+            );
+            // 元断言：正式实现仍通过，证明缺陷被抓出而非断言失效。
+            assert!(catalog_targets_own_segment(
+                &CommandCatalog::for_race(race),
+                race
+            ));
+        }
+        // 人族行不受退化影响（退化只破坏新族分派，不污染人族基线）。
+        assert_eq!(
+            CommandCatalog::for_race_with_targets(Race::Human, white),
+            CommandCatalog::standard()
         );
     }
 }

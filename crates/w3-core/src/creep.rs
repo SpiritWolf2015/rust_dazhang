@@ -391,7 +391,7 @@ pub struct CreepDeathNotice {
 ///
 /// 全部落 `BTreeMap` / `BTreeSet` 确定性有序容器，按稳定 `EntityId` /
 /// `u32` / `u64` 键顺序遍历；MUST 同时进入 FNV-1a 状态哈希、由
-/// `SNAPSHOT_VERSION`(7) 定义的快照与 `first_difference()`
+/// `SNAPSHOT_VERSION`（当前 8）定义的快照与 `first_difference()`
 /// （ADR 0002 §6-8 / `CODEBUDDY.md §5` / D1 / D5）。
 /// P8.5d 起 `item_instances` 追加 `holder` / `slot`，与
 /// `ItemShopState.bags` 同属单一实例身份口径（Q7）。

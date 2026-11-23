@@ -5,7 +5,7 @@
 //! - 60 Hz 与 144 Hz 两种重绘节奏喂同一命令脚本，逐帧帧号与 `compute_state_hash()`
 //!   完全一致，且与「每帧直接 step」的 30 Hz 基准实例一致；
 //! - 不同 `alpha` 连续插值、事件重复投递后，权威状态哈希与快照字节不变，
-//!   快照版本仍为 7（头部含 `defs_hash` / `content_hash`）；
+//!   快照版本仍为 8（头部含 `defs_hash` / `content_hash`）；
 //! - `FrameProducer::next_frame()` 只交出当前只读视图，MUST NOT 推进模拟；
 //! - 追帧有显式上限且超限被明确报告，累加器只数整数帧步长。
 
@@ -176,7 +176,7 @@ fn interpolation_alpha_keeps_state_hash_and_snapshot_bytes() {
     let snapshot_before = client.sim().capture_snapshot();
     let bytes_before = snapshot_bytes(&snapshot_before);
     assert_eq!(snapshot_before.version, SNAPSHOT_VERSION);
-    assert_eq!(SNAPSHOT_VERSION, 7);
+    assert_eq!(SNAPSHOT_VERSION, 8);
     assert_eq!(snapshot_before.content_hash, CONTENT_HASH);
 
     let mut scene = Scene::default();
@@ -254,5 +254,64 @@ fn catch_up_frames_are_capped_and_reported() {
     assert!(
         accumulator.pending_ticks() < TICKS_PER_LOGIC_FRAME,
         "remainder must converge below one frame"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// tasks 4.2（client 侧）：同脚本两实例逐帧一致 + v8 新基线
+// ---------------------------------------------------------------------------
+
+/// 两个相同冻结命令脚本的实例逐帧推进，逐帧 `compute_state_hash()` /
+/// `capture_snapshot()` 字节相等、`first_difference()` 为 `None`，快照 v8
+/// 且头部 `defs_hash` / `content_hash` 一致；60 Hz / 144 Hz 回放逐帧帧号与
+/// 哈希一致且与 30 Hz 基准一致。MUST NOT 断言改动前 v7 旧基线数值相等
+/// （新增权威状态 + 定义层内容变化 + bump 8 后 golden hash 已重取）。
+#[test]
+fn replay_two_instances_match_frame_by_frame_with_v8_snapshot_and_first_difference() {
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_v8");
+    let mut a = seeded_client();
+    let mut b = seeded_client();
+    for frame in 0..24 {
+        a.advance_one_frame();
+        b.advance_one_frame();
+        assert_eq!(
+            a.sim().compute_state_hash(),
+            b.sim().compute_state_hash(),
+            "reason=replay_frame_hash_match frame={frame}"
+        );
+        let snapshot_a = a.sim().capture_snapshot();
+        let snapshot_b = b.sim().capture_snapshot();
+        assert_eq!(
+            snapshot_a, snapshot_b,
+            "reason=replay_frame_snapshot_match frame={frame}"
+        );
+        assert_eq!(
+            snapshot_a.version, SNAPSHOT_VERSION,
+            "reason=replay_snapshot_v8 frame={frame}"
+        );
+        assert_eq!(
+            snapshot_a.defs_hash, snapshot_b.defs_hash,
+            "reason=replay_defs_hash_match frame={frame}"
+        );
+        assert_eq!(
+            snapshot_a.content_hash, CONTENT_HASH,
+            "reason=replay_content_hash_header frame={frame}"
+        );
+        assert_eq!(
+            a.sim().first_difference(b.sim()),
+            None,
+            "reason=replay_first_difference_none frame={frame}"
+        );
+    }
+    // 双刷新率（60 Hz / 144 Hz）回放逐帧帧号与哈希一致，且与 30 Hz 基准一致。
+    let seconds = 2;
+    let at_60 = replay(60, seconds);
+    let at_144 = replay(144, seconds);
+    let reference = baseline(u64::from(LOGIC_FPS) * seconds);
+    assert_eq!(at_60, at_144, "reason=replay_60hz_144hz_match");
+    assert_eq!(at_60, reference, "reason=replay_matches_30hz_baseline");
+    assert!(
+        at_60.windows(2).any(|pair| pair[0].1 != pair[1].1),
+        "reason=replay_actually_advanced"
     );
 }

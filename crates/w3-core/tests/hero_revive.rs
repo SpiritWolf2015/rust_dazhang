@@ -814,11 +814,11 @@ fn new_revive_fields_are_hashed_and_snapshot_safe() {
 }
 
 /// Q1：旧版本快照被 `SnapshotError` 明确拒绝，且 `SNAPSHOT_VERSION` /
-/// `SIM_VERSION` 已随 P8.5d bump 到 7（v3 / v4 / v5 / v6 均属旧版本，不提供迁移）。
+/// `SIM_VERSION` 已随 P9 bump 到 8（v3 / v4 / v5 / v6 / v7 均属旧版本，不提供迁移）。
 #[test]
 fn old_v3_snapshot_is_rejected() {
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
-    assert_eq!(SIM_VERSION, 7, "reason=sim_version_7");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
+    assert_eq!(SIM_VERSION, 8, "reason=sim_version_8");
     let (sim, content) = dead_hero_match(100_000, 100_000);
     let mut old = sim.capture_snapshot();
     old.version = 3;
@@ -832,7 +832,7 @@ fn old_v3_snapshot_is_rejected() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 3,
-            expected: 7
+            expected: 8
         })
     ));
 }

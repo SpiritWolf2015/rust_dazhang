@@ -250,7 +250,7 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
         EventKind::TownHallUpgradeCancelled => {}
         // P8.5c 野怪营地 / leash / 掉落六个事实事件：营地 / 野怪 / 中立归属 /
         // 掉落 / 地面物品 / 击杀收益 / 随机码消费序列全是 `w3-core` 顶层权威
-        // 状态，只由 `RtsMatch` 写入并进 FNV-1a 状态哈希 / v7 快照；HUD 从
+        // 状态，只由 `RtsMatch` 写入并进 FNV-1a 状态哈希 / v8 快照；HUD 从
         // 只读 `Snapshot.creep_camps` 派生。本场景不持有权威句柄、无对应动画
         // 序列，故六类事件一律幂等 no-op，重复投递按 sequence 去重吸收，
         // MUST NOT 改哈希 / 快照 / `first_difference()`（ADR 0002 §5 / D7）。
@@ -263,7 +263,7 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
         // P8.5d 物品 / 商店 / 回城十一类事实事件：六格实例背包 / 货架库存 /
         // 拾取购买使用丢弃移交售卖事实 / 回城施法 / 市场刷新消费序列全部是
         // `w3-core` 顶层权威状态，只由 `RtsMatch` 写入并进 FNV-1a 状态哈希 /
-        // v7 快照；HUD 从只读 `Snapshot.item_shop` 派生。本场景不持有权威
+        // v8 快照；HUD 从只读 `Snapshot.item_shop` 派生。本场景不持有权威
         // 句柄、无对应动画序列，故十一类事件一律幂等 no-op，重复投递按
         // sequence 去重吸收，MUST NOT 改哈希 / 快照 / `first_difference()`
         //（ADR 0002 §5 / D7 / R10.5）。
@@ -278,6 +278,36 @@ fn apply_event(instance: &mut Instance, event: &Event, library: &ModelLibrary) {
         | EventKind::TownPortalCancelled
         | EventKind::MarketRefreshed
         | EventKind::ItemShopCommandRejected => {}
+        // P9 / Q2 / Q4 族特色机制二十二类只读事实事件：腐地 / 尸体 /
+        // 金矿 / 古树 / 月亮井 / 隐身反隐 / 夜间隐身 / 视线阻挡 / 野怪睡眠 /
+        // 回血条件 / 昼夜相位全部是 `w3-core` 顶层权威状态，只由 `RtsMatch`
+        // 写入并进 FNV-1a 状态哈希 / v8 快照；HUD 从只读
+        // `Snapshot.faction_mechanics` 派生。本场景不持有权威句柄、无对应
+        // 动画序列，故一律幂等 no-op，重复投递按 sequence 去重吸收，
+        // MUST NOT 改哈希 / 快照 / `first_difference()`，MUST NOT 反写
+        // fog 可见性（ADR 0002 §5 / D7 / R10.5 / §0.3 T3）。
+        EventKind::BlightSeeded
+        | EventKind::CorpseRaised
+        | EventKind::CorpseConsumed
+        | EventKind::GoldMineHaunted
+        | EventKind::GoldMineEntangled
+        | EventKind::AncientRootChanged
+        | EventKind::MoonWellBound
+        | EventKind::StealthTargetChanged
+        | EventKind::DetectorRegistered
+        | EventKind::NightCloakChanged
+        | EventKind::SightBlockerChanged
+        | EventKind::CreepSleepRegistered
+        | EventKind::RegenConditionChanged
+        | EventKind::DayNightPhaseChanged
+        | EventKind::StealthRevealed
+        | EventKind::BlightExpanded
+        | EventKind::CorpseDecayed
+        | EventKind::MineSettled
+        | EventKind::RegenApplied
+        | EventKind::CreepSleepChanged
+        | EventKind::NightCloakApplied
+        | EventKind::FactionMechanicRejected => {}
     }
 }
 

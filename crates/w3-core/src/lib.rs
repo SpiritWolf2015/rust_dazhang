@@ -21,6 +21,7 @@ pub mod angle;
 pub mod command;
 pub mod creep;
 pub mod entity;
+pub mod faction_mechanics;
 pub mod fixed;
 pub mod frame;
 pub mod gameplay;
@@ -39,6 +40,11 @@ pub use creep::{
     KillReward, LeashPhase, NEUTRAL_OWNER, NeutralCategory, RngDraw, SYNTHETIC_CREEP_CONSTANTS,
 };
 pub use entity::{EntityId, EntityStore};
+pub use faction_mechanics::{
+    DayNightClock, DayNightPhase, FACTION_HASHED_FIELDS, FactionFact, FactionFactKind,
+    FactionMechanicsConstants, FactionMechanicsState, MineKind, MineRecord, RegenCondition,
+    RegenRecord, SYNTHETIC_FACTION_MECHANICS, StealthRecord,
+};
 pub use fixed::{FRACTIONAL_BITS, FixedError, SCALE, SimFixed, isqrt};
 pub use frame::{Frame, FrameClock};
 pub use gameplay::{

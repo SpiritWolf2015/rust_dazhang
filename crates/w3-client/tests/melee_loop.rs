@@ -22,8 +22,8 @@ use w3_client::{
 };
 use w3_core::{
     Command, CommandKind, DefId, EffectKind, EntityId, Frame, FrozenDefinitions, GameplayCommand,
-    GameplayCommandKind, MatchConfig, PositionRecord, RtsMatch, SNAPSHOT_VERSION, Snapshot,
-    UnitDef,
+    GameplayCommandKind, MatchConfig, PositionRecord, RegenCondition, RtsMatch, SNAPSHOT_VERSION,
+    Snapshot, UnitDef,
 };
 
 const SEED: u64 = 0x5eed;
@@ -558,15 +558,17 @@ fn play_full_match(setup: &MeleeSetup) -> (Vec<u64>, Snapshot) {
     (hashes, snapshot)
 }
 
-/// 两族参数各装配一局并打完，逐帧哈希与快照字节与「未传种族参数」基线一致
+/// 四族参数各装配一局并打完，逐帧哈希与快照字节与「未传种族参数」基线一致
 /// （design D2：种族选择不引入运行时权威状态，`SNAPSHOT_VERSION` 仍为 3；P8.5a 起为 4、
-/// P8.5b 起为 5、P8.5c 起为 6、P8.5d 起为 7；本行属历史沿革叙述，按先例保留并加夹注）。
+/// P8.5b 起为 5、P8.5c 起为 6、P8.5d 起为 7、P9 起为 8；本行属历史沿革叙述，按先例保留并加夹注）。
+/// P9 / Q1' 扩到四族：`play_full_match` 只用基线 `BARRACKS` / `SOLDIER`
+/// DefId、`horizon=0` 不注入 AI，种族只停装配层，逐帧哈希族无关。
 #[test]
-fn both_races_play_full_match_with_baseline_frame_hashes() {
+fn four_races_play_full_match_with_baseline_frame_hashes() {
     let baseline = play_full_match(&MeleeSetup::new());
     assert!(!baseline.0.is_empty(), "基线必须含逐帧哈希");
 
-    for race in [Race::Human, Race::Orc] {
+    for race in [Race::Human, Race::Orc, Race::Undead, Race::NightElf] {
         let (hashes, snapshot) = play_full_match(&MeleeSetup::with_race(race));
         assert_eq!(
             hashes, baseline.0,
@@ -1109,7 +1111,7 @@ fn play_human_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// 人族 P8.1 完整一局与基线一致：逐帧状态哈希与 `capture_snapshot()`
-/// 快照逐条相等，快照仍为 v7、冻结定义内容哈希仍由 `defs_hash` 承载。
+/// 快照逐条相等，快照仍为 v8、冻结定义内容哈希仍由 `defs_hash` 承载。
 #[test]
 fn human_full_match_matches_baseline_and_restart_is_clean() {
     let baseline = play_human_full_match(&MeleeSetup::new());
@@ -1127,9 +1129,9 @@ fn human_full_match_matches_baseline_and_restart_is_clean() {
             .snapshots
             .iter()
             .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-        "reason=all_snapshots_are_v7"
+        "reason=all_snapshots_are_v8"
     );
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_unchanged");
     assert!(
         baseline.victory_frame > 0,
         "reason=baseline_victory_frame_recorded"
@@ -1580,7 +1582,7 @@ fn play_orc_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// P8.2 兽族完整一局与基线一致：同一兽族脚本两实例逐帧状态哈希与
-/// `capture_snapshot()` 快照逐条相等，快照仍 v7、冻结定义内容哈希仍由
+/// `capture_snapshot()` 快照逐条相等，快照仍 v8、冻结定义内容哈希仍由
 /// `defs_hash` 承载（不依赖改动前的旧哈希数值）。胜负只结算一次、重开干净。
 #[test]
 fn orc_full_match_matches_baseline_and_restart_is_clean() {
@@ -1599,9 +1601,9 @@ fn orc_full_match_matches_baseline_and_restart_is_clean() {
             .snapshots
             .iter()
             .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-        "reason=all_orc_snapshots_are_v7"
+        "reason=all_orc_snapshots_are_v8"
     );
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=orc_snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=orc_snapshot_version_unchanged");
     assert!(
         baseline.victory_frame > 0,
         "reason=orc_baseline_victory_frame_recorded"
@@ -1611,7 +1613,7 @@ fn orc_full_match_matches_baseline_and_restart_is_clean() {
         "reason=orc_final_snapshot_uses_recorded_victory_frame"
     );
     // 新增定义是冻结定义内容变化：`defs_hash` 由 `synthetic_definitions()`
-    // 的 `content_hash()` 承载，进入 v7 快照头部（C2 / D2）。
+    // 的 `content_hash()` 承载，进入 v8 快照头部（C2 / D2）。
     let defs = synthetic_definitions();
     assert_eq!(
         baseline.final_snapshot.defs_hash,
@@ -1918,11 +1920,73 @@ const DUAL_COMBINATIONS: [(Race, Race); 4] = [
     (Race::Orc, Race::Orc),
 ];
 
-/// 某族 `units` 段位（人族 1xx / 兽族 2xx / 中立资源 9xx）。
+/// 某族 `units` 段位（P9 五段中的四族段：人族 1xx / 兽族 2xx /
+/// 不死 3xx / 暗夜 4xx；中立资源恒 9xx）。
 fn dual_race_segment(race: Race) -> std::ops::Range<DefId> {
     match race {
         Race::Human => 100..200,
         Race::Orc => 200..300,
+        Race::Undead => 300..400,
+        Race::NightElf => 400..500,
+    }
+}
+
+/// P9 / Q1' 十六组合（本地族, AI 族）：四族 4×4 笛卡尔积，含同族组合。
+const SEGMENT_COMBINATIONS: [(Race, Race); 16] = [
+    (Race::Human, Race::Human),
+    (Race::Human, Race::Orc),
+    (Race::Human, Race::Undead),
+    (Race::Human, Race::NightElf),
+    (Race::Orc, Race::Human),
+    (Race::Orc, Race::Orc),
+    (Race::Orc, Race::Undead),
+    (Race::Orc, Race::NightElf),
+    (Race::Undead, Race::Human),
+    (Race::Undead, Race::Orc),
+    (Race::Undead, Race::Undead),
+    (Race::Undead, Race::NightElf),
+    (Race::NightElf, Race::Human),
+    (Race::NightElf, Race::Orc),
+    (Race::NightElf, Race::Undead),
+    (Race::NightElf, Race::NightElf),
+];
+
+/// P9 / Q1' 十六组合段位 CPU 回归（tasks 3.1）：纯装配层，不跑完整一局。
+/// 四族各 `with_races(local, ai)` 的本地席位落 `local_race` 段、AI 席位落
+/// `ai_race` 段、中立资源恒 `9xx`；`Spawn` / `gameplay_commands` / `kinds`
+/// / `def_ids` 与 `MeleeSetup::new()` 基线逐字节一致（种族只停装配层，
+/// `CommandKind::Spawn` 字节族无关），同族组合双方段位一致。
+/// 完整一局十六组合骨架属 tasks 4.1（后续批次），本测试只验段位。
+#[test]
+fn sixteen_combinations_seats_land_in_race_segments() {
+    let baseline = MeleeSetup::new();
+    assert_eq!(SEGMENT_COMBINATIONS.len(), 16);
+    for (local, ai) in SEGMENT_COMBINATIONS {
+        let setup = MeleeSetup::with_races(local, ai);
+        assert!(
+            seats_land_in_race_segments(&setup, local, ai),
+            "reason=sixteen_combos_segmented local={local:?} ai={ai:?}"
+        );
+        // 权威命令字节与基线逐字节一致（不进内核、不新增权威状态）。
+        assert_eq!(setup.commands, baseline.commands, "reason=spawn_bytes");
+        assert_eq!(
+            setup.gameplay_commands, baseline.gameplay_commands,
+            "reason=opening_gameplay_bytes"
+        );
+        assert_eq!(setup.kinds, baseline.kinds, "reason=kinds_bytes");
+        // 本地 / AI 两份新类别绑定各落本族段。
+        assert!(
+            setup
+                .category_def_ids()
+                .values()
+                .all(|id| dual_race_segment(local).contains(id))
+        );
+        assert!(
+            setup
+                .ai_category_def_ids()
+                .values()
+                .all(|id| dual_race_segment(ai).contains(id))
+        );
     }
 }
 
@@ -2011,24 +2075,591 @@ fn ai_commands_land_in_ai_race(setup: &MeleeSetup, ai_race: Race) -> bool {
     saw_train && saw_cast && saw_research
 }
 
-/// 按本地族复用既有完整一局脚本（采集 → 建造 → 训练 → 英雄施法 → 研发 →
-/// 战斗 → 摧毁敌方主城结算 → 重开）：两族函数均以 `setup.race`（本地族
-/// 别名）取本地份绑定与技能 / 升级 ID，AI 外部脚本由 `build_driver` 按
-/// `setup.ai_race` 注入。四组合差别只在装配层与 AI 命令，不进内核。
+/// 四族统一走通用全阶段脚本 [`play_full_match_all_stages`]（含 Q2 / Q4
+/// 全量机制触发）：人 / 兽 / 不死 / 暗夜席位都按 `setup.race` 只读分派取
+/// 本族六类槽位 / 英雄技能 / 攻防升级 ID，逐阶段打完一局，不再 panic、
+/// 不再分流到 P8.1 / P8.2 人兽专属脚本。P8.1 / P8.2 两族函数保留用于
+/// 既有两族 v8 基线与反向验证（tasks 4.2 / 6.x）。
 fn play_dual_faction_full_match(setup: &MeleeSetup) -> FullMatchTrace {
-    match setup.race {
-        Race::Human => play_human_full_match(setup),
-        Race::Orc => play_orc_full_match(setup),
+    play_full_match_all_stages(setup)
+}
+
+/// 提交 Q2 / Q4 全量族特色机制命令（13 类 `GameplayCommandKind` 新变体，
+/// 码 24–36），全部经既有公开命令入口 `submit_gameplay` 冻结帧提交。
+/// 命令只登记玩法机制输入，逐 30 Hz 整数帧由内核 `settle` 确定性结算；
+/// fog 可见性 MUST NOT 由任何命令登记（R10.5 / §0.3 T3）。
+fn submit_faction_mechanics_commands(
+    driver: &mut MeleeDriver,
+    setup: &MeleeSetup,
+    sequence: &mut u32,
+    frame: &mut u64,
+) {
+    let hall = setup.local_hall;
+    let ai_hall = setup.ai_hall;
+    let mine = setup.local_mine;
+    let ai_mine = setup.ai_mine;
+    let worker = setup.local_peasants[0];
+    let kinds = [
+        // 腐地建造约束（R4.6）。
+        GameplayCommandKind::SeedBlight {
+            source: hall,
+            cell_x: 1,
+            cell_y: 2,
+        },
+        // 尸体登记与食尸消费（`:119`）；先登记再消费，确定性顺序。
+        GameplayCommandKind::RaiseCorpse {
+            corpse: worker,
+            decay_frames: 0,
+        },
+        GameplayCommandKind::ConsumeCorpse {
+            consumer: hall,
+            corpse: worker,
+        },
+        // 诅咒 / 缠绕金矿（R1.5）。
+        GameplayCommandKind::HauntGoldMine { mine },
+        GameplayCommandKind::EntangleGoldMine { mine: ai_mine },
+        // 古树扎根 / 拔根（R1.2 定义层数据驱动）。
+        GameplayCommandKind::SetAncientRoot {
+            ancient: hall,
+            rooted: true,
+        },
+        // 月亮井回血回蓝（R10.3）。
+        GameplayCommandKind::BindMoonWell {
+            well: hall,
+            restore: 0,
+        },
+        // 隐身目标判定 / 反隐 / 夜间隐身（R10.4 / S3）。
+        GameplayCommandKind::SetStealth {
+            unit: worker,
+            cloaked: true,
+        },
+        GameplayCommandKind::RegisterDetector { unit: ai_hall },
+        GameplayCommandKind::SetNightCloak {
+            unit: worker,
+            enabled: true,
+        },
+        // 视线阻挡机制输入（R5.6，非 fog 可见性派生结果）。
+        GameplayCommandKind::MarkSightBlocker {
+            blocker: mine,
+            blocking: true,
+        },
+        // 野怪睡眠（R8.4）。
+        GameplayCommandKind::SetCreepSleep {
+            creep: ai_hall,
+            sleeps_at_night: true,
+        },
+        // 回血条件定义层枚举（R10.3，非族名硬编码）。
+        GameplayCommandKind::SetRegenCondition {
+            unit: hall,
+            condition: RegenCondition::Blight,
+        },
+    ];
+    for kind in kinds {
+        submit_gameplay(driver, LOCAL_PLAYER, *sequence, *frame, kind);
+        *sequence += 1;
+        *frame += 1;
     }
 }
 
-/// 四组合 CPU 端到端一局与确定性闭环（design D3 / C4 / tasks 3.x）：
-/// 各组合装配并打完一局，胜负只结算一次、重开无残留、快照仍 v7；
-/// 只断言组内两实例逐帧哈希 / 快照字节一致，不断言跨组合或旧基线相等。
+/// 四族通用完整一局（P9 / Q1' / tasks 4.1）：按 `setup.race`（本地族）
+/// 只读分派取本族六类槽位 / 英雄主动技能 / 攻防升级 ID，逐阶段断言
+/// 「采集 → 建造 → 训练 → 英雄施法 → 研发 → Q2 / Q4 全量机制触发 →
+/// 战斗 → 摧毁敌方主城结算 → 重开」。
+///
+/// `horizon = 0` 不注入 AI 脚本：胜负由 `MeleeDriver` 检测敌方主城消失后
+/// 提交 `Leave` 触发既有 `resolve_victory`；本地装配层 `def_ids` 只影响
+/// 表现层，不进权威命令字节，故十六组合各能确定性打完一局。
+fn play_full_match_all_stages(setup: &MeleeSetup) -> FullMatchTrace {
+    let defs = synthetic_definitions();
+    let race = setup.race;
+    let catalog = setup.category_def_ids().clone();
+    let barracks = race.barracks();
+    let hero_ability = race.hero_ability();
+    let weapons_upgrade = race.weapons_upgrade();
+    let armor_upgrade = race.armor_upgrade();
+    let local_segment = dual_race_segment(race);
+    // 本地份六类绑定 MUST 全落本族段（单一查表处 / 数据驱动，D3 / R13.3）。
+    assert!(
+        catalog.values().all(|id| local_segment.contains(id)),
+        "reason=local_catalog_in_local_segment race={race:?}"
+    );
+
+    let mut driver = build_driver(setup, 0);
+    let mut trace = FullMatchTrace {
+        hashes: Vec::new(),
+        snapshots: Vec::new(),
+        final_snapshot: driver.snapshot(),
+        victory_frame: 0,
+    };
+    let mut sequence = 100u32;
+    record_steps(&mut driver, &mut trace, 1);
+
+    // 1) 采集：多条 `Gather` 让本地黄金确定增长。
+    let mut frame = driver.view().tick + 1;
+    for _ in 0..5 {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame,
+            GameplayCommandKind::Gather {
+                unit: setup.local_peasants[0],
+            },
+        );
+        sequence += 1;
+        frame += 1;
+    }
+    record_steps(&mut driver, &mut trace, 6);
+    assert!(
+        driver.snapshot().gameplay.players[&LOCAL_PLAYER].gold > 1,
+        "reason=gather_grows_local_gold race={race:?}"
+    );
+
+    // 2) 建造：兵营 + 人口 + 祭坛 + 研发建筑，队列可见后完成。
+    let before_build: BTreeSet<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .collect();
+    let build_defs = [
+        barracks,
+        catalog[&CATEGORY_FARM],
+        catalog[&CATEGORY_ALTAR],
+        catalog[&CATEGORY_SMITHY],
+    ];
+    frame = driver.view().tick + 1;
+    for (offset, &unit_def) in build_defs.iter().enumerate() {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame + offset as u64,
+            GameplayCommandKind::Train {
+                producer: setup.local_hall,
+                unit_def,
+                is_building: true,
+            },
+        );
+        sequence += 1;
+    }
+    record_steps(&mut driver, &mut trace, 5);
+    {
+        let snapshot = driver.snapshot();
+        assert_eq!(
+            production_defs(&snapshot, setup.local_hall),
+            build_defs.to_vec(),
+            "reason=building_queue_visible race={race:?}"
+        );
+    }
+    record_steps(&mut driver, &mut trace, 55);
+    let snapshot = driver.snapshot();
+    assert_eq!(
+        production_defs(&snapshot, setup.local_hall),
+        Vec::<DefId>::new(),
+        "reason=local_building_queue_empty race={race:?}"
+    );
+    assert!(
+        snapshot.gameplay.players[&LOCAL_PLAYER].produced >= 4,
+        "reason=local_building_produced_count race={race:?}"
+    );
+    assert!(
+        driver.view().entities.len() >= before_build.len() + 4,
+        "reason=four_new_buildings_spawned race={race:?}"
+    );
+    for &def_id in &build_defs {
+        let built = produced_entity(&snapshot, &before_build, LOCAL_PLAYER, def_id, &defs);
+        assert_eq!(
+            snapshot_position(&snapshot, built).speed,
+            0,
+            "reason=new_building_runtime_speed_zero race={race:?}"
+        );
+    }
+
+    // 3) 训练：远程 / 反重甲 / 英雄，英雄 `mana > 0`。
+    let before_train: BTreeSet<u64> = driver
+        .view()
+        .entities
+        .iter()
+        .map(|entity| entity.id)
+        .collect();
+    let train_defs = [
+        catalog[&CATEGORY_RANGED],
+        catalog[&CATEGORY_SIEGE],
+        catalog[&CATEGORY_HERO],
+    ];
+    frame = driver.view().tick + 1;
+    for (offset, &unit_def) in train_defs.iter().enumerate() {
+        submit_gameplay(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame + offset as u64,
+            GameplayCommandKind::Train {
+                producer: setup.local_hall,
+                unit_def,
+                is_building: false,
+            },
+        );
+        sequence += 1;
+    }
+    record_steps(&mut driver, &mut trace, 4);
+    {
+        let snapshot = driver.snapshot();
+        assert_eq!(
+            production_defs(&snapshot, setup.local_hall),
+            train_defs.to_vec(),
+            "reason=unit_training_queue_visible race={race:?}"
+        );
+    }
+    record_steps(&mut driver, &mut trace, 61);
+    let snapshot = driver.snapshot();
+    assert_eq!(
+        production_defs(&snapshot, setup.local_hall),
+        Vec::<DefId>::new(),
+        "reason=local_training_queue_empty race={race:?}"
+    );
+    let ranged_id = produced_entity(&snapshot, &before_train, LOCAL_PLAYER, train_defs[0], &defs);
+    let siege_id = produced_entity(&snapshot, &before_train, LOCAL_PLAYER, train_defs[1], &defs);
+    let hero_id = produced_entity(&snapshot, &before_train, LOCAL_PLAYER, train_defs[2], &defs);
+    let hero_def = defs
+        .units()
+        .get(&train_defs[2])
+        .expect("melee: reason=missing_hero_unit_def");
+    assert!(
+        hero_def.mana > 0,
+        "reason=hero_definition_has_mana race={race:?}"
+    );
+    assert_eq!(
+        snapshot_position(&snapshot, hero_id).gameplay.max_mana,
+        hero_def.mana,
+        "reason=trained_hero_has_frozen_mana race={race:?}"
+    );
+
+    // 4) 英雄施法：按 `AbilityDef.effects` 动态断言，四族技能组合
+    // （人 / 兽 / 不死：Damage + Stun + BuffStat；暗夜：Heal + Damage +
+    // BuffStat）都能经既有 `Cast` 命令面确定性结算。
+    let hero_mana_before = snapshot_position(&snapshot, hero_id).gameplay.mana;
+    let target_hp_before = snapshot_position(&snapshot, setup.ai_hall).hp;
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Cast {
+            caster: hero_id,
+            ability: hero_ability,
+            target: setup.ai_hall,
+        },
+    );
+    sequence += 1;
+    record_steps(&mut driver, &mut trace, 4);
+    let ability = defs
+        .abilities()
+        .get(&hero_ability)
+        .expect("melee: reason=missing_hero_ability");
+    let expected_damage: i64 = ability
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect.kind, EffectKind::Damage))
+        .map(|effect| effect.amount)
+        .sum();
+    assert!(
+        expected_damage > 0,
+        "reason=hero_ability_has_damage_effect race={race:?}"
+    );
+    let snapshot = driver.snapshot();
+    let hero = snapshot_position(&snapshot, hero_id);
+    let target = snapshot_position(&snapshot, setup.ai_hall);
+    assert_eq!(
+        hero.gameplay.mana,
+        hero_mana_before - ability.mana_cost,
+        "reason=hero_mana_cost_committed race={race:?}"
+    );
+    assert!(
+        hero.gameplay.cooldowns.contains_key(&hero_ability),
+        "reason=hero_ability_cooldown_registered race={race:?}"
+    );
+    // 效果链按 `EffectDef` 顺序结算：Heal 在满血目标被 `max_hp` 上限
+    // 约束，Damage 随后扣血；四族技能 Damage 之和 MUST 大于 Heal 之和，
+    // 故目标 hp 净下降（按技能定义动态取证，MUST NOT 硬编码具体数值）。
+    let expected_heal: i64 = ability
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect.kind, EffectKind::Heal))
+        .map(|effect| effect.amount)
+        .sum();
+    assert!(
+        expected_damage > expected_heal,
+        "reason=hero_ability_net_damage_positive race={race:?}"
+    );
+    assert!(
+        target.hp < target_hp_before,
+        "reason=hero_ability_effect_chain_resolved race={race:?}"
+    );
+    // Buff 类效果按技能定义动态断言（暗夜无 Stun，MUST NOT 硬编码）。
+    for effect in &ability.effects {
+        if matches!(effect.kind, EffectKind::Stun | EffectKind::BuffStat) {
+            assert!(
+                target
+                    .gameplay
+                    .buffs
+                    .iter()
+                    .any(|buff| buff.kind == effect.kind),
+                "reason=hero_ability_buff_resolved kind={:?} race={race:?}",
+                effect.kind
+            );
+        }
+    }
+
+    // 5) 研发：攻 / 防升级分别经既有 `Research` 完成并作用到存活单位。
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Research {
+            upgrade: weapons_upgrade,
+        },
+    );
+    sequence += 1;
+    record_steps(&mut driver, &mut trace, 30);
+    let weapons = defs
+        .upgrades()
+        .get(&weapons_upgrade)
+        .expect("melee: reason=missing_weapons_upgrade");
+    assert!(
+        weapons.damage_mod > 0,
+        "reason=weapons_upgrade_has_damage_mod race={race:?}"
+    );
+    let snapshot = driver.snapshot();
+    let local = &snapshot.gameplay.players[&LOCAL_PLAYER];
+    assert_eq!(
+        local.research, None,
+        "reason=weapons_research_completed race={race:?}"
+    );
+    assert_eq!(
+        local.upgrades.get(&weapons_upgrade),
+        Some(&true),
+        "reason=weapons_upgrade_recorded race={race:?}"
+    );
+    assert!(
+        snapshot_position(&snapshot, siege_id)
+            .gameplay
+            .stat_mods
+            .damage
+            >= weapons.damage_mod,
+        "reason=weapons_upgrade_damage_mod_applied race={race:?}"
+    );
+
+    frame = driver.view().tick + 1;
+    submit_gameplay(
+        &mut driver,
+        LOCAL_PLAYER,
+        sequence,
+        frame,
+        GameplayCommandKind::Research {
+            upgrade: armor_upgrade,
+        },
+    );
+    sequence += 1;
+    record_steps(&mut driver, &mut trace, 30);
+    let armor = defs
+        .upgrades()
+        .get(&armor_upgrade)
+        .expect("melee: reason=missing_armor_upgrade");
+    assert!(
+        armor.hp_mod > 0,
+        "reason=armor_upgrade_has_hp_mod race={race:?}"
+    );
+    let snapshot = driver.snapshot();
+    let local = &snapshot.gameplay.players[&LOCAL_PLAYER];
+    assert_eq!(
+        local.research, None,
+        "reason=armor_research_completed race={race:?}"
+    );
+    assert_eq!(
+        local.upgrades.get(&armor_upgrade),
+        Some(&true),
+        "reason=armor_upgrade_recorded race={race:?}"
+    );
+    let siege = snapshot_position(&snapshot, siege_id);
+    assert!(
+        siege.gameplay.stat_mods.max_hp >= armor.hp_mod,
+        "reason=armor_upgrade_hp_mod_applied race={race:?}"
+    );
+    assert!(
+        siege.gameplay.stat_mods.damage >= weapons.damage_mod,
+        "reason=weapons_upgrade_persists_after_armor race={race:?}"
+    );
+
+    // 6) Q2 / Q4 全量机制触发：13 类机制命令经公开入口提交，逐帧
+    // `settle` 确定性结算，权威状态（含 `faction_mechanics`）进哈希 / 快照。
+    frame = driver.view().tick + 1;
+    let hash_before_mechanics = driver.sim().compute_state_hash();
+    submit_faction_mechanics_commands(&mut driver, setup, &mut sequence, &mut frame);
+    record_steps(&mut driver, &mut trace, 20);
+    let mechanics = driver.snapshot().faction_mechanics;
+    assert!(
+        !mechanics.blight_cells.is_empty(),
+        "reason=blight_seeded race={race:?}"
+    );
+    assert!(
+        !mechanics.blight_progress.is_empty(),
+        "reason=blight_source_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.corpse_consumptions.is_empty(),
+        "reason=corpse_consumed race={race:?}"
+    );
+    assert!(
+        mechanics.mines.len() >= 2,
+        "reason=haunted_and_entangled_mines_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.rooted_ancients.is_empty(),
+        "reason=ancient_root_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.moon_wells.is_empty(),
+        "reason=moon_well_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.stealth.is_empty() && !mechanics.detectors.is_empty(),
+        "reason=stealth_and_detector_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.night_cloak.is_empty(),
+        "reason=night_cloak_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.sight_blockers.is_empty(),
+        "reason=sight_blocker_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.creep_sleep.is_empty(),
+        "reason=creep_sleep_registered race={race:?}"
+    );
+    assert!(
+        !mechanics.regen.is_empty(),
+        "reason=regen_condition_registered race={race:?}"
+    );
+    assert!(
+        mechanics.day_night.elapsed_frames > 0,
+        "reason=day_night_clock_advanced race={race:?}"
+    );
+    assert_ne!(
+        hash_before_mechanics,
+        driver.sim().compute_state_hash(),
+        "reason=mechanics_enter_authoritative_state race={race:?}"
+    );
+
+    // 7) 战斗：三名新单位轮转攻击敌方主城；合成开局 AI 侧 frame-0
+    // 唯一建筑就是主城，摧毁它即满足本一局「摧毁全部建筑」判据。
+    let attackers = [siege_id, ranged_id, hero_id];
+    frame = driver.view().tick + 1;
+    for offset in 0..8u64 {
+        let attacker = attackers[(offset as usize) % attackers.len()];
+        submit_simulation(
+            &mut driver,
+            LOCAL_PLAYER,
+            sequence,
+            frame + offset,
+            CommandKind::Attack {
+                attacker,
+                target: setup.ai_hall,
+            },
+        );
+        sequence += 1;
+    }
+    record_steps(&mut driver, &mut trace, 20);
+    let view = driver.view();
+    assert!(
+        !view
+            .entities
+            .iter()
+            .any(|entity| entity.id == setup.ai_hall.value() && entity.alive),
+        "reason=ai_hall_destroyed race={race:?}"
+    );
+
+    // 8) 结算：`victory` 只结算一次、winner 为本地玩家、结算帧进权威状态。
+    let victory = driver.snapshot().gameplay.victory;
+    assert!(
+        victory.resolved,
+        "reason=match_victory_resolved race={race:?}"
+    );
+    assert_eq!(
+        victory.winner,
+        Some(LOCAL_PLAYER),
+        "reason=local_player_wins race={race:?}"
+    );
+    assert!(
+        victory.resolved_frame > 0,
+        "reason=victory_frame_recorded race={race:?}"
+    );
+    record_steps(&mut driver, &mut trace, 10);
+    let final_snapshot = driver.snapshot();
+    assert_eq!(
+        final_snapshot.gameplay.victory, victory,
+        "reason=victory_must_resolve_once race={race:?}"
+    );
+    assert_eq!(
+        final_snapshot.gameplay.victory.resolved_frame, victory.resolved_frame,
+        "reason=victory_frame_enters_authoritative_state race={race:?}"
+    );
+
+    // 9) 重开：相同冻结定义与开局脚本构造新一局，不残留上一局权威状态。
+    let fresh = build_driver(setup, 0);
+    assert!(
+        !fresh.snapshot().gameplay.victory.resolved,
+        "reason=restart_victory_unresolved race={race:?}"
+    );
+    assert!(
+        fresh.view().entities.is_empty(),
+        "reason=restart_view_empty race={race:?}"
+    );
+    let fresh_snapshot = fresh.snapshot();
+    assert!(
+        fresh_snapshot.positions.is_empty(),
+        "reason=restart_positions_empty race={race:?}"
+    );
+    assert!(
+        fresh_snapshot.gameplay.players.is_empty(),
+        "reason=restart_players_empty race={race:?}"
+    );
+    assert_eq!(
+        fresh_snapshot.gameplay.victory.resolved_frame, 0,
+        "reason=restart_victory_frame_clear race={race:?}"
+    );
+    assert_eq!(
+        fresh_snapshot.version, SNAPSHOT_VERSION,
+        "reason=restart_snapshot_v8 race={race:?}"
+    );
+
+    trace.final_snapshot = final_snapshot;
+    trace.victory_frame = victory.resolved_frame;
+    trace
+}
+
+/// 十六组合 CPU 端到端全阶段一局与确定性闭环（P9 / Q1' / tasks 4.1）：
+/// 四族 4×4 十六组合（含不死 / 暗夜席位与双族对抗）各经
+/// [`play_full_match_all_stages`] 按「采集 → 建造 → 训练 → 英雄施法 →
+/// 研发 → Q2 / Q4 全量机制触发 → 战斗 → 摧毁敌方主城结算 → 重开」
+/// 逐阶段断言打完一局；`resolve_victory` 只结算一次且按稳定顺序、
+/// `victory.winner` 为本地玩家、结算帧进权威状态、重开无残留、快照 v8。
+/// 只断言组内两实例逐帧哈希 / 快照字节一致，MUST NOT 断言跨组合或
+/// 改动前 v7 旧基线数值相等。
 #[test]
-fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_unchanged");
-    for (local, ai) in DUAL_COMBINATIONS {
+fn sixteen_combinations_play_full_match_all_stages_and_within_combo_frame_hashes() {
+    assert_eq!(
+        SEGMENT_COMBINATIONS.len(),
+        16,
+        "reason=full_match_covers_sixteen_combinations"
+    );
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_unchanged");
+    for (local, ai) in SEGMENT_COMBINATIONS {
         let setup = MeleeSetup::with_races(local, ai);
         assert_eq!(setup.race, local, "reason=local_race_alias local={local:?}");
         assert_eq!(setup.ai_race, ai, "reason=ai_race_field ai={ai:?}");
@@ -2071,7 +2702,9 @@ fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
             "reason=within_combo_victory_frame_match local={local:?} ai={ai:?}"
         );
 
-        // 胜负只结算一次（既有脚本已断言）、结算帧进权威状态、快照 v7。
+        // 胜负只结算一次（通用脚本推进 10 帧后 `victory` 不变）、结算帧进
+        // 权威状态（`final_snapshot.gameplay.victory.resolved_frame`）、
+        // `victory.winner` 为本地玩家、快照 v8。
         assert!(
             first.final_snapshot.gameplay.victory.resolved,
             "reason=victory_resolved local={local:?} ai={ai:?}"
@@ -2085,16 +2718,31 @@ fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
             first.victory_frame > 0,
             "reason=victory_frame_recorded local={local:?} ai={ai:?}"
         );
+        assert_eq!(
+            first.final_snapshot.gameplay.victory.resolved_frame, first.victory_frame,
+            "reason=victory_frame_enters_authoritative_state local={local:?} ai={ai:?}"
+        );
         assert!(
             first
                 .snapshots
                 .iter()
                 .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-            "reason=all_snapshots_v7 local={local:?} ai={ai:?}"
+            "reason=all_snapshots_v8 local={local:?} ai={ai:?}"
+        );
+        // Q2 / Q4 全量机制触发后的权威状态进入终局快照（tasks 4.1）。
+        let mechanics = &first.final_snapshot.faction_mechanics;
+        assert!(
+            !mechanics.blight_cells.is_empty()
+                && !mechanics.corpse_consumptions.is_empty()
+                && mechanics.mines.len() >= 2
+                && !mechanics.moon_wells.is_empty()
+                && !mechanics.regen.is_empty()
+                && mechanics.day_night.elapsed_frames > 0,
+            "reason=q2_q4_mechanisms_in_final_snapshot local={local:?} ai={ai:?}"
         );
 
         // 重开无残留：`victory.resolved == false`、entities / positions /
-        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 7`。
+        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 8`。
         let fresh = build_driver(&setup, 300);
         assert!(
             !fresh.snapshot().gameplay.victory.resolved,
@@ -2119,12 +2767,13 @@ fn four_race_combinations_play_full_match_with_within_combo_frame_hashes() {
         );
         assert_eq!(
             fresh_snapshot.version, SNAPSHOT_VERSION,
-            "reason=restart_snapshot_v7 local={local:?} ai={ai:?}"
+            "reason=restart_snapshot_v8 local={local:?} ai={ai:?}"
         );
     }
-    // MUST NOT 断言「四组合之间哈希数值相等」或「与改动前旧基线数值相等」：
-    // 四组合 AI 命令落在各自 ai_race 段、字节本就不同；既有两族基线 /
-    // 回落测试单独守护旧口径，不在此处跨组合比较。
+    // MUST NOT 断言「十六组合之间哈希数值相等」或「与改动前 v7 旧基线
+    // 数值相等」：各组合 AI 命令落在各自 ai_race 段、字节本就不同；新增
+    // 权威状态 + 定义层内容变化 + bump 8 后 golden hash 已重取。既有
+    // 两族基线 / 回落测试单独守护旧口径，不在此处跨组合比较。
 }
 
 /// 同一整数节拍序列按不同批次喂入，逐帧采集 `(帧号, compute_state_hash)`。
@@ -2321,6 +2970,83 @@ fn reverse_validation_ai_race_local_fallback_degenerate_fails_the_same_assertion
             AiScript::new(&degenerate, 1200).commands.len(),
             AiScript::new(&formal, 1200).commands.len(),
             "reason=degenerate_uses_real_ai_script_path local={local:?} ai={ai:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// tasks 4.2：同脚本两实例逐帧一致 + `first_difference()` 为 `None`
+// ---------------------------------------------------------------------------
+
+/// 十六组合各构造两实例，注入同一 Q2 / Q4 全量机制脚本逐帧推进，逐帧
+/// `compute_state_hash()` 与 `capture_snapshot()` 字节相等、
+/// `first_difference()` 为 `None`（含 P9 新增族特色机制权威状态字段），
+/// 重开 `victory.resolved == false` 且视图为空、快照 v8。MUST NOT 断言
+/// 跨组合或改动前 v7 旧基线数值相等（新增权威状态 + 定义层内容变化 +
+/// bump 8 后 golden hash 已重取）。
+#[test]
+fn same_script_two_instances_match_frame_by_frame_with_first_difference_none() {
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_v8");
+    for (local, ai) in SEGMENT_COMBINATIONS {
+        let setup = MeleeSetup::with_races(local, ai);
+        let mut first = build_driver(&setup, 0);
+        let mut second = build_driver(&setup, 0);
+        // 两实例注入同一批机制命令（相同冻结帧 / `Sequence` / 顺序）。
+        let mut sequence = 900u32;
+        let mut frame = first.view().tick + 1;
+        submit_faction_mechanics_commands(&mut first, &setup, &mut sequence, &mut frame);
+        let mut sequence_second = 900u32;
+        let mut frame_second = second.view().tick + 1;
+        submit_faction_mechanics_commands(
+            &mut second,
+            &setup,
+            &mut sequence_second,
+            &mut frame_second,
+        );
+        for _ in 0..24 {
+            first.advance_ticks(TICKS_PER_LOGIC_FRAME);
+            second.advance_ticks(TICKS_PER_LOGIC_FRAME);
+            assert_eq!(
+                first.sim().compute_state_hash(),
+                second.sim().compute_state_hash(),
+                "reason=within_combo_frame_hash_match local={local:?} ai={ai:?}"
+            );
+            let snapshot_first = first.snapshot();
+            let snapshot_second = second.snapshot();
+            assert_eq!(
+                snapshot_first, snapshot_second,
+                "reason=within_combo_frame_snapshot_match local={local:?} ai={ai:?}"
+            );
+            assert_eq!(
+                snapshot_first.version, SNAPSHOT_VERSION,
+                "reason=frame_snapshot_v8 local={local:?} ai={ai:?}"
+            );
+            assert_eq!(
+                first.sim().first_difference(second.sim()),
+                None,
+                "reason=first_difference_none local={local:?} ai={ai:?}"
+            );
+        }
+        // 机制权威状态确实被触发，避免「两实例都未推进机制」的空泛通过。
+        assert!(
+            !first.snapshot().faction_mechanics.blight_cells.is_empty()
+                && !first.snapshot().faction_mechanics.mines.is_empty(),
+            "reason=mechanics_triggered_in_both_instances local={local:?} ai={ai:?}"
+        );
+        // 重开干净：`victory.resolved == false` 且视图为空。
+        let fresh = build_driver(&setup, 0);
+        assert!(
+            !fresh.snapshot().gameplay.victory.resolved,
+            "reason=restart_victory_unresolved local={local:?} ai={ai:?}"
+        );
+        assert!(
+            fresh.view().entities.is_empty(),
+            "reason=restart_view_empty local={local:?} ai={ai:?}"
+        );
+        assert_eq!(
+            fresh.snapshot().version,
+            SNAPSHOT_VERSION,
+            "reason=restart_snapshot_v8 local={local:?} ai={ai:?}"
         );
     }
 }

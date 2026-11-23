@@ -71,6 +71,18 @@ pub const ENTITY_MODEL_FILES: &[(&str, &str)] = &[
     ("orc-burrow", "buildings/orc/trollburrow/trollburrow"),
     ("orc-altar", "buildings/orc/altarofstorms/altarofstorms"),
     ("orc-war-mill", "buildings/orc/warmill/warmill"),
+    // 不死 3xx / 暗夜 4xx 段键：纯合成全小写逻辑路径占位串（非资产内容），
+    // 沿用 normalize() 双侧归一；不指向、不读取任何真实导出资产。
+    ("undead-unit", "units/undead/synthunit/synthunit"),
+    (
+        "undead-building",
+        "buildings/undead/synthbuilding/synthbuilding",
+    ),
+    ("nightelf-unit", "units/nightelf/synthunit/synthunit"),
+    (
+        "nightelf-building",
+        "buildings/nightelf/synthbuilding/synthbuilding",
+    ),
 ];
 
 /// 按类别兜底的真实模型逻辑路径候选（确定性取用，均为本机 convert 产物）。
@@ -616,8 +628,32 @@ mod tests {
             original,
             "existing 6 keys unchanged in text and order"
         );
-        // 仅追加 8 个兽族键，未补齐 ORC_SIEGE(206) / ORC_HERO(210) 或人族新类别。
-        assert_eq!(ENTITY_MODEL_FILES.len(), 14, "only 8 orc keys appended");
+        // P8 六键 + 八兽族键 + P9 不死 / 暗夜四合成键，共 18 键；仍未补齐
+        // ORC_SIEGE(206) / ORC_HERO(210) 或人族新类别。
+        assert_eq!(
+            ENTITY_MODEL_FILES.len(),
+            18,
+            "6 base + 8 orc + 4 p9 synthetic keys"
+        );
+        // P9 防退化：不死 / 暗夜四合成键必须逐字登记，值为全小写归一逻辑路径
+        // 占位串，防止后续误删或混入真实大小写资产路径（ADR 0001 / ADR 0004）。
+        for key in [
+            "undead-unit",
+            "undead-building",
+            "nightelf-unit",
+            "nightelf-building",
+        ] {
+            let path = ENTITY_MODEL_FILES
+                .iter()
+                .find(|&&(candidate, _)| candidate == key)
+                .map(|&(_, path)| path)
+                .unwrap_or_else(|| panic!("reason=p9_key_missing key={key}"));
+            assert_eq!(
+                normalize(path).as_str(),
+                path,
+                "reason=p9_path_not_normalized key={key} path={path}"
+            );
+        }
         // 既有解析行为不变：resolve_entity_key 仍只做「查表 → lookup」两步。
         let dir = std::env::temp_dir().join("w3_model_index_test_orc_c");
         let _ = std::fs::remove_dir_all(&dir);

@@ -63,6 +63,24 @@
 //! rustc 版本仍属待验证项**，不得据本记录声称双平台 / 全平台确定性
 //! 已验证或本 change 有新验证（Q12）；不声称 Debian 12 侧 v4 / v5 /
 //! v6 / v7 逐字节比对已完成。
+//!
+//! P8 → P9 基线重取（Q2 / Q3 / Q5' / tasks 3.3 / 4.4）：新增 `w3-core`
+//! 顶层权威状态 `faction_mechanics` 进入 `compute_state_hash()`，
+//! 族特色机制冻结常量段 + 回血条件定义层类别登记进入
+//! `compute_defs_hash()`，`SNAPSHOT_VERSION` / `SIM_VERSION` bump 7→8，
+//! 逐帧哈希布局再次实质变化，故基线必变、不沿用 P8.5d v7 值、
+//! 不声称逐字节不变。本文件输出格式未变，`GOLDEN_SCHEMA` 仍为
+//! `golden-hash/1`；记录值仅作人工比对留档，不作自动断言。
+//!
+//! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按 v8 实现重取：
+//! - 41 行 / 1371 字节，`final_hash=0x0b53a047b1f8e5e0`；
+//! - 整份文本 sha256 `aa0754e2640badd6fb93cbfeb7b73cdb54fcc70d4497a50ca29d2c84d9d628d4`。
+//! 上文 P8.5d v7 的 `final_hash=0x940cb016f6630f1e` 已失效、不沿用、
+//! 不声称逐字节不变。**Debian 12 x86_64 侧 v4 / v5 / v6 / v7 / v8
+//! 逐字节离线比对仍待人工 / VM 执行；macOS、其它 CPU 架构（ARM64 等）
+//! 与其它 rustc 版本仍属待验证项**，不得据本记录声称双平台 / 全平台
+//! 确定性已验证或本 change 有新验证（Q5' / Q8'）；不声称 Debian 12 侧
+//! v4 / v5 / v6 / v7 / v8 逐字节比对已完成。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

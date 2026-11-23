@@ -23,6 +23,13 @@
 //! 的 AI 命令落兽族段是预期；不冒充「默认脚本仍是人族段」。仍是外部帧
 //! 冻结命令、`SetAi { enabled: false }` 关内核 `run_ai`、按
 //! `(execute_frame, player_id, sequence)` 稳定排序、不新增权威状态。
+//!
+//! P9 / Q1'（tasks 3.2）：`Race` 扩为四变体后，本函数按 `ai_race` 经
+//! [`MeleeSetup::ai_category_def_ids`] 与 `Race::{hero_ability,
+//! harass_ability, weapons_upgrade, armor_upgrade}` 只读分派，使不死 /
+//! 暗夜 AI 训练 / 施法 / 研发命令的 `DefId` 自动落在 `3xx` / `4xx` 段；
+//! 命令面仍是既有 `GameplayCommandKind` 码 1–23（既有字节不变）、
+//! 不启用内核 `run_ai`、不新增权威状态 / 命令变体。
 
 use w3_core::{Frame, GameplayCommand, GameplayCommandKind};
 
@@ -220,17 +227,31 @@ mod tests {
     use super::*;
     use crate::melee::defs::{
         ABILITY, CATEGORY_ALTAR, CATEGORY_FARM, CATEGORY_SMITHY, HERO_ABILITY, HUMAN_HERO,
-        HUMAN_RANGED, HUMAN_SIEGE, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_HERO_ABILITY,
+        HUMAN_RANGED, HUMAN_SIEGE, NIGHT_ELF_HERO_ABILITY, NIGHT_ELF_UPGRADE_ARMOR,
+        NIGHT_ELF_UPGRADE_WEAPONS, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_HERO_ABILITY,
         ORC_RANGED, ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER, ORC_UPGRADE_ARMOR, ORC_UPGRADE_WEAPONS,
-        Race, UPGRADE_ARMOR, UPGRADE_WEAPONS,
+        Race, UNDEAD_HERO_ABILITY, UNDEAD_UPGRADE_ARMOR, UNDEAD_UPGRADE_WEAPONS, UPGRADE_ARMOR,
+        UPGRADE_WEAPONS,
     };
 
-    /// 四组合（本地族, AI 族）：人vs人 / 人vs兽 / 兽vs人 / 兽vs兽。
-    const COMBINATIONS: [(Race, Race); 4] = [
+    /// P9 / Q1' 十六组合（本地族, AI 族）：四族 4×4 笛卡尔积，含同族组合。
+    const COMBINATIONS: [(Race, Race); 16] = [
         (Race::Human, Race::Human),
         (Race::Human, Race::Orc),
+        (Race::Human, Race::Undead),
+        (Race::Human, Race::NightElf),
         (Race::Orc, Race::Human),
         (Race::Orc, Race::Orc),
+        (Race::Orc, Race::Undead),
+        (Race::Orc, Race::NightElf),
+        (Race::Undead, Race::Human),
+        (Race::Undead, Race::Orc),
+        (Race::Undead, Race::Undead),
+        (Race::Undead, Race::NightElf),
+        (Race::NightElf, Race::Human),
+        (Race::NightElf, Race::Orc),
+        (Race::NightElf, Race::Undead),
+        (Race::NightElf, Race::NightElf),
     ];
 
     #[test]
@@ -515,20 +536,24 @@ mod tests {
         ids
     }
 
-    /// 某族 `units` 段位（人族 1xx / 兽族 2xx）。
+    /// 某族 `units` 段位（P9 五段中的四族段：人族 1xx / 兽族 2xx /
+    /// 不死 3xx / 暗夜 4xx）。
     fn ai_race_segment(race: Race) -> std::ops::Range<DefId> {
         match race {
             Race::Human => 100..200,
             Race::Orc => 200..300,
+            Race::Undead => 300..400,
+            Race::NightElf => 400..500,
         }
     }
 
-    /// P8.3（design D2 / tasks 2.1）：四组合各枚举 `AI_PLAYER` 的
-    /// `Train` / `Cast` / `Research` 命令，其目标 `DefId` 落在 `ai_race`
-    /// 段 / 按族分派集合，MUST NOT 泄漏本地或对家族段的目标 ID；
-    /// 全部命令归属 AI 玩家、脚本非空（避免平凡通过）。
+    /// P8.3 / P9 Q1'（design D2 / tasks 2.1 / 3.2）：十六组合各枚举
+    /// `AI_PLAYER` 的 `Train` / `Cast` / `Research` 命令，其目标 `DefId`
+    /// 落在 `ai_race` 段 / 按族分派集合（含 `3xx` / `4xx`），MUST NOT
+    /// 泄漏本地或对家族段的目标 ID；全部命令归属 AI 玩家、脚本非空
+    /// （避免平凡通过）。
     #[test]
-    fn ai_commands_follow_ai_race_for_all_four_combinations() {
+    fn ai_commands_follow_ai_race_for_all_sixteen_combinations() {
         for (local, ai) in COMBINATIONS {
             let setup = MeleeSetup::with_races(local, ai);
             assert_eq!(setup.ai_race, ai, "reason=ai_race_field ai={ai:?}");
@@ -654,5 +679,85 @@ mod tests {
         ]
         .into_iter()
         .collect()
+    }
+
+    /// P9 / Q1'（tasks 3.2）：不死 / 暗夜 AI 命令的 `DefId` 落在
+    /// `3xx` / `4xx` 段，技能 / 升级按 `ai_race` 只读分派，
+    /// 既有 `GameplayCommandKind` 码 1–23 不变、不启用内核 `run_ai`、
+    /// `SetAi { enabled: false }` / `Leave` 齐备、按
+    /// `(execute_frame, player_id, sequence)` 稳定排序。
+    #[test]
+    fn undead_and_night_elf_ai_commands_land_in_own_segments() {
+        for (ai_race, segment, hero_ability, weapons, armor) in [
+            (
+                Race::Undead,
+                300..400,
+                UNDEAD_HERO_ABILITY,
+                UNDEAD_UPGRADE_WEAPONS,
+                UNDEAD_UPGRADE_ARMOR,
+            ),
+            (
+                Race::NightElf,
+                400..500,
+                NIGHT_ELF_HERO_ABILITY,
+                NIGHT_ELF_UPGRADE_WEAPONS,
+                NIGHT_ELF_UPGRADE_ARMOR,
+            ),
+        ] {
+            let setup = MeleeSetup::with_races(Race::Human, ai_race);
+            let script = AiScript::new(&setup, 1200);
+            // 训练 / 施法 / 研发三类命令都在 AI 族段 / 按族分派集合。
+            let mut saw_train = false;
+            let mut saw_cast = false;
+            let mut saw_research = false;
+            let mut saw_set_ai = false;
+            let mut saw_leave = false;
+            for command in &script.commands {
+                assert_eq!(command.player_id, AI_PLAYER);
+                match command.kind {
+                    GameplayCommandKind::Train { unit_def, .. } => {
+                        if unit_def != SOLDIER {
+                            assert!(
+                                segment.contains(&unit_def),
+                                "reason=ai_train_in_own_segment race={ai_race:?} def={unit_def}"
+                            );
+                            saw_train = true;
+                        }
+                    }
+                    GameplayCommandKind::Cast { ability, .. } => {
+                        if ability != ABILITY {
+                            assert_eq!(ability, hero_ability);
+                            saw_cast = true;
+                        }
+                    }
+                    GameplayCommandKind::Research { upgrade } => {
+                        assert!(upgrade == weapons || upgrade == armor);
+                        saw_research = true;
+                    }
+                    GameplayCommandKind::SetAi { enabled } => {
+                        assert!(!enabled, "reason=kernel_run_ai_disabled");
+                        saw_set_ai = true;
+                    }
+                    GameplayCommandKind::Leave { .. } => saw_leave = true,
+                    _ => {}
+                }
+            }
+            assert!(
+                saw_train && saw_cast && saw_research && saw_set_ai && saw_leave,
+                "reason=ai_script_kinds_complete race={ai_race:?}"
+            );
+            // 帧冻结外部命令、稳定排序（与 16 组合测试同一口径）。
+            assert!(script.commands.windows(2).all(|pair| {
+                (
+                    pair[0].execute_frame.value(),
+                    pair[0].player_id,
+                    pair[0].sequence,
+                ) <= (
+                    pair[1].execute_frame.value(),
+                    pair[1].player_id,
+                    pair[1].sequence,
+                )
+            }));
+        }
     }
 }

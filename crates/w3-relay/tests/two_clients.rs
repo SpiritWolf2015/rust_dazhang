@@ -3,24 +3,26 @@
 //! 两个 `RtsMatch` 经自建 relay 的权威帧命令流推进，只传输入命令、
 //! 不传状态；逐帧比对 `compute_state_hash()`、`read_view()`、
 //! `first_difference()` 与双方 checksum 交换结果。权威帧批轮转携带全部
-//! 23 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
+//! 36 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
 //! `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`、
-//! PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp` 与 PROTOCOL_VERSION 7
-//! 新增的 9 个 P8.5d 物品 / 商店 / 回城变体），验证联机与本地行为一致、
+//! PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`、PROTOCOL_VERSION 7
+//! 新增的 9 个 P8.5d 物品 / 商店 / 回城变体，以及 PROTOCOL_VERSION 8
+//! 新增的 13 个 P9 族特色机制变体），验证联机与本地行为一致、
 //! 联机唯一推进点仍是 `w3_net::apply_frame`。
 //! 注意：此处两个客户端实例跑在内存回环总线上；真实 UDP 双进程实机
 //! 验收另见 `vera20k-mapping.md`，对应 tasks.md 的人工验收项。
 
 use w3_core::{
     Command, CommandKind, EffectDef, EffectKind, EntityId, Frame, GameplayCommand,
-    GameplayCommandKind, MatchConfig, NEUTRAL_OWNER, RtsMatch, SimFixed, StaticWorld, TownHallTier,
+    GameplayCommandKind, MatchConfig, NEUTRAL_OWNER, RegenCondition, RtsMatch, SimFixed,
+    StaticWorld, TownHallTier,
 };
 use w3_net::packet::{Packet, PacketKind, encode_commands, parse_reject};
 use w3_net::transport::{Endpoint, LoopbackBus, LoopbackTransport, SharedBus, Transport};
 use w3_net::{ClientSession, apply_frame};
 use w3_relay::Relay;
 
-const FRAMES: u64 = 24;
+const FRAMES: u64 = 36;
 
 fn new_match() -> RtsMatch {
     RtsMatch::create_with_world(
@@ -72,17 +74,18 @@ fn commands_for(frame: u64, player: u8) -> Vec<Command> {
     )]
 }
 
-/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 23 类
+/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 36 类
 /// `GameplayCommandKind`（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
 /// `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`、
-/// PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp` 与 PROTOCOL_VERSION 7
-/// 新增的 9 个 P8.5d 物品 / 商店 / 回城变体），且 `execute_frame` 落在
-/// 原定帧，验证玩法命令仍在原定 `ExecuteFrame` 执行一次、不改变帧序、
+/// PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`、PROTOCOL_VERSION 7
+/// 新增的 9 个 P8.5d 物品 / 商店 / 回城变体，以及 PROTOCOL_VERSION 8
+/// 新增的 13 个 P9 族特色机制变体），且 `execute_frame` 落在原定帧，
+/// 验证玩法命令仍在原定 `ExecuteFrame` 执行一次、不改变帧序、
 /// 两端逐帧哈希一致。
 fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
     let entity = EntityId::new(u64::from(player)).unwrap();
     let altar = EntityId::new(u64::from(player) + 100).unwrap();
-    let slot = frame % 23;
+    let slot = frame % 36;
     let kind = match slot {
         0 => GameplayCommandKind::Cast {
             caster: entity,
@@ -175,13 +178,62 @@ fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
         21 => GameplayCommandKind::CancelTownPortal { hero: entity },
         // 22：系统级市场刷新（tag 45）。shop / batch 非零，player_id 必须是
         // NEUTRAL_OWNER(0)，由 w3-core 同源校验。
-        _ => GameplayCommandKind::RefreshMarket {
+        22 => GameplayCommandKind::RefreshMarket {
             shop: 700 + u32::from(player),
             batch: 90 + u32::from(player),
         },
+        // 23–35：PROTOCOL_VERSION 8 新增的 13 个 P9 族特色机制变体
+        // （tag 46–58）。实体字段均为合法非零值，整数 / 布尔参数按帧号
+        // 确定性派生；两端脚本一致即逐帧哈希一致。线格式只传输入命令，
+        // 语义结算由 w3-core 权威帧阶段确定性完成。
+        23 => GameplayCommandKind::SeedBlight {
+            source: entity,
+            cell_x: -(frame as i32) - 1,
+            cell_y: frame as i32,
+        },
+        24 => GameplayCommandKind::RaiseCorpse {
+            corpse: altar,
+            decay_frames: (frame as u32) + 30,
+        },
+        25 => GameplayCommandKind::ConsumeCorpse {
+            consumer: entity,
+            corpse: altar,
+        },
+        26 => GameplayCommandKind::HauntGoldMine { mine: entity },
+        27 => GameplayCommandKind::EntangleGoldMine { mine: altar },
+        28 => GameplayCommandKind::SetAncientRoot {
+            ancient: entity,
+            rooted: frame % 2 == 0,
+        },
+        29 => GameplayCommandKind::BindMoonWell {
+            well: entity,
+            restore: i64::from(frame as u32) + 25,
+        },
+        30 => GameplayCommandKind::SetStealth {
+            unit: entity,
+            cloaked: true,
+        },
+        31 => GameplayCommandKind::RegisterDetector { unit: altar },
+        32 => GameplayCommandKind::SetNightCloak {
+            unit: entity,
+            enabled: frame % 2 == 0,
+        },
+        33 => GameplayCommandKind::MarkSightBlocker {
+            blocker: altar,
+            blocking: true,
+        },
+        34 => GameplayCommandKind::SetCreepSleep {
+            creep: altar,
+            sleeps_at_night: frame % 2 == 0,
+        },
+        35 => GameplayCommandKind::SetRegenCondition {
+            unit: entity,
+            condition: RegenCondition::Night,
+        },
+        _ => unreachable!("slot out of range: slot={slot}"),
     };
     // 两个系统级命令（slot 13 `SeedCreepCamp` / slot 22 `RefreshMarket`）
-    // 由中立归属提交；其余 21 类沿用玩家 id，保证两端一致。
+    // 由中立归属提交；其余 34 类沿用玩家 id，保证两端一致。
     let command_player = if slot == 13 || slot == 22 {
         NEUTRAL_OWNER
     } else {
@@ -409,6 +461,59 @@ fn relay_rejects_version_six_carrying_p8_5d_variant() {
         .encode()
         .unwrap();
     stale[4] = 6;
+
+    client.send(&Endpoint::Loopback(0), &stale).unwrap();
+    relay.poll().unwrap();
+    let (_, bytes) = client.recv().unwrap().unwrap();
+    let reject = Packet::decode(&bytes).unwrap();
+    assert_eq!(reject.kind, PacketKind::Reject);
+    assert_eq!(
+        parse_reject(&reject.payload).unwrap(),
+        "protocol version mismatch"
+    );
+    assert!(
+        relay.log().is_empty(),
+        "stale payload must not enter command stream"
+    );
+}
+
+#[test]
+fn relay_rejects_version_seven_carrying_p9_variant() {
+    // 伪装成旧 v7 的 Input 包，载荷携带 PROTOCOL_VERSION 8 新增的
+    // SeedBlight（tag 46）与 SetRegenCondition（tag 58）；v8 relay 必须
+    // 在解码 payload 之前回 Reject("protocol version mismatch")，
+    // tag 46–58 玩法命令字段绝不被静默当作 unknown field 丢弃后进入
+    // 权威命令流（ADR 0005 §3 / R12.2）。
+    let bus = LoopbackBus::shared();
+    let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+    let mut client = LoopbackTransport::new(1, &bus);
+
+    let gameplay = vec![
+        GameplayCommand::new(
+            Frame::new(0),
+            1,
+            1,
+            GameplayCommandKind::SeedBlight {
+                source: EntityId::new(20).unwrap(),
+                cell_x: -3,
+                cell_y: 7,
+            },
+        ),
+        GameplayCommand::new(
+            Frame::new(0),
+            1,
+            2,
+            GameplayCommandKind::SetRegenCondition {
+                unit: EntityId::new(21).unwrap(),
+                condition: RegenCondition::Blight,
+            },
+        ),
+    ];
+    let payload = encode_commands(&[], &gameplay).unwrap();
+    let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+        .encode()
+        .unwrap();
+    stale[4] = 7;
 
     client.send(&Endpoint::Loopback(0), &stale).unwrap();
     relay.poll().unwrap();

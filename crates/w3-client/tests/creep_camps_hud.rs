@@ -190,7 +190,7 @@ fn fact_events() -> Vec<Event> {
 #[test]
 fn real_assembly_seeds_creep_camp_and_camps_are_non_empty() {
     let defs = synthetic_definitions();
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
     assert!(defs.is_creep(CREEP_UNIT), "reason=creep_unit_registered");
     assert!(
         defs.is_ground_item(CREEP_ITEM_ALWAYS) && defs.is_ground_item(CREEP_ITEM_CHOICE),

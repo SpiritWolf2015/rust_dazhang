@@ -16,13 +16,16 @@
 //! `UpgradeTownHall` 一个变体（tag 35），`PROTOCOL_VERSION = 6` 再只追加
 //! `SeedCreepCamp` 一个变体（tag 36，均跳过 `reserved 14 to 32`）；
 //! `PROTOCOL_VERSION = 7` 再只追加 P8.5d 物品 / 商店 / 回城 9 个变体
-//! （tag 37–45），玩法变体累计 23 类；帧编排、`arrival` 语义与「恰好一次
-//! `step()`」推进点一律不变（ADR 0005 §3）。
+//! （tag 37–45），玩法变体累计 23 类；`PROTOCOL_VERSION = 8` 再只追加
+//! P9 族特色机制 13 个变体（tag 46–58），玩法变体累计 36 类。新增变体
+//! 的 `RegenCondition` 以 `code()` 的 uint32 稳定码承载、网格坐标与
+//! 月亮井恢复量以 int64 定宽承载并在解码时显式校验值域；帧编排、
+//! `arrival` 语义与「恰好一次 `step()`」推进点一律不变（ADR 0005 §3）。
 
 use prost::Message;
 use w3_core::{
     Command, CommandKind, EffectDef, EffectKind, EntityId, Frame, GameplayCommand,
-    GameplayCommandKind, SimFixed, TownHallTier,
+    GameplayCommandKind, RegenCondition, SimFixed, TownHallTier,
 };
 
 use crate::error::NetError;
@@ -208,10 +211,10 @@ fn from_pb_kind(kind: pb::command::Kind) -> CommandKind {
 }
 
 // ---------------------------------------------------------------------------
-// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（23 变体）
+// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（36 变体）
 // ---------------------------------------------------------------------------
 
-/// 把 23 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
+/// 把 36 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
 pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::Kind {
     match *kind {
         GameplayCommandKind::Cast {
@@ -362,10 +365,95 @@ pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::
         GameplayCommandKind::RefreshMarket { shop, batch } => {
             pb::gameplay_command::Kind::RefreshMarket(pb::GameplayRefreshMarket { shop, batch })
         }
+        // P9 / PROTOCOL_VERSION 8 十三个族特色机制变体（tag 46–58）：
+        // EntityId 一律用 uint64 的 value()，bool / uint32 无损定宽；
+        // i32 网格坐标与 i64 恢复量装入 int64（i32 用 i64::from 扩宽，
+        // 解码侧收窄回 i32 并显式校验溢出），回血条件用 code() 的
+        // uint32 稳定码。一个变体对应一个 proto tag、不合并、不复用。
+        GameplayCommandKind::SeedBlight {
+            source,
+            cell_x,
+            cell_y,
+        } => pb::gameplay_command::Kind::SeedBlight(pb::GameplaySeedBlight {
+            source: source.value(),
+            cell_x: i64::from(cell_x),
+            cell_y: i64::from(cell_y),
+        }),
+        GameplayCommandKind::RaiseCorpse {
+            corpse,
+            decay_frames,
+        } => pb::gameplay_command::Kind::RaiseCorpse(pb::GameplayRaiseCorpse {
+            corpse: corpse.value(),
+            decay_frames,
+        }),
+        GameplayCommandKind::ConsumeCorpse { consumer, corpse } => {
+            pb::gameplay_command::Kind::ConsumeCorpse(pb::GameplayConsumeCorpse {
+                consumer: consumer.value(),
+                corpse: corpse.value(),
+            })
+        }
+        GameplayCommandKind::HauntGoldMine { mine } => {
+            pb::gameplay_command::Kind::HauntGoldMine(pb::GameplayHauntGoldMine {
+                mine: mine.value(),
+            })
+        }
+        GameplayCommandKind::EntangleGoldMine { mine } => {
+            pb::gameplay_command::Kind::EntangleGoldMine(pb::GameplayEntangleGoldMine {
+                mine: mine.value(),
+            })
+        }
+        GameplayCommandKind::SetAncientRoot { ancient, rooted } => {
+            pb::gameplay_command::Kind::SetAncientRoot(pb::GameplaySetAncientRoot {
+                ancient: ancient.value(),
+                rooted,
+            })
+        }
+        GameplayCommandKind::BindMoonWell { well, restore } => {
+            pb::gameplay_command::Kind::BindMoonWell(pb::GameplayBindMoonWell {
+                well: well.value(),
+                restore,
+            })
+        }
+        GameplayCommandKind::SetStealth { unit, cloaked } => {
+            pb::gameplay_command::Kind::SetStealth(pb::GameplaySetStealth {
+                unit: unit.value(),
+                cloaked,
+            })
+        }
+        GameplayCommandKind::RegisterDetector { unit } => {
+            pb::gameplay_command::Kind::RegisterDetector(pb::GameplayRegisterDetector {
+                unit: unit.value(),
+            })
+        }
+        GameplayCommandKind::SetNightCloak { unit, enabled } => {
+            pb::gameplay_command::Kind::SetNightCloak(pb::GameplaySetNightCloak {
+                unit: unit.value(),
+                enabled,
+            })
+        }
+        GameplayCommandKind::MarkSightBlocker { blocker, blocking } => {
+            pb::gameplay_command::Kind::MarkSightBlocker(pb::GameplayMarkSightBlocker {
+                blocker: blocker.value(),
+                blocking,
+            })
+        }
+        GameplayCommandKind::SetCreepSleep {
+            creep,
+            sleeps_at_night,
+        } => pb::gameplay_command::Kind::SetCreepSleep(pb::GameplaySetCreepSleep {
+            creep: creep.value(),
+            sleeps_at_night,
+        }),
+        GameplayCommandKind::SetRegenCondition { unit, condition } => {
+            pb::gameplay_command::Kind::SetRegenCondition(pb::GameplaySetRegenCondition {
+                unit: unit.value(),
+                condition: u32::from(condition.code()),
+            })
+        }
     }
 }
 
-/// 把 protobuf `GameplayCommand.kind` oneof 还原为 23 类 `GameplayCommandKind`；穷尽匹配。
+/// 把 protobuf `GameplayCommand.kind` oneof 还原为 36 类 `GameplayCommandKind`；穷尽匹配。
 /// 缺 `kind` / 缺 `effect` / 未知效果码 / 未知等级 / 数值溢出一律显式返回 `NetError`，
 /// 不猜测、不回退。
 pub fn from_pb_gameplay_kind(
@@ -491,6 +579,69 @@ pub fn from_pb_gameplay_kind(
             shop: m.shop,
             batch: m.batch,
         },
+        // P9 / PROTOCOL_VERSION 8 十三个变体（tag 46–58）：uint64 -> EntityId
+        // 与 uint32 / bool 均为无损定宽映射；cell_x / cell_y 由 int64 收窄到
+        // i32（溢出显式拒绝），restore 为 int64 原值，condition 先收窄到 u8
+        //（溢出显式拒绝）再由 RegenCondition::from_code 校验合法性，非法码
+        // 绝不静默降级为默认条件。语义合法性（实体非 NONE、玩家归属）由
+        // w3-core 的同源校验承担，线格式层只忠实还原字段、不猜测、不回退。
+        pb::gameplay_command::Kind::SeedBlight(m) => GameplayCommandKind::SeedBlight {
+            source: entity_from_raw(m.source),
+            cell_x: i32::try_from(m.cell_x).map_err(|_| overflow_error("cell_x", m.cell_x))?,
+            cell_y: i32::try_from(m.cell_y).map_err(|_| overflow_error("cell_y", m.cell_y))?,
+        },
+        pb::gameplay_command::Kind::RaiseCorpse(m) => GameplayCommandKind::RaiseCorpse {
+            corpse: entity_from_raw(m.corpse),
+            decay_frames: m.decay_frames,
+        },
+        pb::gameplay_command::Kind::ConsumeCorpse(m) => GameplayCommandKind::ConsumeCorpse {
+            consumer: entity_from_raw(m.consumer),
+            corpse: entity_from_raw(m.corpse),
+        },
+        pb::gameplay_command::Kind::HauntGoldMine(m) => GameplayCommandKind::HauntGoldMine {
+            mine: entity_from_raw(m.mine),
+        },
+        pb::gameplay_command::Kind::EntangleGoldMine(m) => GameplayCommandKind::EntangleGoldMine {
+            mine: entity_from_raw(m.mine),
+        },
+        pb::gameplay_command::Kind::SetAncientRoot(m) => GameplayCommandKind::SetAncientRoot {
+            ancient: entity_from_raw(m.ancient),
+            rooted: m.rooted,
+        },
+        pb::gameplay_command::Kind::BindMoonWell(m) => GameplayCommandKind::BindMoonWell {
+            well: entity_from_raw(m.well),
+            restore: m.restore,
+        },
+        pb::gameplay_command::Kind::SetStealth(m) => GameplayCommandKind::SetStealth {
+            unit: entity_from_raw(m.unit),
+            cloaked: m.cloaked,
+        },
+        pb::gameplay_command::Kind::RegisterDetector(m) => GameplayCommandKind::RegisterDetector {
+            unit: entity_from_raw(m.unit),
+        },
+        pb::gameplay_command::Kind::SetNightCloak(m) => GameplayCommandKind::SetNightCloak {
+            unit: entity_from_raw(m.unit),
+            enabled: m.enabled,
+        },
+        pb::gameplay_command::Kind::MarkSightBlocker(m) => GameplayCommandKind::MarkSightBlocker {
+            blocker: entity_from_raw(m.blocker),
+            blocking: m.blocking,
+        },
+        pb::gameplay_command::Kind::SetCreepSleep(m) => GameplayCommandKind::SetCreepSleep {
+            creep: entity_from_raw(m.creep),
+            sleeps_at_night: m.sleeps_at_night,
+        },
+        pb::gameplay_command::Kind::SetRegenCondition(m) => {
+            let code =
+                u8::try_from(m.condition).map_err(|_| overflow_error("condition", m.condition))?;
+            let condition = RegenCondition::from_code(code).ok_or_else(|| {
+                NetError::Malformed(format!("unknown regen condition: code={code}"))
+            })?;
+            GameplayCommandKind::SetRegenCondition {
+                unit: entity_from_raw(m.unit),
+                condition,
+            }
+        }
     })
 }
 
@@ -1532,7 +1683,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_appends_only_tags_33_through_45_and_preserves_reserved() {
+    fn schema_appends_only_tags_33_through_58_and_preserves_reserved() {
         let schema = include_str!("proto/w3net.proto");
         assert!(schema.contains("reserved 14 to 32;"));
         assert!(schema.contains("message GameplayReviveHero {"));
@@ -1574,7 +1725,8 @@ mod tests {
         assert!(schema.contains("uint32 shop = 1;"));
         assert!(schema.contains("uint32 batch = 2;"));
         // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加
-        // 33 / 34 / 35 / 36，再追加 P8.5d 的 37–45（reserved 段跳过）。
+        // 33 / 34 / 35 / 36、P8.5d 的 37–45，再追加 P9 的 46–58
+        // （reserved 段跳过），既有 tag 编号与顺序一个不动。
         let oneof = schema
             .split("oneof kind {")
             .nth(2)
@@ -1594,9 +1746,9 @@ mod tests {
             tags,
             vec![
                 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-                45
+                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58
             ],
-            "oneof tags must be append-only (4-13 + 33-36 + 37-45)"
+            "oneof tags must be append-only (4-13 + 33-36 + 37-45 + 46-58)"
         );
         // 新消息尾部保留 reserved；既有编号段零改动。
         assert!(schema.contains("reserved 5 to 8;"));
@@ -2216,8 +2368,8 @@ mod tests {
             }
         }
         // 字段编号只追加：reserved 14 to 32 原样保留、tag 36 唯一；
-        // PROTOCOL_VERSION 7 追加 tag 37–45 后，下一个空闲 tag 是 46，
-        // 因此断言「不存在 = 46;」维持「只追加、顶点之后留空」的边界语义。
+        // PROTOCOL_VERSION 8 追加 tag 46–58 后，下一个空闲 tag 是 59，
+        // 因此断言「不存在 = 59;」维持「只追加、顶点之后留空」的边界语义。
         assert!(schema.contains("reserved 14 to 32;"));
         assert_eq!(
             schema
@@ -2226,7 +2378,7 @@ mod tests {
             1,
             "tag 36 must be appended exactly once"
         );
-        assert!(!schema.contains("= 46;"));
+        assert!(!schema.contains("= 59;"));
     }
 
     // ---- PROTOCOL_VERSION 7：P8.5d 九个玩法变体的线格式回归 ----
@@ -2513,7 +2665,8 @@ mod tests {
         assert!(schema.contains("uint64 target = 3;"));
         assert!(schema.contains("uint32 shop = 1;"));
         assert!(schema.contains("uint32 batch = 2;"));
-        // 字段编号只追加：reserved 14 to 32 原样保留、tag 37–45 各唯一、tag 46 留空。
+        // 字段编号只追加：reserved 14 to 32 原样保留、tag 37–45 各唯一、
+        // P9 追加 tag 46–58 后 tag 59 留空。
         assert!(schema.contains("reserved 14 to 32;"));
         for (name, tag) in [
             ("pickup_ground_item", 37),
@@ -2532,7 +2685,7 @@ mod tests {
                 "tag {tag} ({name}) must be appended exactly once"
             );
         }
-        assert!(!schema.contains("= 46;"));
+        assert!(!schema.contains("= 59;"));
         // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码，
         // 避免把「禁止 float」这类说明文字算成声明字段。
         for line in schema.lines() {
@@ -2548,5 +2701,681 @@ mod tests {
         assert!(!schema.contains("CancelRefreshMarket"));
         assert!(!schema.contains("CancelPickupGroundItem"));
         assert!(!schema.contains("GameplayCancelRefreshMarket"));
+    }
+
+    // ---- PROTOCOL_VERSION 8：P9 十三个族特色机制变体的线格式回归 ----
+
+    /// 既有 1–23 类玩法变体 `sample_gameplay()` 的 canonical 字节基线。
+    /// 该常量按 protobuf wire format 独立推导（显式 varint / proto3 默认值
+    /// 省略 / int64 负数补码 varint / 字段按编号升序），与 prost 生成代码
+    /// 解耦；断言它恒等于当前 `encode_commands` 的输出，即证明 P9 只追加
+    /// tag 46–58 后既有 1–23 编码逐字节不变，解码→再编码亦不漂移。
+    const LEGACY_1_TO_23_WIRE: &[u8] = &[
+        0x4a, 0xdc, 0x02, 0x0a, 0x0e, 0x08, 0x03, 0x10, 0x01, 0x18, 0x01, 0x22, 0x06, 0x08, 0x01,
+        0x10, 0x0a, 0x18, 0x02, 0x0a, 0x0e, 0x08, 0x03, 0x10, 0x01, 0x18, 0x02, 0x2a, 0x06, 0x08,
+        0x03, 0x10, 0x0b, 0x18, 0x01, 0x0a, 0x0c, 0x08, 0x03, 0x10, 0x01, 0x18, 0x03, 0x32, 0x04,
+        0x08, 0x03, 0x10, 0x04, 0x0a, 0x0a, 0x08, 0x04, 0x10, 0x02, 0x18, 0x01, 0x3a, 0x02, 0x08,
+        0x0c, 0x0a, 0x0c, 0x08, 0x04, 0x10, 0x02, 0x18, 0x02, 0x42, 0x04, 0x08, 0x03, 0x10, 0x0d,
+        0x0a, 0x0a, 0x08, 0x04, 0x10, 0x02, 0x18, 0x03, 0x4a, 0x02, 0x08, 0x03, 0x0a, 0x19, 0x08,
+        0x05, 0x10, 0x01, 0x18, 0x01, 0x52, 0x11, 0x08, 0x0e, 0x12, 0x0d, 0x10, 0xf9, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0x18, 0x1e, 0x0a, 0x0c, 0x08, 0x05, 0x10, 0x01,
+        0x18, 0x02, 0x5a, 0x04, 0x08, 0x0f, 0x10, 0x3c, 0x0a, 0x0a, 0x08, 0x05, 0x10, 0x02, 0x18,
+        0x01, 0x62, 0x02, 0x08, 0x01, 0x0a, 0x0a, 0x08, 0x06, 0x10, 0x02, 0x18, 0x02, 0x6a, 0x02,
+        0x08, 0x02, 0x0a, 0x0f, 0x08, 0x07, 0x10, 0x01, 0x18, 0x01, 0x8a, 0x02, 0x06, 0x08, 0x14,
+        0x10, 0x15, 0x18, 0x16, 0x0a, 0x0b, 0x08, 0x07, 0x10, 0x02, 0x18, 0x02, 0x92, 0x02, 0x02,
+        0x08, 0x14, 0x0a, 0x0f, 0x08, 0x08, 0x10, 0x01, 0x18, 0x01, 0x9a, 0x02, 0x06, 0x08, 0x28,
+        0x10, 0x29, 0x18, 0x02, 0x0a, 0x0b, 0x08, 0x09, 0x18, 0x01, 0xa2, 0x02, 0x04, 0x08, 0x5b,
+        0x10, 0x29, 0x0a, 0x0d, 0x08, 0x0a, 0x10, 0x01, 0x18, 0x01, 0xaa, 0x02, 0x04, 0x08, 0x1e,
+        0x10, 0x1f, 0x0a, 0x0f, 0x08, 0x0b, 0x10, 0x01, 0x18, 0x02, 0xb2, 0x02, 0x06, 0x08, 0x20,
+        0x10, 0x21, 0x18, 0x22, 0x0a, 0x0f, 0x08, 0x0c, 0x10, 0x01, 0x18, 0x03, 0xba, 0x02, 0x06,
+        0x08, 0x23, 0x10, 0x24, 0x18, 0x25, 0x0a, 0x0d, 0x08, 0x0d, 0x10, 0x01, 0x18, 0x04, 0xc2,
+        0x02, 0x04, 0x08, 0x26, 0x10, 0x27, 0x0a, 0x0f, 0x08, 0x0e, 0x10, 0x01, 0x18, 0x05, 0xca,
+        0x02, 0x06, 0x08, 0x28, 0x10, 0x29, 0x18, 0x2a, 0x0a, 0x0f, 0x08, 0x0f, 0x10, 0x01, 0x18,
+        0x06, 0xd2, 0x02, 0x06, 0x08, 0x2b, 0x10, 0x2c, 0x18, 0x2d, 0x0a, 0x0d, 0x08, 0x10, 0x10,
+        0x01, 0x18, 0x07, 0xda, 0x02, 0x04, 0x08, 0x2e, 0x10, 0x2f, 0x0a, 0x0b, 0x08, 0x11, 0x10,
+        0x01, 0x18, 0x08, 0xe2, 0x02, 0x02, 0x08, 0x30, 0x0a, 0x0b, 0x08, 0x12, 0x18, 0x09, 0xea,
+        0x02, 0x04, 0x08, 0x31, 0x10, 0x32,
+    ];
+
+    #[test]
+    fn legacy_one_to_twenty_three_wire_bytes_are_frozen() {
+        let bytes = encode_commands(&[], &sample_gameplay()).unwrap();
+        assert_eq!(
+            bytes, LEGACY_1_TO_23_WIRE,
+            "appending tags 46-58 must not change legacy 1-23 encoding"
+        );
+        // 解码 -> 再编码仍等于同一基线（canonical 往返不漂移）。
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 23);
+        assert_eq!(
+            encode_commands(&commands, &gameplay).unwrap(),
+            LEGACY_1_TO_23_WIRE
+        );
+        assert_gameplay_eq(&gameplay, &sample_gameplay());
+    }
+
+    /// 十三个 P9 新变体的样本，每类恰好一条；字段覆盖 i32 / u64 / u32 /
+    /// i64 边界值与 bool 真 / 假两种取值，`RegenCondition::Night` 为最大
+    /// 合法码 4（其余 4 个码由专门用例覆盖）。
+    fn sample_p9_gameplay() -> Vec<GameplayCommand> {
+        let one = entity_from_raw(1);
+        let max = entity_from_raw(u64::MAX);
+        vec![
+            GameplayCommand::new(
+                Frame::new(20),
+                1,
+                1,
+                GameplayCommandKind::SeedBlight {
+                    source: one,
+                    cell_x: i32::MIN,
+                    cell_y: i32::MAX,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(21),
+                1,
+                2,
+                GameplayCommandKind::RaiseCorpse {
+                    corpse: max,
+                    decay_frames: u32::MAX,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(22),
+                1,
+                3,
+                GameplayCommandKind::ConsumeCorpse {
+                    consumer: one,
+                    corpse: max,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(23),
+                1,
+                4,
+                GameplayCommandKind::HauntGoldMine { mine: max },
+            ),
+            GameplayCommand::new(
+                Frame::new(24),
+                1,
+                5,
+                GameplayCommandKind::EntangleGoldMine { mine: one },
+            ),
+            GameplayCommand::new(
+                Frame::new(25),
+                1,
+                6,
+                GameplayCommandKind::SetAncientRoot {
+                    ancient: one,
+                    rooted: true,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(26),
+                1,
+                7,
+                GameplayCommandKind::BindMoonWell {
+                    well: one,
+                    restore: i64::MIN,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(27),
+                1,
+                8,
+                GameplayCommandKind::SetStealth {
+                    unit: one,
+                    cloaked: true,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(28),
+                1,
+                9,
+                GameplayCommandKind::RegisterDetector { unit: max },
+            ),
+            GameplayCommand::new(
+                Frame::new(29),
+                1,
+                10,
+                GameplayCommandKind::SetNightCloak {
+                    unit: one,
+                    enabled: false,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(30),
+                1,
+                11,
+                GameplayCommandKind::MarkSightBlocker {
+                    blocker: one,
+                    blocking: true,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(31),
+                1,
+                12,
+                GameplayCommandKind::SetCreepSleep {
+                    creep: one,
+                    sleeps_at_night: false,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(32),
+                1,
+                13,
+                GameplayCommandKind::SetRegenCondition {
+                    unit: one,
+                    condition: RegenCondition::Night,
+                },
+            ),
+        ]
+    }
+
+    #[test]
+    fn p9_thirteen_variants_roundtrip_is_canonical() {
+        let gameplay = sample_p9_gameplay();
+        assert_eq!(gameplay.len(), 13, "sample must cover all 13 new kinds");
+        let first = encode_commands(&[], &gameplay).unwrap();
+        let second = encode_commands(&[], &gameplay).unwrap();
+        assert_eq!(first, second, "two encodes must be byte-identical");
+        let (commands, decoded) = decode_commands(&first).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            first,
+            "decode -> encode must be canonical"
+        );
+        // 逐条单独往返，避免批量编码掩盖某个变体的歧义映射。
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    /// tag 46–58 / wire 2 的 key varint：
+    /// 46=370->[0xf2,0x02]，47=378->[0xfa,0x02]，48=386->[0x82,0x03]，
+    /// 49=394->[0x8a,0x03]，50=402->[0x92,0x03]，51=410->[0x9a,0x03]，
+    /// 52=418->[0xa2,0x03]，53=426->[0xaa,0x03]，54=434->[0xb2,0x03]，
+    /// 55=442->[0xba,0x03]，56=450->[0xc2,0x03]，57=458->[0xca,0x03]，
+    /// 58=466->[0xd2,0x03]。
+    #[test]
+    fn p9_variants_use_wire_tags_46_to_58() {
+        let gameplay = sample_p9_gameplay();
+        let keys: [[u8; 2]; 13] = [
+            [0xf2, 0x02],
+            [0xfa, 0x02],
+            [0x82, 0x03],
+            [0x8a, 0x03],
+            [0x92, 0x03],
+            [0x9a, 0x03],
+            [0xa2, 0x03],
+            [0xaa, 0x03],
+            [0xb2, 0x03],
+            [0xba, 0x03],
+            [0xc2, 0x03],
+            [0xca, 0x03],
+            [0xd2, 0x03],
+        ];
+        for (command, key) in gameplay.iter().zip(keys.iter()) {
+            let bytes = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            assert!(
+                bytes.windows(2).any(|w| w == &key[..]),
+                "variant {:?} must be encoded on its own tag",
+                command.kind
+            );
+            // 解码能还原为同一变体，证明 tag 未被错放 / 复用。
+            let (_, decoded) = decode_commands(&bytes).unwrap();
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].kind, command.kind);
+        }
+    }
+
+    /// 手工拼装 `GameplaySeedBlight` 载荷（uint64 + 两个 int64，仅测试用）；
+    /// int64 负数按补码 u64 写 varint，与 prost 的 int64 编码一致。
+    fn seed_blight_payload(source: u64, cell_x: i64, cell_y: i64) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend(field_varint(1, source));
+        payload.extend(field_varint(2, cell_x as u64));
+        payload.extend(field_varint(3, cell_y as u64));
+        payload
+    }
+
+    #[test]
+    fn reserved_tag_rejects_p9_payload() {
+        let payload = seed_blight_payload(91, -7, 9);
+        // 缺陷态：把 SeedBlight 载荷错放进 reserved 14 to 32 段的 tag 14 / 32。
+        // prost 视作 unknown field 丢弃，kind 变 None，解码显式返回 Malformed。
+        for tag in [14, 32] {
+            let defect =
+                command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(tag, &payload));
+            assert!(
+                matches!(decode_commands(&defect), Err(NetError::Malformed(_))),
+                "reserved tag must be rejected: tag={tag}"
+            );
+        }
+        // 元断言防退化：同一载荷改回规范 tag 46 必须成功解码为 SeedBlight。
+        let good = command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(46, &payload));
+        let (commands, gameplay) = decode_commands(&good).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 1);
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::SeedBlight {
+                source: entity_from_raw(91),
+                cell_x: -7,
+                cell_y: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn p9_non_canonical_varint_is_rejected_and_never_echoed() {
+        let payload = seed_blight_payload(91, -7, 9);
+        // 溢出型非规范 varint（10 个以上 continuation 字节）：明确转成 Malformed。
+        let mut overlong_cmd = vec![0x08]; // execute_frame field 1, wire type 0
+        overlong_cmd.extend_from_slice(&[0x80u8; 11]);
+        overlong_cmd.push(0x00);
+        overlong_cmd.extend(field_varint(2, 1)); // player_id = 1
+        overlong_cmd.extend(field_varint(3, 1)); // sequence = 1
+        overlong_cmd.extend(field_bytes(46, &payload));
+        assert!(matches!(
+            decode_commands(&command_batch_with_gameplay(overlong_cmd)),
+            Err(NetError::Malformed(_))
+        ));
+
+        // overlong 但可解码的 varint：解码 -> 再编码必须产出规范最短字节，
+        // 绝不回显非规范字节（ADR 0005 §3 canonical 往返约束）。
+        let mut non_canonical = vec![0x08];
+        non_canonical.extend_from_slice(&[0x81, 0x00]); // execute_frame = 1（overlong）
+        non_canonical.extend(field_varint(2, 1));
+        non_canonical.extend(field_varint(3, 1));
+        non_canonical.extend(field_bytes(46, &payload));
+        let bytes = command_batch_with_gameplay(non_canonical);
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        assert_eq!(gameplay.len(), 1);
+        assert!(matches!(
+            gameplay[0].kind,
+            GameplayCommandKind::SeedBlight { .. }
+        ));
+        let reencoded = encode_commands(&commands, &gameplay).unwrap();
+        assert_ne!(reencoded, bytes, "non-canonical bytes must not be echoed");
+        assert!(
+            reencoded.windows(2).any(|w| w == &[0x08, 0x01][..]),
+            "re-encode must use minimal varint for execute_frame=1"
+        );
+        assert!(
+            !reencoded.windows(3).any(|w| w == &[0x08, 0x81, 0x00][..]),
+            "overlong varint must not survive re-encode"
+        );
+    }
+
+    #[test]
+    fn p9_unknown_fields_are_dropped_not_echoed() {
+        let gameplay = sample_p9_gameplay();
+        let mut bytes = encode_commands(&[], &gameplay).unwrap();
+        // 追加一个合法但未知字段（field 1000, varint 0）。
+        bytes.extend_from_slice(&[0xc0, 0x3e, 0x00]);
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        let reencoded = encode_commands(&commands, &decoded).unwrap();
+        assert!(
+            !reencoded.ends_with(&[0xc0, 0x3e, 0x00]),
+            "unknown fields must not be echoed"
+        );
+        assert_eq!(reencoded, encode_commands(&[], &gameplay).unwrap());
+    }
+
+    /// 用生成的 pb 类型直接构造非法线格式字段，绕过 `to_pb` 的合法映射。
+    fn p9_bad_batch(kind: pb::gameplay_command::Kind) -> Vec<u8> {
+        pb::CommandBatch {
+            commands: Vec::new(),
+            gameplay: Some(pb::GameplayCommandBatch {
+                commands: vec![pb::GameplayCommand {
+                    execute_frame: 1,
+                    player_id: 1,
+                    sequence: 1,
+                    kind: Some(kind),
+                }],
+            }),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn p9_numeric_overflow_and_invalid_regen_condition_are_rejected() {
+        // i32 网格坐标越界（int64 承载、解码收窄到 i32）一律显式拒绝。
+        for (cell_x, cell_y) in [(i64::MAX, 0i64), (0, i64::MIN), (i64::MIN, i64::MAX)] {
+            let bad = p9_bad_batch(pb::gameplay_command::Kind::SeedBlight(
+                pb::GameplaySeedBlight {
+                    source: 1,
+                    cell_x,
+                    cell_y,
+                },
+            ));
+            assert!(
+                matches!(decode_commands(&bad), Err(NetError::Malformed(_))),
+                "cell coordinate overflow must be rejected: cell_x={cell_x} cell_y={cell_y}"
+            );
+        }
+        // 非法 / 溢出的回血条件稳定码一律显式拒绝，不静默降级为默认值。
+        for code in [5u32, 9, 255, u32::MAX] {
+            let bad = p9_bad_batch(pb::gameplay_command::Kind::SetRegenCondition(
+                pb::GameplaySetRegenCondition {
+                    unit: 1,
+                    condition: code,
+                },
+            ));
+            assert!(
+                matches!(decode_commands(&bad), Err(NetError::Malformed(_))),
+                "invalid regen condition must be rejected: code={code}"
+            );
+        }
+        // 元断言防退化：i32 值域内边界值可无损还原。
+        let good = p9_bad_batch(pb::gameplay_command::Kind::SeedBlight(
+            pb::GameplaySeedBlight {
+                source: 1,
+                cell_x: i64::from(i32::MIN),
+                cell_y: i64::from(i32::MAX),
+            },
+        ));
+        let (_, decoded) = decode_commands(&good).unwrap();
+        assert_eq!(
+            decoded[0].kind,
+            GameplayCommandKind::SeedBlight {
+                source: entity_from_raw(1),
+                cell_x: i32::MIN,
+                cell_y: i32::MAX,
+            }
+        );
+        // 全部 5 个合法码分别还原为对应枚举值，证明拒绝仅来自码本身非法。
+        for (code, condition) in [
+            (0u32, RegenCondition::None),
+            (1, RegenCondition::Always),
+            (2, RegenCondition::Blight),
+            (3, RegenCondition::Day),
+            (4, RegenCondition::Night),
+        ] {
+            let good = p9_bad_batch(pb::gameplay_command::Kind::SetRegenCondition(
+                pb::GameplaySetRegenCondition {
+                    unit: 1,
+                    condition: code,
+                },
+            ));
+            let (_, decoded) = decode_commands(&good).unwrap();
+            assert_eq!(
+                decoded[0].kind,
+                GameplayCommandKind::SetRegenCondition {
+                    unit: entity_from_raw(1),
+                    condition,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn p9_schema_keeps_canonical_constraints() {
+        let schema = include_str!("proto/w3net.proto");
+        // 十三个新消息与定宽字段；EntityId 用 uint64、坐标 / 恢复量用 int64、
+        // 衰减帧数 / 回血条件稳定码用 uint32、开关用 bool。
+        for message in [
+            "message GameplaySeedBlight {",
+            "message GameplayRaiseCorpse {",
+            "message GameplayConsumeCorpse {",
+            "message GameplayHauntGoldMine {",
+            "message GameplayEntangleGoldMine {",
+            "message GameplaySetAncientRoot {",
+            "message GameplayBindMoonWell {",
+            "message GameplaySetStealth {",
+            "message GameplayRegisterDetector {",
+            "message GameplaySetNightCloak {",
+            "message GameplayMarkSightBlocker {",
+            "message GameplaySetCreepSleep {",
+            "message GameplaySetRegenCondition {",
+        ] {
+            assert!(schema.contains(message), "missing {message}");
+        }
+        assert!(schema.contains("uint64 source = 1;"));
+        assert!(schema.contains("int64 cell_x = 2;"));
+        assert!(schema.contains("int64 cell_y = 3;"));
+        assert!(schema.contains("uint32 decay_frames = 2;"));
+        assert!(schema.contains("int64 restore = 2;"));
+        assert!(schema.contains("uint32 condition = 2;"));
+        // 只追加：reserved 14 to 32 原样保留、tag 46–58 各唯一、tag 59 留空。
+        assert!(schema.contains("reserved 14 to 32;"));
+        for (name, tag) in [
+            ("seed_blight", 46),
+            ("raise_corpse", 47),
+            ("consume_corpse", 48),
+            ("haunt_gold_mine", 49),
+            ("entangle_gold_mine", 50),
+            ("set_ancient_root", 51),
+            ("bind_moon_well", 52),
+            ("set_stealth", 53),
+            ("register_detector", 54),
+            ("set_night_cloak", 55),
+            ("mark_sight_blocker", 56),
+            ("set_creep_sleep", 57),
+            ("set_regen_condition", 58),
+        ] {
+            assert_eq!(
+                schema.matches(&format!("= {tag};")).count(),
+                1,
+                "tag {tag} ({name}) must be appended exactly once"
+            );
+        }
+        assert!(!schema.contains("= 59;"));
+        // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码。
+        for line in schema.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            for forbidden in ["map<", "float", "double"] {
+                assert!(
+                    !code.contains(forbidden),
+                    "schema must not declare {forbidden}: {line}"
+                );
+            }
+        }
+        // 线格式只传玩家输入命令，MUST NOT 承载权威状态 / 快照 / fog 可见性。
+        for forbidden in [
+            "message Snapshot",
+            "message WorldState",
+            "fog_visibility",
+            "state_hash",
+        ] {
+            assert!(
+                !schema.contains(forbidden),
+                "wire must not carry state: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn all_thirty_six_gameplay_kinds_roundtrip() {
+        let mut gameplay = sample_gameplay();
+        gameplay.extend(sample_p9_gameplay());
+        assert_eq!(gameplay.len(), 36, "sample must cover every gameplay kind");
+        let bytes = encode_commands(&[], &gameplay).unwrap();
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            bytes,
+            "36 kinds must stay canonical"
+        );
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    // ---- 任务 4.2：同脚本两实例 / 联机两端 / 回放逐帧一致 ----
+
+    /// 联机与回放共用的 8 帧脚本长度；一端逐帧、另一端一次收齐 8 帧。
+    const P9_FRAMES: u64 = 8;
+
+    /// 固定 seed / 内容哈希 / 冻结世界，保证三端起始定义哈希一致。
+    fn p9_test_match() -> w3_core::RtsMatch {
+        w3_core::RtsMatch::create_with_world(
+            w3_core::MatchConfig {
+                seed: 42,
+                logic_fps: 30,
+                content_hash: 0xC0FFEE,
+            },
+            w3_core::StaticWorld::open_world(8, 8, SimFixed::from_int(4).unwrap()),
+        )
+    }
+
+    /// 每帧一条普通输入命令 + 一条 P9 玩法输入命令；`execute_frame`
+    /// 恒等于帧号，便于验证命令仍在原定帧执行一次、帧序不变。
+    fn p9_script(frame: u64) -> (Vec<Command>, Vec<GameplayCommand>) {
+        let commands = vec![Command::new(
+            Frame::new(frame),
+            1,
+            frame as u32,
+            CommandKind::Noop,
+        )];
+        let kinds = sample_p9_gameplay();
+        let kind = kinds[(frame as usize) % kinds.len()].kind;
+        let gameplay = vec![GameplayCommand::new(
+            Frame::new(frame),
+            1,
+            (frame as u32) + 1000,
+            kind,
+        )];
+        (commands, gameplay)
+    }
+
+    #[test]
+    fn two_instances_batched_client_and_replay_match_frame_by_frame() {
+        use crate::frame::{FrameScheduler, apply_frame};
+
+        // 8 帧命令脚本全部经线格式往返，联机 / 回放拿到同一命令序列。
+        let wire: Vec<Vec<u8>> = (0..P9_FRAMES)
+            .map(|frame| {
+                let (commands, gameplay) = p9_script(frame);
+                encode_commands(&commands, &gameplay).unwrap()
+            })
+            .collect();
+        let decoded: Vec<(Vec<Command>, Vec<GameplayCommand>)> = wire
+            .iter()
+            .map(|bytes| decode_commands(bytes).unwrap())
+            .collect();
+        // 线格式只传玩家输入命令，MUST NOT 含游戏状态 / fog 可见性。
+        let schema = include_str!("proto/w3net.proto");
+        for forbidden in [
+            "message Snapshot",
+            "message WorldState",
+            "fog_visibility",
+            "state_hash",
+        ] {
+            assert!(
+                !schema.contains(forbidden),
+                "wire must not carry state: {forbidden}"
+            );
+        }
+        for (frame, (commands, gameplay)) in decoded.iter().enumerate() {
+            assert_eq!(commands.len(), 1);
+            assert_eq!(gameplay.len(), 1);
+            assert_eq!(commands[0].execute_frame.value(), frame as u64);
+            assert_eq!(gameplay[0].execute_frame.value(), frame as u64);
+        }
+
+        // 一端逐帧推进：逐帧记录状态哈希与完整快照字节。
+        let mut hashes_a = Vec::new();
+        let mut snapshots_a = Vec::new();
+        let mut a = p9_test_match();
+        for (commands, gameplay) in &decoded {
+            hashes_a.push(apply_frame(&mut a, commands, gameplay).unwrap());
+            snapshots_a.push(a.capture_snapshot());
+        }
+        for pair in hashes_a.windows(2) {
+            assert_ne!(pair[0], pair[1], "simulation must advance every frame");
+        }
+
+        // 另一端一次收齐 8 帧，再按帧序逐帧应用；到达顺序不决定执行顺序。
+        let mut scheduler = FrameScheduler::new(0, 2);
+        scheduler.offer(
+            decoded
+                .iter()
+                .enumerate()
+                .map(|(frame, (commands, gameplay))| FrameCommands {
+                    frame: frame as u64,
+                    commands: commands.clone(),
+                    gameplay: gameplay.clone(),
+                }),
+        );
+        let mut b = p9_test_match();
+        let mut hashes_b = Vec::new();
+        for index in 0..P9_FRAMES as usize {
+            let ready = scheduler
+                .take_ready()
+                .expect("batched end must have every frame");
+            hashes_b.push(apply_frame(&mut b, &ready.commands, &ready.gameplay).unwrap());
+            let snap_b = b.capture_snapshot();
+            assert_eq!(
+                snap_b, snapshots_a[index],
+                "capture_snapshot must match frame by frame"
+            );
+            assert_eq!(
+                format!("{snap_b:?}").as_bytes(),
+                format!("{:?}", snapshots_a[index]).as_bytes(),
+                "snapshot bytes must match frame by frame"
+            );
+        }
+        assert_eq!(hashes_a, hashes_b, "state hash must match every frame");
+        assert_eq!(a.compute_state_hash(), b.compute_state_hash());
+        assert_eq!(a.first_difference(&b), None);
+        assert_eq!(a.read_view().tick, P9_FRAMES, "step count unchanged");
+        assert_eq!(b.read_view().tick, P9_FRAMES, "step count unchanged");
+
+        // 回放：同一命令序列 + 同一冻结定义哈希 / 内容哈希重建，逐帧哈希一致。
+        let baseline = p9_test_match().capture_snapshot();
+        assert_eq!(baseline.version, 8, "SNAPSHOT_VERSION must be 8");
+        assert_eq!(baseline.sim_version, 8, "SIM_VERSION must be 8");
+        let mut replay = p9_test_match();
+        for (index, (commands, gameplay)) in decoded.iter().enumerate() {
+            let hash = apply_frame(&mut replay, commands, gameplay).unwrap();
+            assert_eq!(
+                hash, hashes_a[index],
+                "replay frame hash must match original"
+            );
+            let snap = replay.capture_snapshot();
+            assert_eq!(snap, snapshots_a[index]);
+            assert_eq!(
+                snap.defs_hash, baseline.defs_hash,
+                "frozen defs hash must match"
+            );
+            assert_eq!(
+                snap.content_hash, baseline.content_hash,
+                "content hash must match"
+            );
+        }
+        assert_eq!(replay.first_difference(&a), None);
+
+        // v8 快照恢复后逐帧哈希一致，恢复后再推进一帧仍与权威实例一致。
+        let world = w3_core::StaticWorld::open_world(8, 8, SimFixed::from_int(4).unwrap());
+        let mut restored = w3_core::RtsMatch::restore_snapshot(
+            snapshots_a.last().unwrap().clone(),
+            world,
+            baseline.content_hash,
+        )
+        .unwrap();
+        assert_eq!(restored.compute_state_hash(), a.compute_state_hash());
+        assert_eq!(restored.first_difference(&a), None);
+        let (commands, gameplay) = p9_script(P9_FRAMES);
+        let (commands, gameplay) =
+            decode_commands(&encode_commands(&commands, &gameplay).unwrap()).unwrap();
+        let hash_a = apply_frame(&mut a, &commands, &gameplay).unwrap();
+        let hash_restored = apply_frame(&mut restored, &commands, &gameplay).unwrap();
+        assert_eq!(
+            hash_a, hash_restored,
+            "restored match must advance identically"
+        );
+        assert_eq!(restored.first_difference(&a), None);
     }
 }

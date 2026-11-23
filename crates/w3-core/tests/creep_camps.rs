@@ -48,8 +48,8 @@ fn inject_creep_state(
 #[test]
 fn frozen_creep_defs_are_zero_asset_and_content_sensitive() {
     let base = defs();
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
-    assert_eq!(SIM_VERSION, 7, "reason=sim_version_7");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
+    assert_eq!(SIM_VERSION, 8, "reason=sim_version_8");
 
     // 干净环境构造成功、零文件 IO：只由编译期整数常量装配。
     assert!(base.is_creep(CREEP_DEF));
@@ -66,8 +66,8 @@ fn frozen_creep_defs_are_zero_asset_and_content_sensitive() {
     let snapshot = sim.capture_snapshot();
     assert_eq!(snapshot.defs_hash, base.content_hash());
     assert_eq!(snapshot.content_hash, base.content_hash());
-    assert_eq!(snapshot.version, 7);
-    assert_eq!(snapshot.sim_version, 7);
+    assert_eq!(snapshot.version, 8);
+    assert_eq!(snapshot.sim_version, 8);
 
     let mut changed = constants();
     changed.leash_radius_raw += 1;
@@ -326,7 +326,7 @@ fn creep_does_not_respond_to_player_move_and_ground_items_are_fixed() {
     );
     // 消费序列与快照版本仍完整（content 用于重开基线）。
     let _ = content;
-    assert_eq!(sim.capture_snapshot().version, 7);
+    assert_eq!(sim.capture_snapshot().version, 8);
 }
 
 #[test]
@@ -895,7 +895,7 @@ fn old_v5_snapshot_and_sim_version_are_explicitly_rejected() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 5,
-            expected: 7
+            expected: 8
         })
     ));
     // 定义内容哈希被篡改也明确拒绝（冻结定义内容进快照头）。

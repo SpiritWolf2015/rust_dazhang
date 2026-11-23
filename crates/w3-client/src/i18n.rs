@@ -44,6 +44,10 @@ pub struct Texts {
     pub faction_human: &'static str,
     /// 兽族选项标签。
     pub faction_orc: &'static str,
+    /// 不死族选项标签（P9 / Q1' 双族全量，走 i18n 边界）。
+    pub faction_undead: &'static str,
+    /// 暗夜精灵选项标签（P9 / Q1' 双族全量，走 i18n 边界）。
+    pub faction_night_elf: &'static str,
     /// 确认按钮标签。
     pub faction_confirm: &'static str,
     /// 已选族只读状态提示。
@@ -207,6 +211,8 @@ pub const ZH: Texts = Texts {
     faction_ai: "AI",
     faction_human: "Human",
     faction_orc: "Orc",
+    faction_undead: "Undead",
+    faction_night_elf: "Night Elf",
     faction_confirm: "Confirm",
     faction_status: "Selected",
     revive_queue: "Revive Queue",

@@ -10,7 +10,7 @@ context: |
   整数逻辑帧冻结为 30 Hz；命令按
   ExecuteFrame -> PlayerId -> Sequence -> Arrival 排序；稳定 EntityId 顺序；
   FNV-1a 状态哈希；快照版本由 crates/w3-core/src/snapshot.rs 的
-  SNAPSHOT_VERSION 定义（当前 7，头部含 defs_hash / content_hash），
+  SNAPSHOT_VERSION 定义（当前 8，头部含 defs_hash / content_hash），
   快照是帧提交完成后的完整状态。
   w3-content 的坐标只是冻结的 f64 输入，绝不能进入快照或状态哈希；
   P2 必须先冻结 SimFixed 的转换规则。
@@ -56,7 +56,7 @@ rules:
     - 玩法 change 的 `decision-memo.md` MUST 含「## 规则文档同步」小节（正式规则，已固化）：给出「本次实现是否触及 `docs/references/WC3-MELEE-RULES.md` 的 `R-x.y` 实现状态 / §13.7 现状 / §15 变更记录 / 参考项目数量；需同步则已同步、无需同步则说明依据」的结论；该结论由 `tools/verify_all.py::rule_doc_sync_check()` 做结构门禁、由 `critic` 清单第 13 项做内容层复核。
   specs:
     - 使用 SHALL/MUST；每条 requirement 至少一个 #### Scenario（WHEN/THEN）。
-    - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 7）。
+    - 新增权威状态必须声明进入状态哈希与 SNAPSHOT_VERSION 定义的快照（当前 8）。
     - 玩法 requirement / Scenario MUST 引用 `WC3-MELEE-RULES.md` 的规则编号 `R-x.y` 并给出可执行验证；无规则依据的玩法需求回到人拍板，不臆造。
     - 特别校验 R1 可移动性：金矿 / 树木 / 建筑 / 资源点等不可移动实体 MUST NOT 出现在 `Move` 命令的 Scenario 中；框选含建筑时 MUST 只为可移动单位生成 `Move`。
   design:

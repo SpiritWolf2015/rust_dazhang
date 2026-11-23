@@ -187,7 +187,8 @@ pub struct MeleeSetup {
     pub race: Race,
     /// 本局 AI 对手所选种族（**装配层只读**字段，design D1）。
     ///
-    /// 与 `race`（本地族）解耦为两个独立参数，使 2×2 四组合可装配。
+    /// 与 `race`（本地族）解耦为两个独立参数，使 P9 / Q1' 4×4 十六组合
+    /// （含同族组合）可装配。
     /// 只用于选择 AI 席位 `Spawn` 关联的 `DefId` 段与 AI 脚本查表，
     /// MUST NOT 写入 `w3-core` 的 `Player` / `RtsMatch`、不进状态哈希 /
     /// 快照（不新增权威状态字段）；`with_race` 别名回落 `race.opponent()`。
@@ -282,9 +283,9 @@ impl MeleeSetup {
     /// 本地席位用 `local_race` 段、AI 席位用 `ai_race` 段，中立资源恒
     /// `9xx` 段（design D1 / D2 定义层种族分段，R2 四族不对称）。
     ///
-    /// 两个参数彼此独立，故 2×2 四组合（人vs人 / 人vs兽 / 兽vs人 /
-    /// 兽vs兽）都能装配；`race` 字段继续作本地族别名、`ai_race` 字段
-    /// 记录 AI 族。主城落在真实 Echo Isles 的两个 sloc（见
+    /// 两个参数彼此独立，故 P9 / Q1' 4×4 十六组合（含同族组合）都能
+    /// 装配（人 / 兽 / 不死 / 暗夜四族各段）；`race` 字段继续作本地族
+    /// 别名、`ai_race` 字段记录 AI 族。主城落在真实 Echo Isles 的两个 sloc（见
     /// [`LOCAL_START`] / [`AI_START`]），农民朝地图中心方向聚在主城前方、
     /// 金矿与树林在侧后方，全部落在各自陆块的地面上。主城相距约 155
     /// 世界单位，处于合成士兵经移动后的攻城射程内，使一局可在合理帧数
@@ -805,6 +806,9 @@ mod tests {
 
         let human = MeleeSetup::with_race(Race::Human);
         let orc = MeleeSetup::with_race(Race::Orc);
+        // P9 / Q1'：不死 / 暗夜装配同样登记六类新类别绑定。
+        let undead = MeleeSetup::with_race(Race::Undead);
+        let night_elf = MeleeSetup::with_race(Race::NightElf);
         let slots = [
             CATEGORY_RANGED,
             CATEGORY_SIEGE,
@@ -813,11 +817,13 @@ mod tests {
             CATEGORY_SMITHY,
             CATEGORY_HERO,
         ];
-        for setup in [&human, &orc] {
+        for setup in [&human, &orc, &undead, &night_elf] {
             assert_eq!(setup.category_def_ids.len(), 6, "reason=six_new_categories");
             let (lo, hi) = match setup.race {
                 Race::Human => (100, 200),
                 Race::Orc => (200, 300),
+                Race::Undead => (300, 400),
+                Race::NightElf => (400, 500),
             };
             for slot in slots {
                 let def_id = *setup
@@ -966,19 +972,34 @@ mod tests {
     // P8.3 双族对抗（design D1 / D2 / tasks 1.x / 2.2 / 6.2 / 6.3）
     // -----------------------------------------------------------------------
 
-    /// 四组合（本地族, AI 族）：人vs人 / 人vs兽 / 兽vs人 / 兽vs兽。
-    const COMBINATIONS: [(Race, Race); 4] = [
+    /// P9 / Q1' 十六组合（本地族, AI 族）：四族 4×4 笛卡尔积，含同族组合。
+    const COMBINATIONS: [(Race, Race); 16] = [
         (Race::Human, Race::Human),
         (Race::Human, Race::Orc),
+        (Race::Human, Race::Undead),
+        (Race::Human, Race::NightElf),
         (Race::Orc, Race::Human),
         (Race::Orc, Race::Orc),
+        (Race::Orc, Race::Undead),
+        (Race::Orc, Race::NightElf),
+        (Race::Undead, Race::Human),
+        (Race::Undead, Race::Orc),
+        (Race::Undead, Race::Undead),
+        (Race::Undead, Race::NightElf),
+        (Race::NightElf, Race::Human),
+        (Race::NightElf, Race::Orc),
+        (Race::NightElf, Race::Undead),
+        (Race::NightElf, Race::NightElf),
     ];
 
-    /// `DefId` 是否落在给定种族的 `units` 段（人族 1xx / 兽族 2xx）。
+    /// `DefId` 是否落在给定种族的 `units` 段（P9 五段中的四族段：
+    /// 人族 1xx / 兽族 2xx / 不死 3xx / 暗夜 4xx）。
     fn in_race_segment(id: DefId, race: Race) -> bool {
         match race {
             Race::Human => (100..200).contains(&id),
             Race::Orc => (200..300).contains(&id),
+            Race::Undead => (300..400).contains(&id),
+            Race::NightElf => (400..500).contains(&id),
         }
     }
 
@@ -1000,11 +1021,12 @@ mod tests {
             && a.ai_mine == b.ai_mine
     }
 
-    /// 四组合装配：本地 / AI 席位段位正确、中立资源恒 9xx、同族组合双方
-    /// 段位一致、四组合 `Spawn` / `gameplay_commands` / `kinds` 字节一致
-    /// （design D1 / C2 / `CommandKind::Spawn` 不含 DefId）。
+    /// P9 / Q1' 十六组合装配：本地 / AI 席位段位正确（四族各段）、中立
+    /// 资源恒 9xx、同族组合双方段位一致、十六组合 `Spawn` /
+    /// `gameplay_commands` / `kinds` 字节一致（design D1 / C2 /
+    /// `CommandKind::Spawn` 不含 DefId，字节逐字节不变）。
     #[test]
-    fn with_races_assembles_four_combinations_with_segmented_def_ids() {
+    fn with_races_assembles_sixteen_combinations_with_segmented_def_ids() {
         let baseline = MeleeSetup::new();
         for (local, ai) in COMBINATIONS {
             let setup = MeleeSetup::with_races(local, ai);
@@ -1029,7 +1051,7 @@ mod tests {
                     "reason=ai_seat_in_ai_segment id={id} def={def_id} ai={ai:?}"
                 );
             }
-            // 中立资源（5,6,11,12）恒 9xx，与两族段都不冲突。
+            // 中立资源（5,6,11,12）恒 9xx，与四族段都不冲突。
             for id in [5u64, 6, 11, 12] {
                 let def_id = *setup.def_ids.get(&id).expect("missing neutral def id");
                 assert!(
@@ -1047,7 +1069,7 @@ mod tests {
                     );
                 }
             }
-            // 四组合权威命令字节与基线逐字节一致（种族只停装配层）。
+            // 十六组合权威命令字节与基线逐字节一致（种族只停装配层）。
             assert_eq!(
                 setup.commands, baseline.commands,
                 "reason=spawn_bytes_identical"
@@ -1061,10 +1083,11 @@ mod tests {
     }
 
     /// `with_race(race)` 兼容别名严格等于 `with_races(race,
-    /// race.opponent())`；`new()` 仍为「本地人族 / AI 兽族」（design D1 / C2）。
+    /// race.opponent())`（P9 四族对合映射）；`new()` 仍为
+    /// 「本地人族 / AI 兽族」逐字节不变（design D1 / C2 / Q1'）。
     #[test]
     fn with_race_alias_matches_dual_entry_and_new_keeps_default() {
-        for race in [Race::Human, Race::Orc] {
+        for race in [Race::Human, Race::Orc, Race::Undead, Race::NightElf] {
             let alias = MeleeSetup::with_race(race);
             let dual = MeleeSetup::with_races(race, race.opponent());
             assert!(
@@ -1154,7 +1177,8 @@ mod tests {
         MeleeSetup::with_races(local, local.opponent())
     }
 
-    /// 反向验证·修复态（tasks 6.2）：正式双参数装配四组合全通过段位断言。
+    /// 反向验证·修复态（tasks 6.2 / Q1'）：正式双参数装配十六组合全通过
+    /// 段位断言（四族各段）。
     #[test]
     fn reverse_validation_dual_race_formal_passes_seat_assertion() {
         for (local, ai) in COMBINATIONS {
@@ -1166,12 +1190,18 @@ mod tests {
         }
     }
 
-    /// 反向验证·缺陷态（tasks 6.2）：退化为单参数 `opponent()` 时，
-    /// 「人vs人 / 兽vs兽」两组的 AI 席位段位断言必失败；正式实现仍通过
-    /// （元断言防退化）。异族组合恰好不暴露该缺陷，正是同族组合判据的价值。
+    /// 反向验证·缺陷态（tasks 6.2 / Q1'）：退化为单参数 `opponent()` 时，
+    /// 四族四个同族组合（人vs人 / 兽vs兽 / 不死vs不死 / 暗夜vs暗夜）的
+    /// AI 席位段位断言必失败；正式实现仍通过（元断言防退化）。
+    /// 异族组合恰好不暴露该缺陷，正是同族组合判据的价值。
     #[test]
     fn reverse_validation_opponent_degenerate_fails_same_race_seat_assertion() {
-        for (local, ai) in [(Race::Human, Race::Human), (Race::Orc, Race::Orc)] {
+        for (local, ai) in [
+            (Race::Human, Race::Human),
+            (Race::Orc, Race::Orc),
+            (Race::Undead, Race::Undead),
+            (Race::NightElf, Race::NightElf),
+        ] {
             let degenerate = degenerate_opponent_assembly(local, ai);
             assert!(
                 !ai_seat_def_ids_in_segment(&degenerate, ai),
@@ -1193,11 +1223,11 @@ mod tests {
         setup_assembly_eq(candidate, &MeleeSetup::with_races(race, race.opponent()))
     }
 
-    /// 反向验证·修复态（tasks 6.3）：`with_race` 兼容别名与双参数入口一致，
-    /// 既有回落基线 / Spawn 字节不变测试保持成立。
+    /// 反向验证·修复态（tasks 6.3 / Q1'）：`with_race` 兼容别名与双参数
+    /// 入口一致（四族对合映射），既有回落基线 / Spawn 字节不变测试保持成立。
     #[test]
     fn reverse_validation_alias_formal_passes_fallback_assertion() {
-        for race in [Race::Human, Race::Orc] {
+        for race in [Race::Human, Race::Orc, Race::Undead, Race::NightElf] {
             assert!(
                 alias_is_consistent(&MeleeSetup::with_race(race), race),
                 "reason=formal_alias_consistent race={race:?}"
@@ -1216,7 +1246,7 @@ mod tests {
     /// `with_races` 路径构造，非旁路模拟。
     #[test]
     fn reverse_validation_alias_degenerate_fails_fallback_assertion() {
-        for race in [Race::Human, Race::Orc] {
+        for race in [Race::Human, Race::Orc, Race::Undead, Race::NightElf] {
             let degenerate = MeleeSetup::with_races(race, race);
             assert!(
                 !alias_is_consistent(&degenerate, race),

@@ -16,6 +16,9 @@ use crate::creep::{
     RngDraw,
 };
 use crate::entity::{EntityId, EntityStore};
+use crate::faction_mechanics::{
+    FactionFactKind, FactionMechanicsState, MineKind, MineRecord, RegenCondition, RegenRecord,
+};
 use crate::fixed::{SCALE, SimFixed, isqrt};
 use crate::frame::{Frame, FrameClock};
 use crate::gameplay::{
@@ -228,6 +231,56 @@ pub enum EventKind {
     /// P8.5d 命令被显式拒绝事实事件（满包 / 售罄 / 黄金不足 / 非法目标 /
     /// 冷却未到 / 无友方主城 / 旧 `BuyItem` 占位旁路被拒）。
     ItemShopCommandRejected,
+    // -----------------------------------------------------------------------
+    // P9 / Q2 / Q4 族特色机制只读事实事件（`Event` 结构不变、无 payload）。
+    // 表现层由 `Event.entity` 查只读 `Snapshot.faction_mechanics` 得到
+    // 全部事实；历史事件 MUST NOT 进权威哈希 / 快照（ADR 0002 §5-6）。
+    // fog 可见性 MUST NOT 由任何事实事件反写权威状态（R10.5 / §0.3 T3）。
+    // -----------------------------------------------------------------------
+    /// 腐地扩张源与初始格登记（R4.6）。
+    BlightSeeded,
+    /// 尸体登记（`:119`）。
+    CorpseRaised,
+    /// 食尸回血 / 召唤骷髅（`:119`）。
+    CorpseConsumed,
+    /// 诅咒金矿绑定（R1.5）。
+    GoldMineHaunted,
+    /// 缠绕金矿绑定（R1.5）。
+    GoldMineEntangled,
+    /// 古树扎根 / 拔根状态切换。
+    AncientRootChanged,
+    /// 月亮井登记（R10.3）。
+    MoonWellBound,
+    /// 隐身目标判定登记（R10.4 / S3，玩法机制，非 fog 可见性）。
+    StealthTargetChanged,
+    /// 反隐单位登记（R10.4）。
+    DetectorRegistered,
+    /// 夜间隐身候选登记（S3）。
+    NightCloakChanged,
+    /// 视线阻挡机制输入登记（R5.6，非 fog 可见性派生结果）。
+    SightBlockerChanged,
+    /// 野怪睡眠登记（R8.4）。
+    CreepSleepRegistered,
+    /// 回血条件定义层枚举登记（R10.3）。
+    RegenConditionChanged,
+    /// 昼夜相位切换（R10.2 逐 tick 结算事实）。
+    DayNightPhaseChanged,
+    /// 隐身目标被反隐揭示（R10.4 逐 tick 结算事实，玩法判定）。
+    StealthRevealed,
+    /// 腐地扩张一格（逐 tick 结算事实）。
+    BlightExpanded,
+    /// 尸体衰减完成移除（逐 tick 结算事实）。
+    CorpseDecayed,
+    /// 金矿完成一次采集结算（逐 tick 结算事实）。
+    MineSettled,
+    /// 回血条件首次生效（逐 tick 结算事实）。
+    RegenApplied,
+    /// 野怪睡眠状态切换（逐 tick 结算事实）。
+    CreepSleepChanged,
+    /// 夜间隐身生效 / 解除（逐 tick 结算事实）。
+    NightCloakApplied,
+    /// 族特色机制命令被显式拒绝（非法实体 / 未登记尸体等，显式失败不静默降级）。
+    FactionMechanicRejected,
 }
 
 /// 只读事实事件（`drain_events()` 返回 owned 拷贝，序号不重置）。
@@ -302,8 +355,17 @@ pub struct RtsMatch {
     /// P8.5d 物品 / 商店 / 回城卷轴全部权威状态（Q6 / Q7 / D1 / D5）。
     /// 字段私有，仅本结构可写；六格定长实例背包与 `creep_camps`
     /// 的 `item_instances` 按稳定 `EntityId` 构成单一实例身份口径。
-    /// 同时进入状态哈希、v7 快照与差异诊断。
+    /// 同时进入状态哈希、由 `SNAPSHOT_VERSION`（当前 8）定义的快照与差异诊断。
     item_shop: ItemShopState,
+    /// P9 / Q2 / Q4 族特色机制顶层权威状态（腐地 / 尸体 / 金矿 / 古树 /
+    /// 昼夜相位 / 隐身目标判定 / 月亮井 / 缠绕金矿 / 夜间隐身 + Q4 全量）。
+    /// 字段私有，仅本结构可写；全部落 `BTreeMap` / `BTreeSet`
+    /// 确定性有序容器、按稳定 `EntityId` 顺序遍历；四处同步进 FNV-1a
+    /// 状态哈希、由 `SNAPSHOT_VERSION`（8）定义的 `Snapshot` 顶层字段、
+    /// `first_difference()` 与 `restore_snapshot`（ADR 0002 §6-8）。
+    /// 迷雾 / 视野可见性 MUST 表现层只读派生，MUST NOT 进本字段 /
+    /// 哈希 / 快照 / `first_difference()`（R10.5 / §0.3 T3 / Q2'）。
+    faction_mechanics: FactionMechanicsState,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -311,6 +373,23 @@ fn next_rng(state: u64) -> u64 {
     state
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1_442_695_040_888_963_407)
+}
+
+/// P9 / Q4 把逐 tick 结算事实类别映射为只读 `EventKind` 事实事件。
+/// 穷尽匹配，新增事实类别 MUST 同步登记事件（无遗漏默认放行）；
+/// 事件无 payload，表现层由 `Event.entity` 查只读
+/// `Snapshot.faction_mechanics.facts` 得到全部细节（ADR 0002 §5）。
+fn fact_event_kind(kind: FactionFactKind) -> EventKind {
+    match kind {
+        FactionFactKind::BlightExpanded => EventKind::BlightExpanded,
+        FactionFactKind::CorpseDecayed => EventKind::CorpseDecayed,
+        FactionFactKind::MineSettled => EventKind::MineSettled,
+        FactionFactKind::PhaseChanged => EventKind::DayNightPhaseChanged,
+        FactionFactKind::StealthRevealed => EventKind::StealthRevealed,
+        FactionFactKind::NightCloakApplied => EventKind::NightCloakApplied,
+        FactionFactKind::RegenApplied => EventKind::RegenApplied,
+        FactionFactKind::CreepSleepChanged => EventKind::CreepSleepChanged,
+    }
 }
 
 fn formation_slot(
@@ -502,6 +581,7 @@ impl RtsMatch {
             town_hall: TownHallUpgradeState::default(),
             creep_camps,
             item_shop: ItemShopState::default(),
+            faction_mechanics: FactionMechanicsState::default(),
         }
     }
 
@@ -527,6 +607,14 @@ impl RtsMatch {
     /// P8.5d 物品 / 商店 / 回城权威状态的只读 owned 拷贝（只读投影）。
     pub fn item_shop_state(&self) -> ItemShopState {
         self.item_shop.clone()
+    }
+
+    /// P9 / Q2 / Q4 族特色机制权威状态的只读 owned 拷贝（只读投影）。
+    /// 表现层只能消费 owned 投影，MUST NOT 反写权威状态（ADR 0002 §5）；
+    /// fog 可见性 MUST 由表现层只读派生，MUST NOT 进本投影
+    /// （R10.5 / §0.3 T3）。
+    pub fn faction_mechanics_state(&self) -> FactionMechanicsState {
+        self.faction_mechanics.clone()
     }
 
     pub fn config(&self) -> MatchConfig {
@@ -633,6 +721,15 @@ impl RtsMatch {
         // 8e. P8.5d 物品 / 商店 / 回城卷轴帧阶段：购买事务提交 / 回城施法 /
         //     市场刷新，按稳定顺序执行；费用提交事务在阶段 7 已完成（D2 / D4）。
         self.advance_item_shop(frame);
+
+        // 8f. P9 / Q4 族特色机制帧阶段：按 30 Hz 整数帧逐 tick 查表结算
+        //     昼夜循环全量 / 腐地扩张 / 尸体衰减 / 金矿采集 / R10.3 回血 /
+        //     隐身反隐 / 夜间隐身 / 野怪睡眠（Q2 / Q4 / ADR 0002 §2-3）。
+        //     结算由冻结常量 + 整数帧 + 稳定 EntityId 顺序确定性派生，
+        //     无墙钟 / 无 f64 / 无 HashMap 迭代顺序 / 无表现层独立随机源。
+        //     fog 可见性 MUST 表现层只读派生（R10.5 / §0.3 T3），本阶段
+        //     MUST NOT 把 fog 可见性反写权威状态。
+        self.advance_faction_mechanics(frame);
 
         // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
         self.resolve_victory(frame);
@@ -2183,6 +2280,170 @@ impl RtsMatch {
         self.advance_market_refresh(frame);
     }
 
+    /// P9 / Q4 族特色机制逐 tick 确定性结算（30 Hz 整数帧）。
+    ///
+    /// 结算前记录事实序号，结算后把新增事实按稳定 `seq` 顺序转成只读
+    /// `EventKind` 事实事件供表现层消费；历史事件 MUST NOT 进权威哈希
+    /// （ADR 0002 §5-6）。fog 可见性 MUST 表现层只读派生，本方法
+    /// MUST NOT 把 fog 可见性写进 `faction_mechanics`（R10.5 / §0.3 T3）。
+    fn advance_faction_mechanics(&mut self, frame: Frame) {
+        let before = self.faction_mechanics.next_fact_seq;
+        let constants = *self.defs.faction_mechanics();
+        self.faction_mechanics.settle(frame.value(), &constants);
+        let after = self.faction_mechanics.next_fact_seq;
+        let new_facts: Vec<(EntityId, EventKind)> = self
+            .faction_mechanics
+            .facts
+            .range(before..after)
+            .map(|(_, fact)| (fact.entity, fact_event_kind(fact.kind)))
+            .collect();
+        for (entity, kind) in new_facts {
+            self.push_event(frame, entity, kind);
+        }
+    }
+
+    /// 腐地扩张源登记（R4.6）：登记初始腐地格与扩张进度基准。
+    /// 命令入口重新校验实体合法性（ADR 0002 §3 执行时复核）。
+    fn faction_seed_blight(&mut self, source: EntityId, cell_x: i32, cell_y: i32, frame: Frame) {
+        self.faction_mechanics.blight_cells.insert((cell_x, cell_y));
+        self.faction_mechanics.blight_progress.insert(source, 0);
+        self.push_event(frame, source, EventKind::BlightSeeded);
+    }
+
+    /// 尸体登记（`:119`）：登记剩余衰减整数帧。命令未指定（0）时回退到
+    /// 冻结常量的尸体衰减时长（合成 `[待核]` 值，数据驱动非白名单）。
+    fn faction_raise_corpse(&mut self, corpse: EntityId, decay_frames: u32, frame: Frame) {
+        let fallback = self.defs.faction_mechanics().corpse_decay_frames.max(1);
+        let frames = if decay_frames == 0 {
+            fallback
+        } else {
+            decay_frames
+        };
+        self.faction_mechanics.corpses.insert(corpse, frames);
+        self.push_event(frame, corpse, EventKind::CorpseRaised);
+    }
+
+    /// 食尸回血 / 召唤骷髅（`:119`）：消费已登记尸体并累计次数；
+    /// 尸体未登记则显式拒绝、不静默降级。
+    fn faction_consume_corpse(&mut self, consumer: EntityId, corpse: EntityId, frame: Frame) {
+        if self.faction_mechanics.corpses.remove(&corpse).is_some() {
+            let counter = self
+                .faction_mechanics
+                .corpse_consumptions
+                .entry(consumer)
+                .or_insert(0);
+            *counter = counter.saturating_add(1);
+            self.push_event(frame, consumer, EventKind::CorpseConsumed);
+        } else {
+            self.push_event(frame, consumer, EventKind::FactionMechanicRejected);
+        }
+    }
+
+    /// 诅咒金矿绑定（R1.5）。
+    fn faction_haunt_mine(&mut self, mine: EntityId, frame: Frame) {
+        self.faction_mechanics.mines.insert(
+            mine,
+            MineRecord {
+                kind: MineKind::Haunted,
+                progress_frames: 0,
+            },
+        );
+        self.push_event(frame, mine, EventKind::GoldMineHaunted);
+    }
+
+    /// 缠绕金矿绑定（R1.5）。
+    fn faction_entangle_mine(&mut self, mine: EntityId, frame: Frame) {
+        self.faction_mechanics.mines.insert(
+            mine,
+            MineRecord {
+                kind: MineKind::Entangled,
+                progress_frames: 0,
+            },
+        );
+        self.push_event(frame, mine, EventKind::GoldMineEntangled);
+    }
+
+    /// 古树扎根 / 拔根状态切换（R1.2 定义层数据驱动）。
+    fn faction_set_ancient_root(&mut self, ancient: EntityId, rooted: bool, frame: Frame) {
+        self.faction_mechanics
+            .rooted_ancients
+            .insert(ancient, rooted);
+        self.push_event(frame, ancient, EventKind::AncientRootChanged);
+    }
+
+    /// 月亮井登记（R10.3）。命令未指定（0）时回退到冻结常量的月亮井
+    /// 单次恢复量（合成 `[待核]` 值，数据驱动非白名单）。
+    fn faction_bind_moon_well(&mut self, well: EntityId, restore: i64, frame: Frame) {
+        let fallback = self.defs.faction_mechanics().moon_well_restore;
+        let amount = if restore == 0 { fallback } else { restore };
+        self.faction_mechanics.moon_wells.insert(well, amount);
+        self.push_event(frame, well, EventKind::MoonWellBound);
+    }
+
+    /// 隐身目标判定登记（R10.4 / S3，玩法机制，非 fog 可见性）。
+    fn faction_set_stealth(&mut self, unit: EntityId, cloaked: bool, frame: Frame) {
+        let record = self.faction_mechanics.stealth.entry(unit).or_default();
+        record.cloaked = cloaked;
+        record.night_only = false;
+        self.push_event(frame, unit, EventKind::StealthTargetChanged);
+    }
+
+    /// 反隐单位登记（R10.4）。
+    fn faction_register_detector(&mut self, unit: EntityId, frame: Frame) {
+        self.faction_mechanics.detectors.insert(unit);
+        self.push_event(frame, unit, EventKind::DetectorRegistered);
+    }
+
+    /// 夜间隐身候选登记 / 移除（S3）。
+    fn faction_set_night_cloak(&mut self, unit: EntityId, enabled: bool, frame: Frame) {
+        if enabled {
+            self.faction_mechanics.night_cloak.insert(unit);
+            let record = self.faction_mechanics.stealth.entry(unit).or_default();
+            record.night_only = true;
+        } else {
+            self.faction_mechanics.night_cloak.remove(&unit);
+            if let Some(record) = self.faction_mechanics.stealth.get_mut(&unit) {
+                record.night_only = false;
+            }
+        }
+        self.push_event(frame, unit, EventKind::NightCloakChanged);
+    }
+
+    /// 视线阻挡机制输入登记（R5.6，MUST NOT 存 fog 可见性派生结果）。
+    fn faction_mark_sight_blocker(&mut self, blocker: EntityId, blocking: bool, frame: Frame) {
+        if blocking {
+            self.faction_mechanics.sight_blockers.insert(blocker);
+        } else {
+            self.faction_mechanics.sight_blockers.remove(&blocker);
+        }
+        self.push_event(frame, blocker, EventKind::SightBlockerChanged);
+    }
+
+    /// 野怪睡眠登记（R8.4）。
+    fn faction_set_creep_sleep(&mut self, creep: EntityId, sleeps_at_night: bool, frame: Frame) {
+        self.faction_mechanics
+            .creep_sleep
+            .insert(creep, sleeps_at_night);
+        self.push_event(frame, creep, EventKind::CreepSleepRegistered);
+    }
+
+    /// 回血条件定义层枚举登记（R10.3，非族名硬编码）。
+    fn faction_set_regen_condition(
+        &mut self,
+        unit: EntityId,
+        condition: RegenCondition,
+        frame: Frame,
+    ) {
+        self.faction_mechanics.regen.insert(
+            unit,
+            RegenRecord {
+                condition,
+                accumulated: 0,
+            },
+        );
+        self.push_event(frame, unit, EventKind::RegenConditionChanged);
+    }
+
     fn gather(&mut self, unit: EntityId, player: u8) {
         if !self.is_actionable(unit, player) {
             return;
@@ -2312,6 +2573,50 @@ impl RtsMatch {
             GameplayCommandKind::CancelTownPortal { hero } => self.cancel_town_portal(hero, frame),
             GameplayCommandKind::RefreshMarket { shop, batch } => {
                 self.submit_refresh_market(shop, batch, player, frame)
+            }
+            // P9 / Q2 / Q4 新增变体穷尽分发：每个变体 MUST 有独立分支，
+            // 无遗漏默认放行（ADR 0002 §3 / Q5 / 反向验证形态①）。
+            // 全部经同一公开命令面按冻结整数帧号稳定排序执行。
+            GameplayCommandKind::SeedBlight {
+                source,
+                cell_x,
+                cell_y,
+            } => self.faction_seed_blight(source, cell_x, cell_y, frame),
+            GameplayCommandKind::RaiseCorpse {
+                corpse,
+                decay_frames,
+            } => self.faction_raise_corpse(corpse, decay_frames, frame),
+            GameplayCommandKind::ConsumeCorpse { consumer, corpse } => {
+                self.faction_consume_corpse(consumer, corpse, frame)
+            }
+            GameplayCommandKind::HauntGoldMine { mine } => self.faction_haunt_mine(mine, frame),
+            GameplayCommandKind::EntangleGoldMine { mine } => {
+                self.faction_entangle_mine(mine, frame)
+            }
+            GameplayCommandKind::SetAncientRoot { ancient, rooted } => {
+                self.faction_set_ancient_root(ancient, rooted, frame)
+            }
+            GameplayCommandKind::BindMoonWell { well, restore } => {
+                self.faction_bind_moon_well(well, restore, frame)
+            }
+            GameplayCommandKind::SetStealth { unit, cloaked } => {
+                self.faction_set_stealth(unit, cloaked, frame)
+            }
+            GameplayCommandKind::RegisterDetector { unit } => {
+                self.faction_register_detector(unit, frame)
+            }
+            GameplayCommandKind::SetNightCloak { unit, enabled } => {
+                self.faction_set_night_cloak(unit, enabled, frame)
+            }
+            GameplayCommandKind::MarkSightBlocker { blocker, blocking } => {
+                self.faction_mark_sight_blocker(blocker, blocking, frame)
+            }
+            GameplayCommandKind::SetCreepSleep {
+                creep,
+                sleeps_at_night,
+            } => self.faction_set_creep_sleep(creep, sleeps_at_night, frame),
+            GameplayCommandKind::SetRegenCondition { unit, condition } => {
+                self.faction_set_regen_condition(unit, condition, frame)
             }
         }
     }
@@ -3542,6 +3847,12 @@ impl RtsMatch {
         // 回城传送 / 消费序列 / 购买扣费登记全部权威状态必须进入哈希
         // （Q4 / Q7 / D1 / D5 / ADR 0002 §6）。
         self.item_shop.hash(&mut hasher);
+        // P9 / Q2 / Q4：族特色机制顶层权威状态（腐地 / 尸体 / 金矿 /
+        // 古树 / 昼夜相位 / 隐身目标判定 / 月亮井 / 缠绕金矿 / 夜间隐身
+        // + Q4 全量结算态）必须进入哈希；全落 BTreeMap / BTreeSet、
+        // 按稳定 EntityId 顺序遍历（ADR 0002 §6 / CODEBUDDY.md §5）。
+        // fog 可见性 MUST NOT 进入哈希（R10.5 / §0.3 T3）。
+        self.faction_mechanics.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -3612,6 +3923,16 @@ impl RtsMatch {
         }
         // P8.5d：物品 / 商店 / 回城全部权威状态按同一稳定顺序定位首个差异字段。
         if let Some(field) = self.item_shop.first_difference(&other.item_shop) {
+            return Some(field);
+        }
+        // P9 / Q2 / Q4：族特色机制顶层权威状态按同一稳定顺序定位首个差异
+        // 字段（ADR 0002 §6）。新增字段 MUST 同步接入本处 / 哈希 / 快照 /
+        // 恢复（CODEBUDDY.md §5 硬门禁）。fog 可见性 MUST NOT 进入
+        // first_difference()（R10.5 / §0.3 T3）。
+        if let Some(field) = self
+            .faction_mechanics
+            .first_difference(&other.faction_mechanics)
+        {
             return Some(field);
         }
         None
@@ -3704,6 +4025,11 @@ impl RtsMatch {
             // 事实 / 库存 / 刷新 / 回城传送 / 消费序列 / 购买扣费登记，
             // 恢复后从 N+1 继续不残留、不重复购买或刷新（ADR 0002 §6-8 / R11.5）。
             item_shop: self.item_shop.clone(),
+            // P9 / Q2 / Q4：帧 N 提交后的完整状态 MUST 含族特色机制顶层
+            // 权威状态（由 SNAPSHOT_VERSION = 8 定义的 Snapshot 顶层字段），
+            // 恢复后从 N+1 继续不残留、不重复结算（ADR 0002 §6-8）。
+            // fog 可见性 MUST NOT 进入快照（R10.5 / §0.3 T3）。
+            faction_mechanics: self.faction_mechanics.clone(),
         }
     }
 
@@ -3857,6 +4183,9 @@ impl RtsMatch {
             town_hall: snapshot.town_hall.clone(),
             creep_camps: snapshot.creep_camps.clone(),
             item_shop: snapshot.item_shop.clone(),
+            // P9 / Q2 / Q4：从 v8 快照恢复族特色机制顶层权威状态，
+            // 逐帧哈希与销毁前一致（ADR 0002 §6-8 / Q3）。
+            faction_mechanics: snapshot.faction_mechanics.clone(),
         })
     }
 }
@@ -4193,12 +4522,12 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本为 7（P8.5d 新增物品 / 商店 / 回城权威状态），只读视图消费与快照往返均不
+    /// 快照版本为 8（P9 新增族特色机制顶层权威状态），只读视图消费与快照往返均不
     /// 改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 7, "snapshot version must be 7");
-        assert_eq!(SIM_VERSION, 7, "sim version must be 7");
+        assert_eq!(SNAPSHOT_VERSION, 8, "snapshot version must be 8");
+        assert_eq!(SIM_VERSION, 8, "sim version must be 8");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -4272,9 +4601,9 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 7"
+            "snapshot version must stay 8"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 7");
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 8");
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

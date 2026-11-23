@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn relay_welcomes_players_and_rejects_bad_version() {
-        assert_eq!(PROTOCOL_VERSION, 7);
+        assert_eq!(PROTOCOL_VERSION, 8);
         let bus = LoopbackBus::shared();
         let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
         let mut client = LoopbackTransport::new(1, &bus);
@@ -522,6 +522,60 @@ mod tests {
             .encode()
             .unwrap();
         stale[4] = 6;
+
+        client.send(&Endpoint::Loopback(0), &stale).unwrap();
+        relay.poll().unwrap();
+        let (_, bytes) = client.recv().unwrap().unwrap();
+        let reject = Packet::decode(&bytes).unwrap();
+        assert_eq!(reject.kind, PacketKind::Reject);
+        assert_eq!(
+            parse_reject(&reject.payload).unwrap(),
+            "protocol version mismatch"
+        );
+        assert!(
+            relay.log().is_empty(),
+            "stale payload must not enter command stream"
+        );
+    }
+
+    #[test]
+    fn relay_rejects_version_seven_carrying_new_variant() {
+        use w3_core::{GameplayCommand, GameplayCommandKind, RegenCondition};
+
+        let bus = LoopbackBus::shared();
+        let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+        let mut client = LoopbackTransport::new(1, &bus);
+
+        // 伪装成旧 v7 的 Input 包，载荷携带 PROTOCOL_VERSION 8 新增的
+        // SeedBlight（tag 46）与 SetRegenCondition（tag 58）；v8 relay 必须
+        // 在解码 payload 之前回 Reject，玩法命令字段绝不被静默当作
+        // unknown field 丢弃后进入权威命令流（ADR 0005 §3 / R12.2）。
+        let gameplay = vec![
+            GameplayCommand::new(
+                w3_core::Frame::new(0),
+                1,
+                1,
+                GameplayCommandKind::SeedBlight {
+                    source: w3_core::EntityId::new(20).unwrap(),
+                    cell_x: -3,
+                    cell_y: 7,
+                },
+            ),
+            GameplayCommand::new(
+                w3_core::Frame::new(0),
+                1,
+                2,
+                GameplayCommandKind::SetRegenCondition {
+                    unit: w3_core::EntityId::new(21).unwrap(),
+                    condition: RegenCondition::Blight,
+                },
+            ),
+        ];
+        let payload = encode_commands(&[], &gameplay).unwrap();
+        let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+            .encode()
+            .unwrap();
+        stale[4] = 7;
 
         client.send(&Endpoint::Loopback(0), &stale).unwrap();
         relay.poll().unwrap();

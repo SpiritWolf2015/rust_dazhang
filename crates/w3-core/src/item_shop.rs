@@ -771,8 +771,9 @@ impl PurchaseCharge {
 /// P8.5d 物品 / 商店 / 回城卷轴全部权威状态的唯一顶层容器。
 ///
 /// 全部落 `BTreeMap` / `BTreeSet` / 定长数组，按稳定 `EntityId` / `u32` /
-/// `u64` 键序遍历；MUST 同时进入 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION`(7)
-/// 定义的快照与 `first_difference()`（ADR 0002 §6-8 / `CODEBUDDY.md §5`）。
+/// `u64` 键序遍历；MUST 同时进入 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION`
+/// （当前 8）定义的快照与 `first_difference()`
+/// （ADR 0002 §6-8 / `CODEBUDDY.md §5`）。
 ///
 /// 随机码消费复用 P8.5c `CreepCampState.rng_state` / `rng_draws` /
 /// `next_rng_seq` 事件驱动流（同一 match-owned 整数 LCG、`seed` 随快照），

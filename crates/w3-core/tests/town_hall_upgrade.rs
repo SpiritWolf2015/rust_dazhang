@@ -1071,11 +1071,11 @@ fn replay_matches_original() {
 }
 
 /// Q1：旧 v4 快照被 `SnapshotError` 明确拒绝，且 `SNAPSHOT_VERSION` /
-/// `SIM_VERSION` 已 bump 到 7（P8.5d），不提供跨版本迁移。
+/// `SIM_VERSION` 已 bump 到 8（P9），不提供跨版本迁移。
 #[test]
 fn old_v4_snapshot_is_rejected() {
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
-    assert_eq!(SIM_VERSION, 7, "reason=sim_version_7");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
+    assert_eq!(SIM_VERSION, 8, "reason=sim_version_8");
     let (sim, content) = funded_match(100_000, 100_000);
     let mut old = sim.capture_snapshot();
     old.version = 4;
@@ -1089,7 +1089,7 @@ fn old_v4_snapshot_is_rejected() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 4,
-            expected: 7
+            expected: 8
         })
     ));
 }

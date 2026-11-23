@@ -18,6 +18,9 @@ use crate::creep::{
     CampScript, CreepConstants, DropTable, NeutralCategory, SYNTHETIC_CREEP_CONSTANTS,
 };
 use crate::entity::EntityId;
+use crate::faction_mechanics::{
+    FactionMechanicsConstants, RegenCondition, SYNTHETIC_FACTION_MECHANICS, hash_regen_conditions,
+};
 use crate::frame::Frame;
 use crate::item_shop::ItemShopDefinitions;
 use crate::state_hash::StateHasher;
@@ -352,6 +355,14 @@ pub struct UpgradeDef {
 /// 注意：这些是**冻结定义层内容**，不是权威状态字段；野怪 / 营地 / 掉落 /
 /// 随机码消费序列的运行态在 `CreepCampState`，物品 / 商店 / 回城的
 /// 六格背包 / 库存 / 传送 / 消费序列运行态在 `ItemShopState`（D1 / D4）。
+///
+/// P9 追加两个私有冻结字段：`faction_mechanics` 为族特色机制 9 个
+/// 合成原创编译期整数 `[待核]` 常量段，`regen_conditions` 为「`DefId`
+/// → 回血条件定义层枚举」类别登记（R10.3 / 参考对照 R9）。两者经
+/// `compute_defs_hash` 进入 `defs_hash` / `content_hash` 快照头部
+/// （Q3' / D2）；这是**定义层内容变化**，与 Q2 新增的
+/// `FactionMechanicsState` 顶层权威状态严格区分，MUST NOT 混入
+/// `compute_state_hash()`。回血条件由枚举查表、MUST NOT 用族名白名单。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenDefinitions {
     units: BTreeMap<DefId, UnitDef>,
@@ -369,6 +380,8 @@ pub struct FrozenDefinitions {
     drop_tables: BTreeMap<u32, DropTable>,
     neutral_categories: BTreeMap<DefId, NeutralCategory>,
     item_shop: ItemShopDefinitions,
+    faction_mechanics: FactionMechanicsConstants,
+    regen_conditions: BTreeMap<DefId, RegenCondition>,
     hash: u64,
 }
 
@@ -500,6 +513,12 @@ fn compute_defs_hash(defs: &FrozenDefinitions) -> u64 {
     // （常量 / 货架 / 商店表 / 类别 / 冷却组 / 效果 / 回城卷轴登记）变化
     // 都会改变 content_hash() 并进入快照头部（Q8 / tasks 1.2 / D4）。
     defs.item_shop.hash(&mut hasher);
+    // P9：族特色机制冻结常量段 + 回血条件定义层类别登记编入定义哈希。
+    // 9 个整数逐字段小端编码，改任一常量 / 改任一 `DefId` 的回血条件
+    // 都会改变 content_hash() 并进入快照头部（Q3' / D2 / tasks 2.3 / 2.4）。
+    // 定义层内容变化与 Q2 新增权威状态严格区分，MUST NOT 进 compute_state_hash。
+    defs.faction_mechanics.hash(&mut hasher);
+    hash_regen_conditions(&mut hasher, &defs.regen_conditions);
     hasher.finish()
 }
 
@@ -527,6 +546,12 @@ impl FrozenDefinitions {
             drop_tables: BTreeMap::new(),
             neutral_categories: BTreeMap::new(),
             item_shop: ItemShopDefinitions::default(),
+            // P9：族特色机制冻结常量段由默认合成常量初始化，让 client
+            // `synthetic_definitions()` 现有 `FrozenDefinitions::new(...)`
+            // 调用点零改动即可编译（Q3' / leader 跨 crate 契约）。
+            // `regen_conditions` 默认空表，类别登记由可选 builder 注入。
+            faction_mechanics: SYNTHETIC_FACTION_MECHANICS,
+            regen_conditions: BTreeMap::new(),
             hash: 0,
         };
         insert_unique(&mut defs.units, units)?;
@@ -614,6 +639,49 @@ impl FrozenDefinitions {
         self.item_shop = definitions;
         self.hash = compute_defs_hash(&self);
         self
+    }
+
+    /// 纯新增构造路径：注入 P9 族特色机制冻结常量段，重算内容哈希。
+    ///
+    /// 既有四参数 [`FrozenDefinitions::new`] 签名不变，未显式注入的装配层
+    /// 自动使用 `SYNTHETIC_FACTION_MECHANICS` 默认值（client 零改动编译）；
+    /// 内容敏感性测试可链式调用本方法注入不同常量，验证 `content_hash()`
+    /// 如实变化（Q3' / tasks 2.3 / 2.4 / 4.3 反向验证）。
+    pub fn with_faction_mechanics(mut self, constants: FactionMechanicsConstants) -> Self {
+        self.faction_mechanics = constants;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 纯新增构造路径：注入「`DefId` → 回血条件定义层枚举」类别登记，
+    /// 重算内容哈希。类别由定义层数据驱动（数据驱动），MUST NOT 用
+    /// 族名白名单（R1.2 / R10.3 / 参考对照 R9）。
+    pub fn with_regen_conditions(
+        mut self,
+        regen_conditions: BTreeMap<DefId, RegenCondition>,
+    ) -> Self {
+        self.regen_conditions = regen_conditions;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 族特色机制冻结常量段（只读，Q3'）。
+    pub fn faction_mechanics(&self) -> &FactionMechanicsConstants {
+        &self.faction_mechanics
+    }
+
+    /// 冻结定义层回血条件类别登记（只读，稳定 `DefId` 顺序，R10.3）。
+    pub fn regen_conditions(&self) -> &BTreeMap<DefId, RegenCondition> {
+        &self.regen_conditions
+    }
+
+    /// 按 `DefId` 查回血条件；未登记返回 `RegenCondition::None`。
+    /// 逐 tick 查表用，非族名硬编码（R10.3 / 参考对照 R9）。
+    pub fn regen_condition(&self, def_id: DefId) -> RegenCondition {
+        self.regen_conditions
+            .get(&def_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// 物品 / 商店 / 回城冻结定义段（只读，Q6 / Q8）。
@@ -1384,6 +1452,97 @@ pub enum GameplayCommandKind {
         shop: u32,
         batch: u32,
     },
+    // -----------------------------------------------------------------------
+    // P9 / Q2 / Q4 族特色机制命令面（kind 码 24 起，既有 1–23 不动）。
+    //
+    // 每个变体经 `GameplayCommand::new` 冻结 `(execute_frame, player_id,
+    // sequence)`、由 `GameplayCommandQueue` 冻结到达序号、按
+    // `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序执行；
+    // 校验 / 哈希编码 / 穷尽分发三处同步（ADR 0002 §3 / §6）。
+    // 命令只登记玩法机制输入，逐 30 Hz 整数帧结算由
+    // `FactionMechanicsState::settle` 确定性完成；fog 可见性 MUST
+    // 表现层只读派生，MUST NOT 由任何命令写进权威状态（R10.5 / §0.3 T3）。
+    // -----------------------------------------------------------------------
+    /// 腐地建造约束（R4.6）：登记一个腐地扩张源与初始腐地格。
+    /// `cell_x` / `cell_y` 为整数网格坐标，`source` MUST 非 `EntityId::NONE`。
+    SeedBlight {
+        source: EntityId,
+        cell_x: i32,
+        cell_y: i32,
+    },
+    /// 尸体登记（`:119`）：登记一具尸体与剩余衰减整数帧，供食尸回血 /
+    /// 召唤骷髅查表。`corpse` MUST 非 `EntityId::NONE`。
+    RaiseCorpse {
+        corpse: EntityId,
+        decay_frames: u32,
+    },
+    /// 食尸回血 / 召唤骷髅（`:119`）：消费者消费指定尸体，确定性累计次数。
+    /// `consumer` / `corpse` MUST 非 `EntityId::NONE`。
+    ConsumeCorpse {
+        consumer: EntityId,
+        corpse: EntityId,
+    },
+    /// 诅咒金矿（R1.5）：登记金矿绑定为被诅咒的金矿（侍僧环绕获取）。
+    /// `mine` MUST 非 `EntityId::NONE`。
+    HauntGoldMine {
+        mine: EntityId,
+    },
+    /// 缠绕金矿（R1.5）：登记金矿绑定为小精灵缠绕金矿。
+    /// `mine` MUST 非 `EntityId::NONE`。
+    EntangleGoldMine {
+        mine: EntityId,
+    },
+    /// 古树状态：切换扎根（`rooted = true`，不可移动）/ 拔根。
+    /// 可移动性由定义层数据决定，MUST NOT 用名字 / 段位白名单（R1.2）。
+    /// `ancient` MUST 非 `EntityId::NONE`。
+    SetAncientRoot {
+        ancient: EntityId,
+        rooted: bool,
+    },
+    /// 月亮井（R10.3）：登记月亮井及单次恢复量（合成原创整数 `[待核]`）。
+    /// `well` MUST 非 `EntityId::NONE`。
+    BindMoonWell {
+        well: EntityId,
+        restore: i64,
+    },
+    /// 隐身目标判定（R10.4 / S3）：登记单位的隐身态（玩法机制，
+    /// 非 fog 可见性）。`unit` MUST 非 `EntityId::NONE`。
+    SetStealth {
+        unit: EntityId,
+        cloaked: bool,
+    },
+    /// 反隐单位登记（R10.4）：把单位加入反隐集合。
+    /// `unit` MUST 非 `EntityId::NONE`。
+    RegisterDetector {
+        unit: EntityId,
+    },
+    /// 暗夜夜间隐身特色（S3）：登记 / 移除夜间自动隐身候选单位。
+    /// `unit` MUST 非 `EntityId::NONE`。
+    SetNightCloak {
+        unit: EntityId,
+        enabled: bool,
+    },
+    /// 视线阻挡（R5.6 机制输入）：登记 / 移除阻挡视线的实体。
+    /// 只登记机制输入，MUST NOT 存放 fog 可见性派生结果（R10.5）。
+    /// `blocker` MUST 非 `EntityId::NONE`。
+    MarkSightBlocker {
+        blocker: EntityId,
+        blocking: bool,
+    },
+    /// 野怪睡眠（R8.4）：登记野怪是否夜间睡眠（`false` 为夜间清醒例外）。
+    /// `creep` MUST 非 `EntityId::NONE`。
+    SetCreepSleep {
+        creep: EntityId,
+        sleeps_at_night: bool,
+    },
+    /// 回血条件（R10.3）：登记单位的定义层回血条件枚举，逐 tick 查表结算。
+    /// `condition` 为 [`RegenCondition`]，线格式以 `condition.code()` 的
+    /// `u8` 编码（值域 0..=4）。MUST NOT 用族名硬编码 / 白名单。
+    /// `unit` MUST 非 `EntityId::NONE`。
+    SetRegenCondition {
+        unit: EntityId,
+        condition: RegenCondition,
+    },
 }
 
 /// 玩法命令。
@@ -1599,6 +1758,81 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u32(shop);
             hasher.write_u32(batch);
         }
+        // P9：追加唯一编码 24–36，既有码 1–23 一个不动；每个字段显式
+        // 小端编码，且与校验 / 穷尽分发三处同步（Q5 / D2）。
+        GameplayCommandKind::SeedBlight {
+            source,
+            cell_x,
+            cell_y,
+        } => {
+            hasher.write_u8(24);
+            hasher.write_u64(source.value());
+            hasher.write_i64(i64::from(cell_x));
+            hasher.write_i64(i64::from(cell_y));
+        }
+        GameplayCommandKind::RaiseCorpse {
+            corpse,
+            decay_frames,
+        } => {
+            hasher.write_u8(25);
+            hasher.write_u64(corpse.value());
+            hasher.write_u32(decay_frames);
+        }
+        GameplayCommandKind::ConsumeCorpse { consumer, corpse } => {
+            hasher.write_u8(26);
+            hasher.write_u64(consumer.value());
+            hasher.write_u64(corpse.value());
+        }
+        GameplayCommandKind::HauntGoldMine { mine } => {
+            hasher.write_u8(27);
+            hasher.write_u64(mine.value());
+        }
+        GameplayCommandKind::EntangleGoldMine { mine } => {
+            hasher.write_u8(28);
+            hasher.write_u64(mine.value());
+        }
+        GameplayCommandKind::SetAncientRoot { ancient, rooted } => {
+            hasher.write_u8(29);
+            hasher.write_u64(ancient.value());
+            hasher.write_u8(u8::from(rooted));
+        }
+        GameplayCommandKind::BindMoonWell { well, restore } => {
+            hasher.write_u8(30);
+            hasher.write_u64(well.value());
+            hasher.write_i64(restore);
+        }
+        GameplayCommandKind::SetStealth { unit, cloaked } => {
+            hasher.write_u8(31);
+            hasher.write_u64(unit.value());
+            hasher.write_u8(u8::from(cloaked));
+        }
+        GameplayCommandKind::RegisterDetector { unit } => {
+            hasher.write_u8(32);
+            hasher.write_u64(unit.value());
+        }
+        GameplayCommandKind::SetNightCloak { unit, enabled } => {
+            hasher.write_u8(33);
+            hasher.write_u64(unit.value());
+            hasher.write_u8(u8::from(enabled));
+        }
+        GameplayCommandKind::MarkSightBlocker { blocker, blocking } => {
+            hasher.write_u8(34);
+            hasher.write_u64(blocker.value());
+            hasher.write_u8(u8::from(blocking));
+        }
+        GameplayCommandKind::SetCreepSleep {
+            creep,
+            sleeps_at_night,
+        } => {
+            hasher.write_u8(35);
+            hasher.write_u64(creep.value());
+            hasher.write_u8(u8::from(sleeps_at_night));
+        }
+        GameplayCommandKind::SetRegenCondition { unit, condition } => {
+            hasher.write_u8(36);
+            hasher.write_u64(unit.value());
+            hasher.write_u8(condition.code());
+        }
     }
 }
 
@@ -1653,7 +1887,31 @@ pub(crate) fn validate_gameplay_entities(
         }
         GameplayCommandKind::CancelTownPortal { hero } => hero == EntityId::NONE,
         GameplayCommandKind::RefreshMarket { shop, batch } => shop == 0 || batch == 0,
-        _ => false,
+        // 既有 1–23 中无实体字段的变体显式列出（行为不变），使本 match
+        // 完全穷尽：任何将来新增变体都会触发编译错误，MUST NOT 靠
+        // `_ => false` 默认放行（ADR 0002 §3 / Q5 三处同步）。
+        GameplayCommandKind::Research { .. }
+        | GameplayCommandKind::RegisterBehavior { .. }
+        | GameplayCommandKind::SpawnWave { .. }
+        | GameplayCommandKind::SetAi { .. }
+        | GameplayCommandKind::Leave { .. } => false,
+        // P9 / Q2 / Q4 新增变体：实体字段 MUST 逐个校验，
+        // 新增命令变体漏分支即触发编译错误（Q5 / 反向验证形态①）。
+        GameplayCommandKind::SeedBlight { source, .. } => source == EntityId::NONE,
+        GameplayCommandKind::RaiseCorpse { corpse, .. } => corpse == EntityId::NONE,
+        GameplayCommandKind::ConsumeCorpse { consumer, corpse } => {
+            consumer == EntityId::NONE || corpse == EntityId::NONE
+        }
+        GameplayCommandKind::HauntGoldMine { mine } => mine == EntityId::NONE,
+        GameplayCommandKind::EntangleGoldMine { mine } => mine == EntityId::NONE,
+        GameplayCommandKind::SetAncientRoot { ancient, .. } => ancient == EntityId::NONE,
+        GameplayCommandKind::BindMoonWell { well, .. } => well == EntityId::NONE,
+        GameplayCommandKind::SetStealth { unit, .. } => unit == EntityId::NONE,
+        GameplayCommandKind::RegisterDetector { unit } => unit == EntityId::NONE,
+        GameplayCommandKind::SetNightCloak { unit, .. } => unit == EntityId::NONE,
+        GameplayCommandKind::MarkSightBlocker { blocker, .. } => blocker == EntityId::NONE,
+        GameplayCommandKind::SetCreepSleep { creep, .. } => creep == EntityId::NONE,
+        GameplayCommandKind::SetRegenCondition { unit, .. } => unit == EntityId::NONE,
     };
     if invalid {
         return Err(GameplayCommandError::InvalidEntity);

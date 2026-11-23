@@ -27,6 +27,13 @@
 // 在 GameplayCommand.oneof 只追加 tag 37–45，reserved 14 to 32 与
 // tag 33/34/35/36 一字不动；每个新 message 字段编号只追加、尾部保留 reserved；
 // 明确拒绝 v6，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
+// PROTOCOL_VERSION 8（P9 新增 13 个族特色机制玩法命令变体）：
+// 在 GameplayCommand.oneof 只追加 tag 46–58，reserved 14 to 32 与
+// tag 33/34/35/36/37–45 一字不动；每个新 message 字段编号只追加、
+// 尾部保留 reserved；EntityId 用 uint64 的 value()、网格坐标 / 恢复量
+// 用 int64 定宽承载并在解码时显式校验 i32 / i64 值域，回血条件用
+// RegenCondition::code() 的 uint32 稳定码；明确拒绝 v7，玩法命令字段
+// 不被静默当作 unknown field（ADR 0005 §3）。
 
 syntax = "proto3";
 package w3net;
@@ -128,7 +135,7 @@ message Reject {
   reserved 2 to 6;
 }
 
-// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体 / 5 追加一个变体 / 6 追加一个变体 / 7 追加九个变体，只追加，见 ADR 0005 §3）----
+// ---- 玩法命令线格式（PROTOCOL_VERSION 3 引入 / 4 追加两个变体 / 5 追加一个变体 / 6 追加一个变体 / 7 追加九个变体 / 8 追加十三个变体，只追加，见 ADR 0005 §3）----
 
 // 效果定义（玩法命令参数）：EffectKind 用稳定码 uint32 承载，amount 用 int64。
 message EffectDef {
@@ -142,7 +149,8 @@ message EffectDef {
 // oneof kind 用 tag 4–13 覆盖前 10 个玩法变体；PROTOCOL_VERSION 4 在
 // reserved 14 to 32 之后只追加 tag 33 / 34 两个变体，PROTOCOL_VERSION 5
 // 再只追加 tag 35 一个变体，PROTOCOL_VERSION 6 再只追加 tag 36 一个变体，
-// PROTOCOL_VERSION 7 再只追加 tag 37–45 九个变体
+// PROTOCOL_VERSION 7 再只追加 tag 37–45 九个变体，PROTOCOL_VERSION 8
+// 再只追加 tag 46–58 十三个族特色机制变体
 // （均跳过 reserved 段，字段编号只追加、不复用、不改名）。
 // arrival 不编码，由各端提交时按稳定序本地分配。
 message GameplayCommand {
@@ -173,6 +181,19 @@ message GameplayCommand {
     GameplayUseTownPortal use_town_portal = 43;
     GameplayCancelTownPortal cancel_town_portal = 44;
     GameplayRefreshMarket refresh_market = 45;
+    GameplaySeedBlight seed_blight = 46;
+    GameplayRaiseCorpse raise_corpse = 47;
+    GameplayConsumeCorpse consume_corpse = 48;
+    GameplayHauntGoldMine haunt_gold_mine = 49;
+    GameplayEntangleGoldMine entangle_gold_mine = 50;
+    GameplaySetAncientRoot set_ancient_root = 51;
+    GameplayBindMoonWell bind_moon_well = 52;
+    GameplaySetStealth set_stealth = 53;
+    GameplayRegisterDetector register_detector = 54;
+    GameplaySetNightCloak set_night_cloak = 55;
+    GameplayMarkSightBlocker mark_sight_blocker = 56;
+    GameplaySetCreepSleep set_creep_sleep = 57;
+    GameplaySetRegenCondition set_regen_condition = 58;
   }
   reserved 14 to 32;
 }
@@ -329,6 +350,91 @@ message GameplayCancelTownPortal {
 message GameplayRefreshMarket {
   uint32 shop = 1;
   uint32 batch = 2;
+  reserved 3 to 8;
+}
+
+// 以下十三个消息为 PROTOCOL_VERSION 8（P9 族特色机制）只追加：
+// EntityId 一律 uint64 的 value()；网格坐标 / 月亮井恢复量用 int64
+// 定宽承载（解码时显式校验 i32 / i64 值域，溢出明确拒绝），衰减帧数用
+// uint32，布尔开关用 bool，回血条件用 RegenCondition::code() 的 uint32
+// 稳定码（非法码明确拒绝）；玩家归属 / 语义合法性由 w3-core 同源校验
+// 承担，线格式层只忠实传输、不猜测、不回退。字段编号只追加、尾部
+// 保留 reserved，禁 map / 禁 float / 禁 double 全部继续适用。
+// 腐地扩张源与初始格（kind 码 24）：cell_x / cell_y 为 i32 网格坐标。
+message GameplaySeedBlight {
+  uint64 source = 1;
+  int64 cell_x = 2;
+  int64 cell_y = 3;
+  reserved 4 to 8;
+}
+// 尸体登记（kind 码 25）：decay_frames 为剩余衰减整数帧。
+message GameplayRaiseCorpse {
+  uint64 corpse = 1;
+  uint32 decay_frames = 2;
+  reserved 3 to 8;
+}
+// 食尸回血 / 召唤骷髅（kind 码 26）：消费者与目标尸体均为 EntityId。
+message GameplayConsumeCorpse {
+  uint64 consumer = 1;
+  uint64 corpse = 2;
+  reserved 3 to 8;
+}
+// 诅咒金矿（kind 码 27）：登记金矿实体。
+message GameplayHauntGoldMine {
+  uint64 mine = 1;
+  reserved 2 to 8;
+}
+// 缠绕金矿（kind 码 28）：登记金矿实体。
+message GameplayEntangleGoldMine {
+  uint64 mine = 1;
+  reserved 2 to 8;
+}
+// 古树扎根 / 拔根（kind 码 29）：rooted 为变体内布尔字段。
+message GameplaySetAncientRoot {
+  uint64 ancient = 1;
+  bool rooted = 2;
+  reserved 3 to 8;
+}
+// 月亮井恢复登记（kind 码 30）：restore 为 int64 单次恢复量。
+message GameplayBindMoonWell {
+  uint64 well = 1;
+  int64 restore = 2;
+  reserved 3 to 8;
+}
+// 隐身目标判定（kind 码 31）：玩法机制输入，非 fog 可见性。
+message GameplaySetStealth {
+  uint64 unit = 1;
+  bool cloaked = 2;
+  reserved 3 to 8;
+}
+// 反隐单位登记（kind 码 32）。
+message GameplayRegisterDetector {
+  uint64 unit = 1;
+  reserved 2 to 8;
+}
+// 夜间隐身候选（kind 码 33）。
+message GameplaySetNightCloak {
+  uint64 unit = 1;
+  bool enabled = 2;
+  reserved 3 to 8;
+}
+// 视线阻挡机制输入（kind 码 34）：只登记机制输入，不含 fog 可见性派生结果。
+message GameplayMarkSightBlocker {
+  uint64 blocker = 1;
+  bool blocking = 2;
+  reserved 3 to 8;
+}
+// 野怪睡眠（kind 码 35）：sleeps_at_night 为变体内布尔字段。
+message GameplaySetCreepSleep {
+  uint64 creep = 1;
+  bool sleeps_at_night = 2;
+  reserved 3 to 8;
+}
+// 回血条件（kind 码 36）：condition 为 RegenCondition::code() 的 uint32
+// 稳定码（值域 0..=4），线格式层校验溢出与非法码后还原枚举。
+message GameplaySetRegenCondition {
+  uint64 unit = 1;
+  uint32 condition = 2;
   reserved 3 to 8;
 }
 

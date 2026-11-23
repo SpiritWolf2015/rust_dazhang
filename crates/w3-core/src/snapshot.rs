@@ -32,16 +32,29 @@
 //! `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 7。旧 v6 及更早快照按
 //! `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本
 //! 迁移（ADR 0002 §7 / Q4）。
+//!
+//! v8 由 P9（Q2 / Q3 / Q4 / Q5' 已拍板）引入：追加顶层权威状态
+//! `faction_mechanics`（9 类族特色机制 + Q4 全量机制的确定性运行态，
+//! 全落 `BTreeMap` / `BTreeSet`、按稳定 `EntityId` 顺序遍历），四处同步
+//! 进 FNV-1a 状态哈希 / 本快照顶层字段 / `first_difference()` /
+//! `restore_snapshot`；族特色机制冻结常量段与回血条件定义层类别登记
+//! 经 `compute_defs_hash` 进入 `defs_hash` / `content_hash` 快照头部。
+//! 迷雾 / 视野可见性 MUST 表现层只读派生、MUST NOT 进本快照
+//! （R10.5 / §0.3 T3 / Q2'、对照差异 D1 明确不借鉴）。同步
+//! `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 8。旧 v7 及更早快照按
+//! `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本
+//! 迁移、不静默兼容（ADR 0002 §7 / Q3 / Q5'）。
 
 use crate::command::Command;
 use crate::creep::CreepCampState;
+use crate::faction_mechanics::FactionMechanicsState;
 use crate::gameplay::{
     FrozenDefinitions, HeroReviveState, TownHallUpgradeState, UnitGameplayState, WorldGameplayState,
 };
 use crate::item_shop::ItemShopState;
 
-pub const SNAPSHOT_VERSION: u32 = 7;
-pub const SIM_VERSION: u32 = 7;
+pub const SNAPSHOT_VERSION: u32 = 8;
+pub const SIM_VERSION: u32 = 8;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -143,6 +156,14 @@ pub struct Snapshot {
     /// 随机码消费序列 / 购买扣费登记，恢复后从 N+1 继续不残留 /
     /// 不重复购买或刷新（ADR 0002 §6-8 / R11.5 / R12.4）。
     pub item_shop: ItemShopState,
+    /// 族特色机制顶层权威状态（v8 新增，P9 / Q2 / Q4 / D4）。
+    /// 帧 N 提交后的完整状态 MUST 包含腐地 / 尸体 / 金矿 / 古树 /
+    /// 昼夜相位 / 隐身目标判定 / 月亮井 / 缠绕金矿 / 夜间隐身 +
+    /// Q4 全量结算态，全落 `BTreeMap` / `BTreeSet`、稳定 `EntityId`
+    /// 顺序，恢复后从 N+1 继续不残留、不重复结算
+    /// （ADR 0002 §6-8 / CODEBUDDY.md §5 / Q2 / Q3）。
+    /// 迷雾 / 视野可见性 MUST NOT 进本字段（R10.5 / §0.3 T3 / Q2'）。
+    pub faction_mechanics: FactionMechanicsState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

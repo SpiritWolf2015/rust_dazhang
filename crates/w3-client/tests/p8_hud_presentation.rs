@@ -5,7 +5,7 @@
 //! - Q1 窗口内选族是表现层本地只读状态：确认后经既有
 //!   `MeleeSetup::with_races` 派生开局，本地 / AI 席位 `def_ids` 落所选族
 //!   段、中立恒 `9xx`，`Spawn` / `gameplay_commands` 逐字节不变，
-//!   `SNAPSHOT_VERSION == 7`、逐帧 `compute_state_hash()` /
+//!   `SNAPSHOT_VERSION == 8`、逐帧 `compute_state_hash()` /
 //!   `capture_snapshot()` 不变，AI 命令源按所选 `ai_race` 产出；
 //! - Q2 命令卡按本地族只读查表分派：兽族 Producer / Build / Train 卡
 //!   `TrainUnit { unit_def, .. }` 全落 `2xx`、无 `HUMAN_*`，人族装配
@@ -26,21 +26,22 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use w3_client::faction::{FactionSelection, assemble_from_selection};
 use w3_client::melee::command_card::{
-    CARD_SLOTS, CardCommand, CardId, CommandCatalog, DEFAULT_COMMAND_TARGETS, RACE_TRAIN_TARGETS,
-    RaceTargetTable, TrainCategory, slot,
+    CARD_SLOTS, CardCommand, CardId, CommandCatalog, DEFAULT_COMMAND_TARGETS, RACE_ROWS,
+    RACE_TRAIN_TARGETS, RaceTargetTable, TrainCategory, slot,
 };
 use w3_client::melee::defs::{
     ABILITY, HUMAN_ALTAR, HUMAN_BARRACKS, HUMAN_FARM, HUMAN_HERO, HUMAN_PEASANT, HUMAN_RANGED,
     HUMAN_SIEGE, HUMAN_SMITHY, HUMAN_SOLDIER, HUMAN_TOWN_HALL, NEUTRAL_GOLD_MINE, NEUTRAL_TREE,
-    ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_RANGED, ORC_SIEGE, ORC_SMITHY, ORC_SOLDIER,
-    ORC_TOWN_HALL, Race,
+    NIGHT_ELF_SOLDIER, ORC_ALTAR, ORC_BARRACKS, ORC_FARM, ORC_HERO, ORC_RANGED, ORC_SIEGE,
+    ORC_SMITHY, ORC_SOLDIER, ORC_TOWN_HALL, Race, UNDEAD_SOLDIER,
 };
 use w3_client::melee::{
     AI_PLAYER, AiScript, LOCAL_PLAYER, MeleeSetup, synthetic_definitions, synthetic_world,
 };
 use w3_client::runtime_models::{
     ENTITY_MODEL_KEYS, R1_UNMAPPED_DEFS, RuntimeModelPlan, SEGMENT_HUMAN, SEGMENT_MODEL_KEYS,
-    SEGMENT_NEUTRAL, SEGMENT_ORC, def_id_to_model_key, def_segment,
+    SEGMENT_NEUTRAL, SEGMENT_NIGHT_ELF, SEGMENT_ORC, SEGMENT_UNDEAD, def_id_to_model_key,
+    def_segment,
 };
 use w3_client::{
     ClientApp, ClientCommand, FixedStepClient, HudModel, InputAction, InputState, MovabilityMap,
@@ -59,19 +60,34 @@ const SEED: u64 = 0x5eed;
 const CONTENT_HASH: u64 = 0xC0FFEE;
 const LOGIC_FPS: u32 = 30;
 
-/// 四组合（本地族, AI 族）：人vs人 / 人vs兽 / 兽vs人 / 兽vs兽。
-const COMBINATIONS: [(Race, Race); 4] = [
+/// P9 / Q1' 十六组合（本地族, AI 族）：四族 4×4 笛卡尔积，含同族组合。
+const COMBINATIONS: [(Race, Race); 16] = [
     (Race::Human, Race::Human),
     (Race::Human, Race::Orc),
+    (Race::Human, Race::Undead),
+    (Race::Human, Race::NightElf),
     (Race::Orc, Race::Human),
     (Race::Orc, Race::Orc),
+    (Race::Orc, Race::Undead),
+    (Race::Orc, Race::NightElf),
+    (Race::Undead, Race::Human),
+    (Race::Undead, Race::Orc),
+    (Race::Undead, Race::Undead),
+    (Race::Undead, Race::NightElf),
+    (Race::NightElf, Race::Human),
+    (Race::NightElf, Race::Orc),
+    (Race::NightElf, Race::Undead),
+    (Race::NightElf, Race::NightElf),
 ];
 
-/// 该种族 `units` 段的 `DefId` 区间（人族 `1xx` / 兽族 `2xx`）。
+/// 该种族 `units` 段的 `DefId` 区间（P9 五段中的四族段：
+/// 人族 `1xx` / 兽族 `2xx` / 不死 `3xx` / 暗夜 `4xx`）。
 fn race_segment(race: Race) -> std::ops::Range<DefId> {
     match race {
         Race::Human => 100..200,
         Race::Orc => 200..300,
+        Race::Undead => 300..400,
+        Race::NightElf => 400..500,
     }
 }
 
@@ -203,12 +219,12 @@ fn q1_default_selection_falls_back_to_new() {
     );
 }
 
-/// 选族是表现层本地只读状态：无新增权威状态字段、`SNAPSHOT_VERSION` 仍 7、
+/// 选族是表现层本地只读状态：无新增权威状态字段、`SNAPSHOT_VERSION` 仍 8、
 /// 逐帧 `compute_state_hash()` / `capture_snapshot()` 字节与基线一致
 /// （ADR 0002 / C1 / C2）。
 #[test]
 fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
     let defs = synthetic_definitions();
 
     // 两个不同选族装配的真实对局（Spawn 字节相同）逐帧哈希 / 快照一致。
@@ -230,12 +246,123 @@ fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
         );
         assert_eq!(
             snap_h.version, SNAPSHOT_VERSION,
-            "reason=snapshot_version_7"
+            "reason=snapshot_version_8"
         );
         assert_eq!(snap_h.defs_hash, defs.content_hash(), "reason=defs_hash");
         assert_eq!(snap_h.content_hash, CONTENT_HASH, "reason=content_hash");
         sim_h.step();
         sim_o.step();
+    }
+}
+
+/// tasks 3.5：HUD 只读投影在 v8 新基线下复核（批次 A 四族投影已落地）。
+///
+/// - 不选族回落人族段：`FactionSelection::default()` 与 `MeleeSetup::new()`
+///   的 `Spawn` / `gameplay_commands` / `def_ids` 逐字节一致；
+/// - `derive(snapshot, events)` 只读派生范式不变：反复用 `HudModel::collect`
+///   与 `FogGrid::observe` + `FogHudModel::derive`（含重复事件投递 / 迷雾
+///   网格重算）派生后，真实 `RtsMatch` 的 `compute_state_hash()` /
+///   `capture_snapshot()` 与派生前逐字节一致（HUD / 选中 / 相机 / 迷雾
+///   MUST NOT 反写权威状态，`FogHudModel` 只读语义不变）；
+/// - 十六组合四族投影逐帧哈希 / 快照与不选族 v8 基线一致，快照 v8 且头部
+///   `defs_hash` / `content_hash` 一致；
+/// - 不扩展 `WorldView` / `EntityView`（沿用 [`runtime_view`] 既有字段）。
+#[test]
+fn q1_hud_projection_is_read_only_and_matches_unselected_v8_baseline() {
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
+    let defs = synthetic_definitions();
+
+    // 1) 不选族回落人族段（Q1 未选族回落）。
+    let unselected = FactionSelection::default();
+    assert_eq!(
+        unselected.local_race,
+        Race::Human,
+        "reason=unselected_falls_back_to_human_segment"
+    );
+    assert_eq!(unselected.ai_race, Race::Orc, "reason=unselected_ai_is_orc");
+    let baseline = MeleeSetup::new();
+    let unselected_setup = assembled(unselected);
+    assert_eq!(
+        unselected_setup.commands, baseline.commands,
+        "reason=fallback_spawn_bytes"
+    );
+    assert_eq!(
+        unselected_setup.gameplay_commands, baseline.gameplay_commands,
+        "reason=fallback_gameplay_bytes"
+    );
+    assert_eq!(
+        unselected_setup.def_ids, baseline.def_ids,
+        "reason=fallback_def_ids"
+    );
+
+    // 2) HUD / FogHud 只读派生不改权威哈希与快照（重复投递 / 网格重算）。
+    let (_, _, mapper, entity_defs, selection) = hud_fixture();
+    let mut sim = build_sim(&baseline, &defs);
+    sim.step();
+    let view = sim.read_view();
+    let snap = sim.capture_snapshot();
+    let hash_before = sim.compute_state_hash();
+    let snapshot_before = sim.capture_snapshot();
+    assert_eq!(
+        snapshot_before.version, SNAPSHOT_VERSION,
+        "reason=baseline_snapshot_v8"
+    );
+    let mut fog_grid = w3_client::FogGrid::new(LOCAL_PLAYER);
+    for _ in 0..8 {
+        let _hud = HudModel::collect(&view, &snap, &selection, &[], &mapper, LOCAL_PLAYER);
+        fog_grid.observe(&view, &snap, &[], &entity_defs, LOCAL_PLAYER);
+        let _fog_hud = w3_client::FogHudModel::derive(&snap, &[], &fog_grid);
+    }
+    assert_eq!(
+        sim.compute_state_hash(),
+        hash_before,
+        "reason=hud_derive_does_not_change_state_hash"
+    );
+    assert_eq!(
+        sim.capture_snapshot(),
+        snapshot_before,
+        "reason=hud_derive_does_not_change_snapshot"
+    );
+    // `FogHudModel::derive` 只读消费快照 / 事件拷贝，不携带权威写句柄。
+    let fog_hud = w3_client::FogHudModel::derive(&snap, &[], &fog_grid);
+    assert_eq!(
+        fog_hud.snapshot_tick, snap.tick,
+        "reason=fog_hud_derives_snapshot_tick"
+    );
+
+    // 3) 十六组合四族投影与不选族 v8 基线逐帧一致（选族只停装配层）。
+    for (local, ai) in COMBINATIONS {
+        let setup = assembled(FactionSelection::with_races(local, ai));
+        let mut selected = build_sim(&setup, &defs);
+        let mut base = build_sim(&baseline, &defs);
+        for frame in 0..8 {
+            assert_eq!(
+                selected.compute_state_hash(),
+                base.compute_state_hash(),
+                "reason=hud_projection_hash_matches_unselected_baseline frame={frame} local={local:?} ai={ai:?}"
+            );
+            let selected_snapshot = selected.capture_snapshot();
+            let base_snapshot = base.capture_snapshot();
+            assert_eq!(
+                selected_snapshot, base_snapshot,
+                "reason=hud_projection_snapshot_matches_unselected_baseline frame={frame} local={local:?} ai={ai:?}"
+            );
+            assert_eq!(
+                selected_snapshot.version, SNAPSHOT_VERSION,
+                "reason=hud_projection_snapshot_v8 frame={frame}"
+            );
+            assert_eq!(
+                selected_snapshot.defs_hash,
+                defs.content_hash(),
+                "reason=hud_projection_defs_hash frame={frame}"
+            );
+            assert_eq!(
+                selected_snapshot.content_hash, CONTENT_HASH,
+                "reason=hud_projection_content_hash frame={frame}"
+            );
+            selected.step();
+            base.step();
+        }
     }
 }
 
@@ -274,7 +401,7 @@ fn q1_command_card_race_refresh_never_changes_hash_or_snapshot() {
         );
         assert_eq!(snapshot(&rendered).version, SNAPSHOT_VERSION);
     }
-    assert_eq!(SNAPSHOT_VERSION, 7, "reason=snapshot_version_7");
+    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
 }
 
 /// 选族后 AI 命令源按所选 `ai_race` 产出（P8.3 回归接新入口）：
@@ -582,6 +709,26 @@ fn q2_race_target_table_drives_dispatch_without_if_race_or_whitelist() {
         assert!((200..300).contains(&orc_def));
         assert_ne!(human_def, orc_def, "reason=distinct_race_targets");
     }
+    // P9 / Q1'：定义表四行，不死 `3xx` / 暗夜 `4xx` 两行整行落在
+    // 各自段、9 列全 `Some`，且与既有两族行不重叠（4 行 × 9 列）。
+    assert_eq!(RACE_ROWS, 4);
+    assert_eq!(RACE_TRAIN_TARGETS.len(), 4);
+    for (row_index, segment) in [(2usize, 300..400), (3, 400..500)] {
+        for entry in RACE_TRAIN_TARGETS[row_index] {
+            assert!(
+                entry.is_some_and(|id| segment.contains(&id)),
+                "reason=p9_row_in_segment row={row_index}"
+            );
+        }
+    }
+    assert_eq!(
+        RACE_TRAIN_TARGETS[2][TrainCategory::Soldier.index()],
+        Some(UNDEAD_SOLDIER)
+    );
+    assert_eq!(
+        RACE_TRAIN_TARGETS[3][TrainCategory::Soldier.index()],
+        Some(NIGHT_ELF_SOLDIER)
+    );
 }
 
 /// `def_kinds` 补齐两族登记（含兽族六类新类别），`kind_of` 通用回落保持。
@@ -692,7 +839,13 @@ fn q2_producer_train_card_emits_race_segment_train_command() {
         })
         .expect("reason=producer_train_button_exists");
 
-    for (race, segment) in [(Race::Orc, 200..300), (Race::Human, 100..200)] {
+    // P9 / Q1'：四族 Producer 卡训练格各产本族段 `Train`（3xx / 4xx）。
+    for (race, segment) in [
+        (Race::Orc, 200..300),
+        (Race::Human, 100..200),
+        (Race::Undead, 300..400),
+        (Race::NightElf, 400..500),
+    ] {
         let mut input = InputState::new(1)
             .with_entity_defs([(1u64, race.town_hall())].into_iter().collect())
             .with_catalog(CommandCatalog::for_race(race));
@@ -841,11 +994,12 @@ fn catalog_trains_only_orc_targets(catalog: &CommandCatalog) -> bool {
             .all(|def_id| !human_target_ids().contains(def_id))
 }
 
-/// 退化定义表（缺陷态，仅反向验证用）：两行都写死 `HUMAN_*` 目标
-/// （即 P8.4 之前 `command_card.rs:235-360` 的旧实现），仍经真实
+/// 退化定义表（缺陷态，仅反向验证用）：四行都写死 `HUMAN_*` 目标
+/// （即 P8.4 之前 `command_card.rs:235-360` 的旧实现，模拟散落
+/// `if race` 白名单 / 新族行静默回落的退化实现），仍经真实
 /// [`CommandCatalog::for_race_with_targets`] 生产路径注入、非旁路模拟。
 fn degenerate_human_only_table() -> RaceTargetTable {
-    [RACE_TRAIN_TARGETS[0], RACE_TRAIN_TARGETS[0]]
+    [RACE_TRAIN_TARGETS[0]; RACE_ROWS]
 }
 
 /// 反向验证·Q2 修复态：正式按族查表目录通过「兽族训练产兽族目标」断言。
@@ -1167,26 +1321,55 @@ fn q3_runtime_buildings_resolve_segment_building_keys() {
     );
 }
 
-/// DefId 段 → 真实模型键的编译期表（Q3 / R2 / C16–C18）：
-/// 三段覆盖 `1xx` / `2xx` / `9xx`；14 键与 `ENTITY_MODEL_FILES` 逐字一致；
-/// 兽族 8 键为小写归一逻辑路径（`normalize()` 双侧归一命中真实大小写
-/// 磁盘文件，C18 不是待修缺陷）；键名 MUST 全部来自 content-owner 接口，
-/// 不新增表项、不改解析逻辑 / 静态摆放链路（ADR 0004）。
+/// DefId 段 → 真实模型键的编译期表（Q3 / R2 / C16–C18 / P9 Q1'）：
+/// 五段覆盖 `1xx` / `2xx` / `3xx` / `4xx` / `9xx`；18 键与
+/// `ENTITY_MODEL_FILES` 逐字一致（既有 14 个真实网格键 + P9 由
+/// content-owner 落盘的 4 个合成段代表键）；兽族 8 键与新增 4 键均为
+/// 小写归一逻辑路径（`normalize()` 双侧归一，C18 不是待修缺陷）；键名
+/// MUST 全部来自 content-owner 接口，不改解析逻辑 / 静态摆放链路
+/// （ADR 0004）。新段沿用「段代表键 + 显式可诊断回退」，不要求给每个
+/// 新 `DefId` 加精确映射（沿用 R-1 口径，避免扩范围）。
 #[test]
 fn q3_def_id_segment_table_matches_entity_model_files() {
-    assert_eq!(SEGMENT_MODEL_KEYS.len(), 3);
+    assert_eq!(SEGMENT_MODEL_KEYS.len(), 5);
     assert_eq!(def_segment(101), SEGMENT_HUMAN);
     assert_eq!(def_segment(210), SEGMENT_ORC);
+    assert_eq!(def_segment(301), SEGMENT_UNDEAD);
+    assert_eq!(def_segment(401), SEGMENT_NIGHT_ELF);
     assert_eq!(def_segment(901), SEGMENT_NEUTRAL);
-    // 14 键逐字等于 `w3-content::ENTITY_MODEL_FILES` 的键（不新增表项）。
+    // 18 键逐字等于 `w3-content::ENTITY_MODEL_FILES` 的键（两个 owner
+    // 并行改不同文件，必须一致；既有 14 键前缀逐字不变）。
     let content_keys: Vec<&str> = w3_content::ENTITY_MODEL_FILES
         .iter()
         .map(|(key, _)| *key)
         .collect();
-    assert_eq!(ENTITY_MODEL_KEYS.len(), 14, "6 人族/中立 + 8 兽族");
+    assert_eq!(
+        ENTITY_MODEL_KEYS.len(),
+        18,
+        "6 人族/中立 + 8 兽族 + 4 P9 段代表键"
+    );
     assert_eq!(ENTITY_MODEL_KEYS.as_slice(), content_keys.as_slice());
-    // 兽族 8 键的 value 全为小写归一逻辑路径（C18）。
-    for (key, path) in w3_content::ENTITY_MODEL_FILES.iter().skip(6) {
+    assert_eq!(
+        &content_keys[..14],
+        &[
+            "peasant",
+            "soldier",
+            "town-hall",
+            "barracks",
+            "gold-mine",
+            "tree",
+            "orc-peon",
+            "orc-grunt",
+            "orc-headhunter",
+            "orc-great-hall",
+            "orc-barracks",
+            "orc-burrow",
+            "orc-altar",
+            "orc-war-mill"
+        ]
+    );
+    // 兽族 8 键（索引 6..14）的 value 全为小写归一逻辑路径（C18）。
+    for (key, path) in w3_content::ENTITY_MODEL_FILES.iter().skip(6).take(8) {
         assert!(key.starts_with("orc-"), "reason=orc_key_prefix key={key}");
         assert_eq!(
             *path,
@@ -1194,7 +1377,26 @@ fn q3_def_id_segment_table_matches_entity_model_files() {
             "reason=path_not_normalized key={key}"
         );
     }
-    // 段键表所有键都在 14 键内（不引入表外真实网格键）。
+    // P9 新增 4 键（索引 14..18）：合成全小写逻辑路径占位串，
+    // 非资产内容、不指向真实导出资产，沿用大小写归一机制。
+    for (key, path) in w3_content::ENTITY_MODEL_FILES.iter().skip(14) {
+        assert!(
+            [
+                "undead-unit",
+                "undead-building",
+                "nightelf-unit",
+                "nightelf-building",
+            ]
+            .contains(key),
+            "reason=p9_segment_key_name key={key}"
+        );
+        assert_eq!(
+            *path,
+            path.to_ascii_lowercase(),
+            "reason=p9_path_not_normalized key={key}"
+        );
+    }
+    // 段键表五段所有键都在 18 键内（含新段代表键，不引入表外键）。
     for (_, keys) in SEGMENT_MODEL_KEYS {
         assert!(ENTITY_MODEL_KEYS.contains(&keys.unit));
         assert!(ENTITY_MODEL_KEYS.contains(&keys.building));
@@ -1253,10 +1455,10 @@ fn q3_missing_asset_is_explicitly_diagnosable_with_clear_fallback() {
 
 /// 模型键 / 几何只读，不进权威状态 / FNV-1a 状态哈希 / 快照：
 /// 真实 `RtsMatch` 在「跑完整 Q3 呈现管线」与「不跑」两侧逐帧一致，
-/// `SNAPSHOT_VERSION == 7`（ADR 0002 / C1 / tasks 5.4）。
+/// `SNAPSHOT_VERSION == 8`（ADR 0002 / C1 / tasks 5.4）。
 #[test]
 fn q3_model_key_resolution_never_changes_hash_or_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 7);
+    assert_eq!(SNAPSHOT_VERSION, 8);
     let defs = synthetic_definitions();
     let setup = MeleeSetup::new();
     let mut rendered = build_sim(&setup, &defs);

@@ -30,6 +30,13 @@
 //! 暗夜 AI 训练 / 施法 / 研发命令的 `DefId` 自动落在 `3xx` / `4xx` 段；
 //! 命令面仍是既有 `GameplayCommandKind` 码 1–23（既有字节不变）、
 //! 不启用内核 `run_ai`、不新增权威状态 / 命令变体。
+//!
+//! P11（Q7 / D7）：上列「不新增权威状态 / 命令变体」描述的是**本 AI
+//! 脚本自身**的当期范围，不是禁止内核扩展。P11 在 `w3-core` 把
+//! `EffectKind` 扩到 13 变体并只追加点 / 范围 / 方向技能命令变体
+//! （kind 码 37 起），但本期不含 AI 自主施法、不改本只读夹具取
+//! `Cast` 目标 ID 的方式，`SetAi { enabled: false }` 仍关闭内核
+//! `run_ai`；本模块仍只提交既有命令面（design 结论 4 / D7）。
 
 use w3_core::{Frame, GameplayCommand, GameplayCommandKind};
 

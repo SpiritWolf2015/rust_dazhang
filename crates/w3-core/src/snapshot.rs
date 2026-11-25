@@ -44,6 +44,17 @@
 //! `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 8。旧 v7 及更早快照按
 //! `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本
 //! 迁移、不静默兼容（ADR 0002 §7 / Q3 / Q5'）。
+//!
+//! v9 由 P11（Q3 / Q4 / Q5 已拍板）引入：在 `Snapshot.gameplay` 内追加
+//! `AbilitySystemState` 技能权威运行态（zone / 召唤 / 光环受益集 /
+//! 被动 proc / 变身 / buff 分类 / 链接 / `rng_draws` 与进行中施法），
+//! 全部落 `BTreeMap` / `BTreeSet` 稳定序，经 `WorldGameplayState::hash`
+//! / `first_difference()` 与 `Snapshot.gameplay` 克隆恢复四处同步；
+//! 技能清单 / 行为目录 / buff 分类 / 冻结常量经 `compute_defs_hash`
+//! 进入 `defs_hash` / `content_hash` 快照头部，与运行态严格区分。
+//! 同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 9。旧 v8 及更早快照按
+//! `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本
+//! 迁移（ADR 0002 §7）。
 
 use crate::command::Command;
 use crate::creep::CreepCampState;
@@ -53,8 +64,8 @@ use crate::gameplay::{
 };
 use crate::item_shop::ItemShopState;
 
-pub const SNAPSHOT_VERSION: u32 = 8;
-pub const SIM_VERSION: u32 = 8;
+pub const SNAPSHOT_VERSION: u32 = 9;
+pub const SIM_VERSION: u32 = 9;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -135,7 +146,8 @@ pub struct Snapshot {
     pub group_plans: Vec<GroupPlanRecord>,
     /// 冻结内容定义（恢复时据此重建，不依赖内容层）。
     pub defs: FrozenDefinitions,
-    /// 全局玩法运行态（经济 / 胜负 / AI / 光环 / 波次 / 行为注册 / 玩法命令）。
+    /// 全局玩法运行态（经济 / 胜负 / AI / 光环 / 波次 / 行为注册 /
+    /// P11 技能权威运行态 / 玩法命令）。
     pub gameplay: WorldGameplayState,
     /// 英雄复活三组权威状态（死亡登记 / 复活队列 / 费用登记，v4 新增）。
     /// 帧 N 提交后的完整状态必须包含它们，恢复后从 N+1 继续不重复复活

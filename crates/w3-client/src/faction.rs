@@ -7,7 +7,7 @@
 //!
 //! 硬红线（ADR 0002 / 主 `dual-faction/spec.md:25` / design D1）：
 //! - 选族 MUST NOT 新增 `Player.race` / `RtsMatch.race` 或任何权威状态字段；
-//!   MUST NOT 进入 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION`（当前 8）定义的
+//!   MUST NOT 进入 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION`（当前 9）定义的
 //!   快照或 `first_difference()`；`w3-core` 零改动。
 //! - 选族只体现在开局装配层 `EntityId → DefId` 关联的段位（人族 `1xx` /
 //!   兽族 `2xx` / 中立 `9xx`）与按族只读查表的命令卡目标上；

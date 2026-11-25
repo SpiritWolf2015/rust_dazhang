@@ -8,6 +8,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::ability_system::{
+    AbilityCategory, AbilityRngDraw, AbilitySystemState, AbilityTargetKind, AuraBeneficiarySet,
+    BehaviorKind, BuffCategory, ChainState, PassiveProcState, PendingAbilityCast, PointTargetState,
+    SummonState, TransformState, ZoneState,
+};
 use crate::angle::{Angle, slope_speed_scale};
 use crate::command::{Command, CommandError, CommandKind, CommandQueue};
 use crate::creep::{
@@ -355,17 +360,27 @@ pub struct RtsMatch {
     /// P8.5d 物品 / 商店 / 回城卷轴全部权威状态（Q6 / Q7 / D1 / D5）。
     /// 字段私有，仅本结构可写；六格定长实例背包与 `creep_camps`
     /// 的 `item_instances` 按稳定 `EntityId` 构成单一实例身份口径。
-    /// 同时进入状态哈希、由 `SNAPSHOT_VERSION`（当前 8）定义的快照与差异诊断。
+    /// 同时进入状态哈希、由 `SNAPSHOT_VERSION`（当前 9）定义的快照与差异诊断。
     item_shop: ItemShopState,
     /// P9 / Q2 / Q4 族特色机制顶层权威状态（腐地 / 尸体 / 金矿 / 古树 /
     /// 昼夜相位 / 隐身目标判定 / 月亮井 / 缠绕金矿 / 夜间隐身 + Q4 全量）。
     /// 字段私有，仅本结构可写；全部落 `BTreeMap` / `BTreeSet`
     /// 确定性有序容器、按稳定 `EntityId` 顺序遍历；四处同步进 FNV-1a
-    /// 状态哈希、由 `SNAPSHOT_VERSION`（8）定义的 `Snapshot` 顶层字段、
+    /// 状态哈希、由 `SNAPSHOT_VERSION`（9）定义的 `Snapshot` 顶层字段、
     /// `first_difference()` 与 `restore_snapshot`（ADR 0002 §6-8）。
     /// 迷雾 / 视野可见性 MUST 表现层只读派生，MUST NOT 进本字段 /
     /// 哈希 / 快照 / `first_difference()`（R10.5 / §0.3 T3 / Q2'）。
     faction_mechanics: FactionMechanicsState,
+}
+
+/// 技能效果结算上下文：全部为冻结整数输入，不携带闭包或宿主随机源。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct AbilityEffectContext {
+    caster: EntityId,
+    ability: DefId,
+    target: AbilityTargetKind,
+    player: u8,
+    frame: u64,
 }
 
 /// 纯整数 LCG：相同状态总是产生相同的后继状态。
@@ -373,6 +388,14 @@ fn next_rng(state: u64) -> u64 {
     state
         .wrapping_mul(6_364_136_223_846_793_005)
         .wrapping_add(1_442_695_040_888_963_407)
+}
+
+/// 从本帧唯一 LCG 后继状态派生逻辑随机码；不推进主 LCG、不新增独立流。
+fn mix_ability_rng(state: u64, salt: u64, seq: u64, ability: DefId) -> u64 {
+    let mixed = state
+        .wrapping_add(salt)
+        .wrapping_add((u64::from(ability) << 32) ^ seq.rotate_left(17));
+    mixed ^ (mixed >> 33)
 }
 
 /// P9 / Q4 把逐 tick 结算事实类别映射为只读 `EventKind` 事实事件。
@@ -617,6 +640,12 @@ impl RtsMatch {
         self.faction_mechanics.clone()
     }
 
+    /// P11 技能系统权威运行态的只读 owned 拷贝（只读投影）。
+    /// 表现层只能消费 owned 投影，MUST NOT 反写权威状态（ADR 0002 §5）。
+    pub fn ability_system_state(&self) -> AbilitySystemState {
+        self.gameplay.abilities.clone()
+    }
+
     pub fn config(&self) -> MatchConfig {
         self.config
     }
@@ -704,7 +733,7 @@ impl RtsMatch {
         }
 
         // 8. 推进玩法运行态（施法 / 引导、冷却、Buff 到期、光环 / 波次、生产 / 研究）。
-        self.advance_gameplay_timers();
+        self.advance_gameplay_timers(frame);
 
         // 8b. 推进祭坛复活队列效果链（费用提交事务在阶段 7 已完成，此处仅执行
         //     剩余帧递减 / 事务性退款 / 恢复本体，两者分离见主 gameplay-systems/spec.md:19）。
@@ -731,15 +760,24 @@ impl RtsMatch {
         //     MUST NOT 把 fog 可见性反写权威状态。
         self.advance_faction_mechanics(frame);
 
+        // 8g. P11 技能系统帧阶段：先取本帧唯一主 LCG 后继状态，供 zone /
+        //     召唤 / 光环 / proc / 变身 / 链接 / `rng_draws` 按冻结常量
+        //     与稳定 EntityId 顺序结算。此处不推进 `self.rng`，阶段 11
+        //     才提交唯一一次主 LCG 消费；技能随机只从该后继状态派生，
+        //     MUST NOT 新增 per-skill 独立流（ADR 0002 §4）。
+        let rng_before = self.rng;
+        let rng_after = next_rng(rng_before);
+        self.advance_ability_system(frame, rng_before, rng_after);
+
         // 9. 胜负判定：既定帧阶段、稳定顺序、只结算一次。
         self.resolve_victory(frame);
 
         // 10. 确定性 AI：每帧重算，内部命令不写回命令队列、不注入重放。
         self.run_ai(frame);
 
-        // 11. 每帧消耗一次随机流；该流属于权威状态（主 LCG 主流，
+        // 11. 每帧恰好消费一次随机流；该流属于权威状态（主 LCG 主流，
         //     与事件驱动掉落流 `creep_camps.rng_state` 分离，ADR 0002 §4）。
-        self.rng = next_rng(self.rng);
+        self.rng = rng_after;
 
         // 12. 提交本帧。
         self.clock.advance();
@@ -1189,6 +1227,7 @@ impl RtsMatch {
                     amount: damage,
                     duration_frames: 0,
                 },
+                None,
             );
             let died = !self.is_alive(target);
             if died {
@@ -1281,17 +1320,243 @@ impl RtsMatch {
     }
 
     /// 单个效果经统一结算服务落到目标；目标死亡后后续效果返回 `NoEffect`。
-    fn apply_effect(&mut self, target: EntityId, effect: &EffectDef) -> EffectOutcome {
-        let Some(unit) = self.units.get_mut(&target) else {
+    /// P11 新增效果原语转入技能权威运行态目录，旧效果仍只经 `Settlement`。
+    fn apply_effect(
+        &mut self,
+        target: EntityId,
+        effect: &EffectDef,
+        context: Option<AbilityEffectContext>,
+    ) -> EffectOutcome {
+        if !matches!(
+            effect.kind,
+            EffectKind::Damage | EffectKind::Heal | EffectKind::BuffStat | EffectKind::Stun
+        ) {
+            let fallback = AbilityEffectContext {
+                caster: target,
+                ability: 0,
+                target: AbilityTargetKind::Entity(target),
+                player: 0,
+                frame: 0,
+            };
+            return self.apply_ability_effect(target, effect, context.unwrap_or(fallback));
+        }
+        let Self {
+            units, gameplay, ..
+        } = self;
+        let Some(unit) = units.get_mut(&target) else {
             return EffectOutcome::NoEffect;
         };
         let mut vitals = Self::make_vitals(unit);
-        match effect.kind {
+        let outcome = match effect.kind {
             EffectKind::Damage => Settlement::damage(&mut vitals, effect.amount),
             EffectKind::Heal => Settlement::heal(&mut vitals, effect.amount),
             // BuffStat 经结算同时改属性修正并登记短期 Buff；Stun 登记眩晕 Buff。
             EffectKind::BuffStat => Settlement::stat_mod(&mut vitals, effect),
             EffectKind::Stun => Settlement::buff(&mut vitals, effect),
+            _ => EffectOutcome::NoEffect,
+        };
+        if outcome == EffectOutcome::Applied
+            && matches!(effect.kind, EffectKind::BuffStat | EffectKind::Stun)
+        {
+            gameplay
+                .abilities
+                .buff_categories
+                .entry(target)
+                .or_default()
+                .insert(BuffCategory::from_effect_kind(effect.kind));
+        }
+        outcome
+    }
+
+    /// P11 技能效果原语：按单一行为目录查表分派，只写技能权威运行态；
+    /// 生命 / Buff 改写仍经 `Settlement`，不新增独立随机流。
+    fn apply_ability_effect(
+        &mut self,
+        target: EntityId,
+        effect: &EffectDef,
+        context: AbilityEffectContext,
+    ) -> EffectOutcome {
+        let Self {
+            units,
+            gameplay,
+            defs,
+            entities,
+            ..
+        } = self;
+        let behavior_id = defs
+            .abilities()
+            .get(&context.ability)
+            .map_or(0, |def| def.behavior);
+        let Some(behavior) = defs
+            .ability_system()
+            .behaviors
+            .dispatch_by_effect(effect.kind)
+            .or_else(|| defs.ability_system().behaviors.dispatch_by_id(behavior_id))
+        else {
+            return EffectOutcome::NoEffect;
+        };
+        let constants = defs.ability_system().constants;
+        let runtime = &mut gameplay.abilities;
+        let beneficiary_ids: BTreeSet<EntityId> = units
+            .iter()
+            .filter_map(|(&id, unit)| unit.alive.then_some(id))
+            .collect();
+        let caster_state = units.get(&context.caster).cloned();
+
+        if behavior == BehaviorKind::Summon {
+            let Some(mut summoned) = caster_state else {
+                return EffectOutcome::NoEffect;
+            };
+            let id = entities.spawn();
+            summoned.owner = context.player;
+            summoned.hp = constants.summon_hp.max(1);
+            summoned.max_hp = summoned.hp;
+            summoned.alive = true;
+            summoned.order = Order::Idle;
+            summoned.pending.clear();
+            summoned.goal = None;
+            summoned.path.clear();
+            summoned.path_index = 0;
+            summoned.blocked_frames = 0;
+            summoned.group = 0;
+            summoned.gameplay = UnitGameplayState::default();
+            units.insert(id, summoned);
+            runtime.summons.insert(
+                id,
+                SummonState {
+                    summon: id,
+                    owner: context.caster,
+                    player: context.player,
+                    ability: context.ability,
+                    remaining: constants.summon_frames.max(1),
+                },
+            );
+            return EffectOutcome::Applied;
+        }
+
+        let Some(unit) = units.get_mut(&target) else {
+            return EffectOutcome::NoEffect;
+        };
+        let mut vitals = Self::make_vitals(unit);
+        match behavior {
+            BehaviorKind::Zone => {
+                let id = EntityId::new(runtime.next_zone_id).unwrap_or(EntityId::NONE);
+                runtime.next_zone_id = runtime.next_zone_id.saturating_add(1);
+                if id == EntityId::NONE {
+                    return EffectOutcome::NoEffect;
+                }
+                let (x, y) = context.target.point();
+                let radius_raw = context.target.radius_raw(constants.point_radius_raw);
+                let beneficiaries = beneficiary_ids.iter().copied().take(8).collect();
+                runtime.zones.insert(
+                    id,
+                    ZoneState {
+                        id,
+                        source: context.caster,
+                        ability: context.ability,
+                        owner: context.player,
+                        x,
+                        y,
+                        radius_raw,
+                        remaining: constants.zone_frames.max(1),
+                        beneficiaries,
+                    },
+                );
+                EffectOutcome::Applied
+            }
+            BehaviorKind::Aura => {
+                runtime.aura_beneficiaries.insert(
+                    context.caster,
+                    AuraBeneficiarySet {
+                        source: context.caster,
+                        ability: context.ability,
+                        beneficiaries: beneficiary_ids,
+                    },
+                );
+                EffectOutcome::Applied
+            }
+            BehaviorKind::PassiveProc => {
+                runtime.passive_procs.insert(
+                    (target, context.ability),
+                    PassiveProcState {
+                        subscribed_frame: context.frame,
+                        remaining: u32::MAX,
+                        random: false,
+                    },
+                );
+                EffectOutcome::Applied
+            }
+            BehaviorKind::Transform => {
+                runtime.transformations.insert(
+                    target,
+                    TransformState {
+                        ability: context.ability,
+                        state_code: effect.duration_frames as u8,
+                        remaining: constants.transform_frames.max(1),
+                    },
+                );
+                EffectOutcome::Applied
+            }
+            BehaviorKind::PointTarget => {
+                runtime.point_targets.insert(
+                    context.caster,
+                    PointTargetState {
+                        caster: context.caster,
+                        ability: context.ability,
+                        target: context.target,
+                        frame: context.frame,
+                    },
+                );
+                EffectOutcome::Applied
+            }
+            BehaviorKind::RemoveBuffCategory => {
+                let Some(category) = BuffCategory::from_code(effect.amount as u8) else {
+                    return EffectOutcome::NoEffect;
+                };
+                if category == BuffCategory::None {
+                    return EffectOutcome::NoEffect;
+                }
+                let mut empty = false;
+                if let Some(categories) = runtime.buff_categories.get_mut(&target) {
+                    categories.remove(&category);
+                    empty = categories.is_empty();
+                }
+                if empty {
+                    runtime.buff_categories.remove(&target);
+                }
+                Settlement::remove_buff_category(&mut vitals, category)
+            }
+            BehaviorKind::ChainBounce => {
+                let id = EntityId::new(runtime.next_chain_id).unwrap_or(EntityId::NONE);
+                runtime.next_chain_id = runtime.next_chain_id.saturating_add(1);
+                if id == EntityId::NONE {
+                    return EffectOutcome::NoEffect;
+                }
+                runtime.chains.insert(
+                    id,
+                    ChainState {
+                        id,
+                        source: context.caster,
+                        target: context.target.entity_or(target),
+                        ability: context.ability,
+                        bounces: constants.chain_bounces.max(1),
+                        remaining: constants.zone_frames.max(1),
+                    },
+                );
+                Settlement::damage(&mut vitals, constants.chain_damage)
+            }
+            BehaviorKind::RandomDraw => {
+                runtime.passive_procs.insert(
+                    (target, context.ability),
+                    PassiveProcState {
+                        subscribed_frame: context.frame,
+                        remaining: u32::MAX,
+                        random: true,
+                    },
+                );
+                EffectOutcome::Applied
+            }
+            BehaviorKind::Summon => EffectOutcome::NoEffect,
         }
     }
 
@@ -1303,19 +1568,101 @@ impl RtsMatch {
         Settlement::commit_cost(&mut Self::make_vitals(unit), cost)
     }
 
-    /// 效果链：顺序执行；目标中途死亡后由 `Settlement` 自然返回 `NoEffect`，
+    /// 技能效果链：顺序执行；目标中途死亡后由 `Settlement` 自然返回 `NoEffect`，
     /// 已提交的效果不回滚、不重复扣费。
-    fn apply_effects(&mut self, target: EntityId, ability: DefId) {
-        let effects = resolve_effects(&self.defs, &self.gameplay, ability);
+    fn apply_ability_effects(&mut self, context: AbilityEffectContext) {
+        let effects = resolve_effects(&self.defs, &self.gameplay, context.ability);
+        let target = context.target.entity_or(context.caster);
         for effect in effects {
-            self.apply_effect(target, &effect);
+            self.apply_effect(target, &effect, Some(context));
         }
     }
 
-    /// 施法（玩家命令与 AI 共用入口）：同源校验 → 费用事务 → 运行态 / 效果链。
-    fn execute_cast(&mut self, caster: EntityId, ability: DefId, target: EntityId, player: u8) {
-        if !self.is_actionable(caster, player) || !self.is_alive(target) {
+    /// 英雄技能学习 / 升级：技能点、等级与 6 级大招由冻结清单与运行态共同校验。
+    fn learn_ability(&mut self, hero: EntityId, ability: DefId, player: u8) {
+        if !self.is_actionable(hero, player) {
             return;
+        }
+        let Some(entry) = self.defs.ability_system().abilities.get(ability).copied() else {
+            return;
+        };
+        let Some(level) = self
+            .units
+            .get(&hero)
+            .and_then(|unit| unit.gameplay.hero.map(|state| state.level))
+        else {
+            return;
+        };
+        if entry.category == AbilityCategory::HeroUltimate && level < 6 {
+            return;
+        }
+        let key = (hero, ability);
+        let learned = self
+            .gameplay
+            .abilities
+            .ability_levels
+            .get(&key)
+            .copied()
+            .unwrap_or(0);
+        if learned >= u32::from(entry.levels) {
+            return;
+        }
+        let points = self
+            .gameplay
+            .abilities
+            .hero_skill_points
+            .entry(hero)
+            .or_insert(level.max(1));
+        if *points == 0 {
+            return;
+        }
+        *points -= 1;
+        self.gameplay
+            .abilities
+            .ability_levels
+            .insert(key, learned.saturating_add(1));
+    }
+
+    /// 英雄升级并累积技能点；本期不含 AI 自主升级 / 施法路径。
+    fn level_up_hero(&mut self, hero: EntityId, player: u8) {
+        if !self.is_actionable(hero, player) {
+            return;
+        }
+        let Self {
+            units, gameplay, ..
+        } = self;
+        let Some(unit) = units.get_mut(&hero) else {
+            return;
+        };
+        let Some(state) = unit.gameplay.hero.as_mut() else {
+            return;
+        };
+        state.level = state.level.saturating_add(1);
+        let points = gameplay
+            .abilities
+            .hero_skill_points
+            .entry(hero)
+            .or_insert(1);
+        *points = points.saturating_add(1);
+    }
+
+    /// 施法（玩家命令与 AI 共用入口）：同源校验 → 费用事务 → 运行态 / 效果链。
+    /// 点 / 范围 / 方向目标与实体目标共用同一命令面，不新增 AI 决策源。
+    fn execute_cast(
+        &mut self,
+        caster: EntityId,
+        ability: DefId,
+        target: AbilityTargetKind,
+        player: u8,
+        frame: Frame,
+    ) {
+        if !self.is_actionable(caster, player) {
+            return;
+        }
+        if let AbilityTargetKind::Entity(entity) = target {
+            if !self.is_alive(entity) {
+                return;
+            }
         }
         let Some(def) = self.defs.abilities().get(&ability).cloned() else {
             return;
@@ -1333,15 +1680,32 @@ impl RtsMatch {
                 unit.gameplay.cooldowns.insert(ability, def.cooldown_frames);
             }
         }
+        let context = AbilityEffectContext {
+            caster,
+            ability,
+            target,
+            player,
+            frame: frame.value(),
+        };
         if def.cast_frames > 0 {
             if let Some(unit) = self.units.get_mut(&caster) {
                 unit.gameplay.cast = Some(CastRuntime {
                     ability,
-                    target,
+                    target: target.entity_or(caster),
                     remaining_frames: def.cast_frames,
                     channel: true,
                 });
             }
+            self.gameplay.abilities.pending_casts.insert(
+                caster,
+                PendingAbilityCast {
+                    caster,
+                    ability,
+                    target,
+                    player,
+                    frame: frame.value(),
+                },
+            );
             if def.behavior != 0 {
                 self.gameplay.auras.insert(
                     caster.value() as u32,
@@ -1353,7 +1717,7 @@ impl RtsMatch {
                 );
             }
         } else {
-            self.apply_effects(target, ability);
+            self.apply_ability_effects(context);
         }
     }
 
@@ -1707,8 +2071,8 @@ impl RtsMatch {
     /// 使用道具「先验证有效再提交」（R7.5 / R7.6 / N5）。
     ///
     /// 充能 > 0 / 冷却到期 / 目标合法 / 定义层类别已登记；失败不扣次数。
-    /// 效果只经既有 `EffectDef` / `EffectKind` 组合走共享结算服务，
-    /// MUST NOT 执行 JASS / wtg VM、MUST NOT 新增 `EffectKind` 变体。
+    /// 效果只经既有 `EffectDef` 组合走共享结算服务，
+    /// MUST NOT 执行 JASS / wtg VM（R7.6 / N5）。
     fn submit_use_item(
         &mut self,
         hero: EntityId,
@@ -1743,13 +2107,13 @@ impl RtsMatch {
             self.reject_item_command(frame, hero, 0);
             return;
         }
-        // 提交：效果链走既有结算服务（不新增 EffectKind）。
+        // 提交：道具效果链走既有结算服务，不携带技能运行态上下文。
         let effect_target = if target == EntityId::NONE {
             hero
         } else {
             target
         };
-        self.apply_effect(effect_target, &instance.effect);
+        self.apply_effect(effect_target, &instance.effect, None);
         // 共享冷却按定义层实例组整数帧推进（同名多实例不共用充能）。
         let group = self.defs.item_shop().item_cooldown_group(instance.item_def);
         let group_frames = self
@@ -2498,7 +2862,13 @@ impl RtsMatch {
                 caster,
                 ability,
                 target,
-            } => self.execute_cast(caster, ability, target, player),
+            } => self.execute_cast(
+                caster,
+                ability,
+                AbilityTargetKind::Entity(target),
+                player,
+                frame,
+            ),
             GameplayCommandKind::Train {
                 producer,
                 unit_def,
@@ -2618,6 +2988,49 @@ impl RtsMatch {
             GameplayCommandKind::SetRegenCondition { unit, condition } => {
                 self.faction_set_regen_condition(unit, condition, frame)
             }
+            // P11 新增变体穷尽分发：每个变体 MUST 有独立分支，无默认放行。
+            // 全部经同一公开命令面按冻结整数帧号稳定排序执行。
+            GameplayCommandKind::CastPoint {
+                caster,
+                ability,
+                x,
+                y,
+            } => self.execute_cast(
+                caster,
+                ability,
+                AbilityTargetKind::Point { x, y },
+                player,
+                frame,
+            ),
+            GameplayCommandKind::CastArea {
+                caster,
+                ability,
+                x,
+                y,
+                radius_raw,
+            } => self.execute_cast(
+                caster,
+                ability,
+                AbilityTargetKind::Area { x, y, radius_raw },
+                player,
+                frame,
+            ),
+            GameplayCommandKind::CastDirection {
+                caster,
+                ability,
+                dx,
+                dy,
+            } => self.execute_cast(
+                caster,
+                ability,
+                AbilityTargetKind::Direction { dx, dy },
+                player,
+                frame,
+            ),
+            GameplayCommandKind::LearnAbility { hero, ability } => {
+                self.learn_ability(hero, ability, player)
+            }
+            GameplayCommandKind::LevelUpHero { hero } => self.level_up_hero(hero, player),
         }
     }
 
@@ -3036,9 +3449,9 @@ impl RtsMatch {
     }
 
     /// 推进全部可保存运行态；完成项在稳定顺序下统一提交。
-    fn advance_gameplay_timers(&mut self) {
+    fn advance_gameplay_timers(&mut self, frame: Frame) {
         let ids: Vec<EntityId> = self.units.keys().copied().collect();
-        let mut finished_casts: Vec<(DefId, EntityId)> = Vec::new();
+        let mut finished_casts: Vec<(EntityId, DefId, EntityId)> = Vec::new();
         let mut finished_production: Vec<(EntityId, u8, DefId, bool)> = Vec::new();
 
         for &id in &ids {
@@ -3055,7 +3468,7 @@ impl RtsMatch {
             };
             if let Some((ability, target)) = cast_done {
                 unit.gameplay.cast = None;
-                finished_casts.push((ability, target));
+                finished_casts.push((id, ability, target));
             }
             // 冷却递减。
             let cooldowns: Vec<DefId> = unit.gameplay.cooldowns.keys().copied().collect();
@@ -3094,9 +3507,28 @@ impl RtsMatch {
             }
         }
 
-        // 施法完成 → 效果链（统一结算，不重复扣费）。
-        for (ability, target) in finished_casts {
-            self.apply_effects(target, ability);
+        // 施法完成 → 效果链（统一结算，不重复扣费）。待定施法优先取
+        // `pending_casts` 中的冻结目标形态，恢复快照后仍不重复施放。
+        for (caster, ability, target) in finished_casts {
+            let pending = self.gameplay.abilities.pending_casts.remove(&caster);
+            let owner = self.units.get(&caster).map(|unit| unit.owner).unwrap_or(0);
+            let context = match pending {
+                Some(pending) => AbilityEffectContext {
+                    caster,
+                    ability: pending.ability,
+                    target: pending.target,
+                    player: pending.player,
+                    frame: frame.value(),
+                },
+                None => AbilityEffectContext {
+                    caster,
+                    ability,
+                    target: AbilityTargetKind::Entity(target),
+                    player: owner,
+                    frame: frame.value(),
+                },
+            };
+            self.apply_ability_effects(context);
         }
         // 生产完成 → 生成单位（稳定 ID 顺序）。
         for (producer, owner, unit_def, is_building) in finished_production {
@@ -3175,6 +3607,11 @@ impl RtsMatch {
                 level: HERO_SPAWN_LEVEL,
                 xp: HERO_SPAWN_XP,
             });
+            // P11：英雄初始技能点进入权威运行态，恢复后不重复发放。
+            self.gameplay
+                .abilities
+                .hero_skill_points
+                .insert(id, HERO_SPAWN_LEVEL.max(1));
         }
         self.units.insert(id, unit);
         // P8.5d：友方主城分类登记由定义层数据驱动（结论 7 / R1.2），
@@ -3750,6 +4187,105 @@ impl RtsMatch {
         }
     }
 
+    /// P11 技能系统逐帧结算：按稳定 ID 顺序递减运行态，并从本帧唯一主 LCG
+    /// 后继状态派生随机消费记录。此函数不推进 `self.rng`，不新增独立随机流。
+    fn advance_ability_system(&mut self, frame: Frame, rng_before: u64, rng_after: u64) {
+        let Self { defs, gameplay, .. } = self;
+        let constants = defs.ability_system().constants;
+        let runtime = &mut gameplay.abilities;
+
+        let zone_ids: Vec<EntityId> = runtime.zones.keys().copied().collect();
+        for id in zone_ids {
+            let expired = runtime.zones.get_mut(&id).is_some_and(|zone| {
+                zone.remaining = zone.remaining.saturating_sub(1);
+                zone.remaining == 0
+            });
+            if expired {
+                runtime.zones.remove(&id);
+            }
+        }
+
+        let summon_ids: Vec<EntityId> = runtime.summons.keys().copied().collect();
+        for id in summon_ids {
+            let expired = runtime.summons.get_mut(&id).is_some_and(|summon| {
+                summon.remaining = summon.remaining.saturating_sub(1);
+                summon.remaining == 0
+            });
+            if expired {
+                runtime.summons.remove(&id);
+            }
+        }
+
+        let transform_ids: Vec<EntityId> = runtime.transformations.keys().copied().collect();
+        for id in transform_ids {
+            let expired = runtime.transformations.get_mut(&id).is_some_and(|state| {
+                state.remaining = state.remaining.saturating_sub(1);
+                state.remaining == 0
+            });
+            if expired {
+                runtime.transformations.remove(&id);
+            }
+        }
+
+        let chain_ids: Vec<EntityId> = runtime.chains.keys().copied().collect();
+        for id in chain_ids {
+            let expired = runtime.chains.get_mut(&id).is_some_and(|chain| {
+                chain.remaining = chain.remaining.saturating_sub(1);
+                chain.remaining == 0
+            });
+            if expired {
+                runtime.chains.remove(&id);
+            }
+        }
+
+        let proc_keys: Vec<(EntityId, DefId)> = runtime.passive_procs.keys().copied().collect();
+        let mut random_requests = Vec::new();
+        for key in proc_keys {
+            let mut expired = false;
+            let mut random = false;
+            if let Some(state) = runtime.passive_procs.get_mut(&key) {
+                if state.remaining != u32::MAX {
+                    state.remaining = state.remaining.saturating_sub(1);
+                    expired = state.remaining == 0;
+                }
+                random = state.random;
+            }
+            if expired {
+                runtime.passive_procs.remove(&key);
+            } else if random {
+                random_requests.push(key);
+            }
+        }
+
+        for (unit, ability) in random_requests {
+            let has_random = defs.abilities().get(&ability).is_some_and(|def| {
+                def.effects
+                    .iter()
+                    .any(|effect| effect.kind == EffectKind::RandomDraw)
+            });
+            if !has_random {
+                continue;
+            }
+            let seq = runtime.next_rng_seq;
+            let mixed = mix_ability_rng(rng_after, constants.rng_mix_salt, seq, ability);
+            let roll = mixed % constants.proc_modulus.max(1);
+            runtime.rng_draws.insert(
+                seq,
+                AbilityRngDraw {
+                    seq,
+                    frame: frame.value(),
+                    unit,
+                    ability,
+                    rng_before,
+                    rng_after,
+                    roll,
+                    behavior: BehaviorKind::RandomDraw,
+                },
+            );
+            runtime.next_rng_seq = seq.saturating_add(1);
+        }
+    }
+
     pub fn read_view(&self) -> WorldView {
         let units = &self.units;
         WorldView {
@@ -3834,6 +4370,8 @@ impl RtsMatch {
             hash_command(&mut hasher, command);
         }
         // P5：冻结定义的内容哈希与全部玩法运行态进入权威状态哈希。
+        // P11：技能系统全部权威运行态经 WorldGameplayState::hash 进入；
+        // 定义层技能常量只在此处通过既有 defs.content_hash() 身份出现。
         hasher.write_u64(self.defs.content_hash());
         self.gameplay.hash(&mut hasher);
         // P8.5a：英雄复活三组权威状态（死亡登记 / 队列 / 费用）必须进入哈希。
@@ -3906,6 +4444,8 @@ impl RtsMatch {
         if self.defs != other.defs {
             return Some("frozen_definitions");
         }
+        // P11：技能系统字段由 WorldGameplayState::first_difference 按同一
+        // 稳定顺序返回，漏接任一新权威字段 MUST 在反向验证中验红。
         if let Some(field) = self.gameplay.first_difference(&other.gameplay) {
             return Some(field);
         }
@@ -4015,6 +4555,9 @@ impl RtsMatch {
                 })
                 .collect(),
             defs: self.defs.clone(),
+            // P11：帧 N 提交后的 Snapshot.gameplay 必须含技能权威运行态
+            // （zone / 召唤 / 光环受益集 / 被动 proc / 变身 / buff 分类 /
+            // 链接 / `rng_draws` / 进行中施法），恢复后从 N+1 继续。
             gameplay: self.gameplay.clone(),
             revive: self.revive.clone(),
             town_hall: self.town_hall.clone(),
@@ -4026,7 +4569,7 @@ impl RtsMatch {
             // 恢复后从 N+1 继续不残留、不重复购买或刷新（ADR 0002 §6-8 / R11.5）。
             item_shop: self.item_shop.clone(),
             // P9 / Q2 / Q4：帧 N 提交后的完整状态 MUST 含族特色机制顶层
-            // 权威状态（由 SNAPSHOT_VERSION = 8 定义的 Snapshot 顶层字段），
+            // 权威状态（由 SNAPSHOT_VERSION = 9 定义的 Snapshot 顶层字段），
             // 恢复后从 N+1 继续不残留、不重复结算（ADR 0002 §6-8）。
             // fog 可见性 MUST NOT 进入快照（R10.5 / §0.3 T3）。
             faction_mechanics: self.faction_mechanics.clone(),
@@ -4178,12 +4721,14 @@ impl RtsMatch {
             events: Vec::new(),
             next_event_seq: snapshot.next_event_seq,
             defs: snapshot.defs.clone(),
+            // P11：从 v9 快照恢复技能权威运行态；五重头部校验通过后，
+            // 克隆完整 `WorldGameplayState` 即可逐帧哈希与销毁前一致。
             gameplay: snapshot.gameplay.clone(),
             revive: snapshot.revive.clone(),
             town_hall: snapshot.town_hall.clone(),
             creep_camps: snapshot.creep_camps.clone(),
             item_shop: snapshot.item_shop.clone(),
-            // P9 / Q2 / Q4：从 v8 快照恢复族特色机制顶层权威状态，
+            // P9 / Q2 / Q4：从 v9 快照恢复族特色机制顶层权威状态，
             // 逐帧哈希与销毁前一致（ADR 0002 §6-8 / Q3）。
             faction_mechanics: snapshot.faction_mechanics.clone(),
         })
@@ -4522,12 +5067,12 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本为 8（P9 新增族特色机制顶层权威状态），只读视图消费与快照往返均不
+    /// 快照版本为 9（P9 新增族特色机制顶层权威状态），只读视图消费与快照往返均不
     /// 改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 8, "snapshot version must be 8");
-        assert_eq!(SIM_VERSION, 8, "sim version must be 8");
+        assert_eq!(SNAPSHOT_VERSION, 9, "snapshot version must be 9");
+        assert_eq!(SIM_VERSION, 9, "sim version must be 9");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -4601,9 +5146,9 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 8"
+            "snapshot version must stay 9"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 8");
+        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 9");
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

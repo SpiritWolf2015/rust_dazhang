@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn relay_welcomes_players_and_rejects_bad_version() {
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
         let bus = LoopbackBus::shared();
         let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
         let mut client = LoopbackTransport::new(1, &bus);
@@ -576,6 +576,60 @@ mod tests {
             .encode()
             .unwrap();
         stale[4] = 7;
+
+        client.send(&Endpoint::Loopback(0), &stale).unwrap();
+        relay.poll().unwrap();
+        let (_, bytes) = client.recv().unwrap().unwrap();
+        let reject = Packet::decode(&bytes).unwrap();
+        assert_eq!(reject.kind, PacketKind::Reject);
+        assert_eq!(
+            parse_reject(&reject.payload).unwrap(),
+            "protocol version mismatch"
+        );
+        assert!(
+            relay.log().is_empty(),
+            "stale payload must not enter command stream"
+        );
+    }
+
+    #[test]
+    fn relay_rejects_version_eight_carrying_new_variant() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        let bus = LoopbackBus::shared();
+        let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+        let mut client = LoopbackTransport::new(1, &bus);
+
+        // 伪装成旧 v8 的 Input 包，载荷携带 PROTOCOL_VERSION 9 新增的
+        // CastPoint（tag 59）与 LevelUpHero（tag 63）；v9 relay 必须在
+        // 解码 payload 之前回 Reject，tag 59–63 玩法命令字段绝不被静默
+        // 当作 unknown field 丢弃后进入权威命令流（ADR 0005 §3 / R12.2）。
+        let gameplay = vec![
+            GameplayCommand::new(
+                w3_core::Frame::new(0),
+                1,
+                1,
+                GameplayCommandKind::CastPoint {
+                    caster: w3_core::EntityId::new(20).unwrap(),
+                    ability: 10,
+                    x: -65536,
+                    y: 131072,
+                },
+            ),
+            GameplayCommand::new(
+                w3_core::Frame::new(0),
+                1,
+                2,
+                GameplayCommandKind::LevelUpHero {
+                    hero: w3_core::EntityId::new(21).unwrap(),
+                },
+            ),
+        ];
+        let payload = encode_commands(&[], &gameplay).unwrap();
+        let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+            .encode()
+            .unwrap();
+        stale[4] = 8;
 
         client.send(&Endpoint::Loopback(0), &stale).unwrap();
         relay.poll().unwrap();

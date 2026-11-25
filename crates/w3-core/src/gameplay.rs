@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::ability_system::{AbilitySystemDefinitions, AbilitySystemState, BuffCategory};
 use crate::creep::{
     CampScript, CreepConstants, DropTable, NeutralCategory, SYNTHETIC_CREEP_CONSTANTS,
 };
@@ -278,13 +279,31 @@ impl Default for TownHallConstants {
 // 冻结内容定义
 // ---------------------------------------------------------------------------
 
-/// 效果种类。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// 效果种类；旧码 0–3 逐字节不动，P11 原语只追加唯一码。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum EffectKind {
     Damage,
     Heal,
     BuffStat,
     Stun,
+    /// 持续 AOE / zone。
+    Zone,
+    /// 召唤实体。
+    Summon,
+    /// 光环受益集。
+    AuraBeneficiaries,
+    /// 被动 proc 订阅。
+    PassiveProc,
+    /// 变身 / 状态切换。
+    Transform,
+    /// 点目标。
+    PointTarget,
+    /// Buff 分类移除。
+    RemoveBuffCategory,
+    /// 链接弹射。
+    ChainBounce,
+    /// 随机消费。
+    RandomDraw,
 }
 
 /// 效果定义：效果组合的基本单元。
@@ -363,6 +382,12 @@ pub struct UpgradeDef {
 /// （Q3' / D2）；这是**定义层内容变化**，与 Q2 新增的
 /// `FactionMechanicsState` 顶层权威状态严格区分，MUST NOT 混入
 /// `compute_state_hash()`。回血条件由枚举查表、MUST NOT 用族名白名单。
+///
+/// P11 追加一个私有冻结字段 `ability_system`：四席位技能清单、行为目录、
+/// buff 分类与合成原创整数 `[待核]` 常量全部经 `compute_defs_hash` 进入
+/// `defs_hash` / `content_hash` 快照头部；这是**定义层内容**，与
+/// `WorldGameplayState.abilities` 的技能权威运行态严格区分，MUST NOT
+/// 作为运行态字段重复进入状态哈希。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenDefinitions {
     units: BTreeMap<DefId, UnitDef>,
@@ -382,6 +407,7 @@ pub struct FrozenDefinitions {
     item_shop: ItemShopDefinitions,
     faction_mechanics: FactionMechanicsConstants,
     regen_conditions: BTreeMap<DefId, RegenCondition>,
+    ability_system: AbilitySystemDefinitions,
     hash: u64,
 }
 
@@ -419,7 +445,36 @@ pub fn effect_kind_code(kind: EffectKind) -> u8 {
         EffectKind::Heal => 1,
         EffectKind::BuffStat => 2,
         EffectKind::Stun => 3,
+        EffectKind::Zone => 4,
+        EffectKind::Summon => 5,
+        EffectKind::AuraBeneficiaries => 6,
+        EffectKind::PassiveProc => 7,
+        EffectKind::Transform => 8,
+        EffectKind::PointTarget => 9,
+        EffectKind::RemoveBuffCategory => 10,
+        EffectKind::ChainBounce => 11,
+        EffectKind::RandomDraw => 12,
     }
+}
+
+/// 由稳定字节编码解码效果种类；未知码显式拒绝，不静默回落。
+pub fn decode_effect_kind(code: u8) -> Option<EffectKind> {
+    Some(match code {
+        0 => EffectKind::Damage,
+        1 => EffectKind::Heal,
+        2 => EffectKind::BuffStat,
+        3 => EffectKind::Stun,
+        4 => EffectKind::Zone,
+        5 => EffectKind::Summon,
+        6 => EffectKind::AuraBeneficiaries,
+        7 => EffectKind::PassiveProc,
+        8 => EffectKind::Transform,
+        9 => EffectKind::PointTarget,
+        10 => EffectKind::RemoveBuffCategory,
+        11 => EffectKind::ChainBounce,
+        12 => EffectKind::RandomDraw,
+        _ => return None,
+    })
 }
 
 fn hash_effects(hasher: &mut StateHasher, effects: &[EffectDef]) {
@@ -519,6 +574,9 @@ fn compute_defs_hash(defs: &FrozenDefinitions) -> u64 {
     // 定义层内容变化与 Q2 新增权威状态严格区分，MUST NOT 进 compute_state_hash。
     defs.faction_mechanics.hash(&mut hasher);
     hash_regen_conditions(&mut hasher, &defs.regen_conditions);
+    // P11：技能清单 / 行为目录 / buff 分类 / 冻结常量进入定义哈希。
+    // 改任一段都会改变 content_hash() 与快照头部；这不携带运行态。
+    defs.ability_system.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -552,6 +610,8 @@ impl FrozenDefinitions {
             // `regen_conditions` 默认空表，类别登记由可选 builder 注入。
             faction_mechanics: SYNTHETIC_FACTION_MECHANICS,
             regen_conditions: BTreeMap::new(),
+            // P11：默认注入编译期合成原创技能定义，既有四参数签名不变。
+            ability_system: AbilitySystemDefinitions::default(),
             hash: 0,
         };
         insert_unique(&mut defs.units, units)?;
@@ -663,6 +723,22 @@ impl FrozenDefinitions {
         self.regen_conditions = regen_conditions;
         self.hash = compute_defs_hash(&self);
         self
+    }
+
+    /// 纯新增构造路径：注入 P11 技能系统冻结定义并重算内容哈希。
+    ///
+    /// 既有四参数 [`FrozenDefinitions::new`] 签名不变；未显式注入的装配层
+    /// 使用默认合成原创清单 / 行为目录 / 常量。改任一段即改变
+    /// `content_hash()` 与快照头部，MUST NOT 改写技能权威运行态。
+    pub fn with_ability_system(mut self, definitions: AbilitySystemDefinitions) -> Self {
+        self.ability_system = definitions;
+        self.hash = compute_defs_hash(&self);
+        self
+    }
+
+    /// 技能系统冻结定义（只读，P11 / D1 / D3）。
+    pub fn ability_system(&self) -> &AbilitySystemDefinitions {
+        &self.ability_system
     }
 
     /// 族特色机制冻结常量段（只读，Q3'）。
@@ -938,6 +1014,25 @@ impl Settlement {
             .copied()
             .filter(|id| is_alive(*id))
             .collect()
+    }
+
+    /// Buff 分类移除：仍由单一结算所有者改写 Buff 列表，不开放可变引用。
+    pub(crate) fn remove_buff_category(
+        vitals: &mut Vitals<'_>,
+        category: BuffCategory,
+    ) -> EffectOutcome {
+        if category == BuffCategory::None || !*vitals.alive {
+            return EffectOutcome::NoEffect;
+        }
+        let before = vitals.buffs.len();
+        vitals
+            .buffs
+            .retain(|buff| BuffCategory::from_effect_kind(buff.kind) != category);
+        if vitals.buffs.len() != before {
+            EffectOutcome::Applied
+        } else {
+            EffectOutcome::NoEffect
+        }
     }
 }
 
@@ -1543,6 +1638,45 @@ pub enum GameplayCommandKind {
         unit: EntityId,
         condition: RegenCondition,
     },
+    // -----------------------------------------------------------------------
+    // P11 技能命令面（kind 码 37 起，既有 1–36 不动）。
+    //
+    // 施法仍走 `GameplayCommandKind::Cast` 系列；建造走
+    // `Train { is_building: true }`，攻击 / 移动 / 停止走 `CommandKind`。
+    // 新命令按同一队列冻结到达序号并按
+    // `ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序。
+    // -----------------------------------------------------------------------
+    /// 点目标施法；坐标为 Q47.16 整数原始值。
+    CastPoint {
+        caster: EntityId,
+        ability: DefId,
+        x: i64,
+        y: i64,
+    },
+    /// 范围目标施法；半径使用 Q47.16 整数原始值。
+    CastArea {
+        caster: EntityId,
+        ability: DefId,
+        x: i64,
+        y: i64,
+        radius_raw: i64,
+    },
+    /// 方向目标施法；方向向量使用整数原始值。
+    CastDirection {
+        caster: EntityId,
+        ability: DefId,
+        dx: i64,
+        dy: i64,
+    },
+    /// 学习 / 升级英雄技能；6 级前大招由冻结清单显式拒绝。
+    LearnAbility {
+        hero: EntityId,
+        ability: DefId,
+    },
+    /// 英雄升级并累积技能点；本期不含 AI 自主升级 / 施法路径。
+    LevelUpHero {
+        hero: EntityId,
+    },
 }
 
 /// 玩法命令。
@@ -1833,6 +1967,55 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u64(unit.value());
             hasher.write_u8(condition.code());
         }
+        // P11：追加唯一编码 37–41，既有码 1–36 一个不动；每个字段显式
+        // 小端编码，且与校验 / 穷尽分发三处同步（D6 / Q3 / Q5）。
+        GameplayCommandKind::CastPoint {
+            caster,
+            ability,
+            x,
+            y,
+        } => {
+            hasher.write_u8(37);
+            hasher.write_u64(caster.value());
+            hasher.write_u32(ability);
+            hasher.write_i64(x);
+            hasher.write_i64(y);
+        }
+        GameplayCommandKind::CastArea {
+            caster,
+            ability,
+            x,
+            y,
+            radius_raw,
+        } => {
+            hasher.write_u8(38);
+            hasher.write_u64(caster.value());
+            hasher.write_u32(ability);
+            hasher.write_i64(x);
+            hasher.write_i64(y);
+            hasher.write_i64(radius_raw);
+        }
+        GameplayCommandKind::CastDirection {
+            caster,
+            ability,
+            dx,
+            dy,
+        } => {
+            hasher.write_u8(39);
+            hasher.write_u64(caster.value());
+            hasher.write_u32(ability);
+            hasher.write_i64(dx);
+            hasher.write_i64(dy);
+        }
+        GameplayCommandKind::LearnAbility { hero, ability } => {
+            hasher.write_u8(40);
+            hasher.write_u64(hero.value());
+            hasher.write_u32(ability);
+        }
+        GameplayCommandKind::LevelUpHero { hero } => {
+            hasher.write_u8(41);
+            hasher.write_u64(hero.value());
+        }
     }
 }
 
@@ -1912,6 +2095,15 @@ pub(crate) fn validate_gameplay_entities(
         GameplayCommandKind::MarkSightBlocker { blocker, .. } => blocker == EntityId::NONE,
         GameplayCommandKind::SetCreepSleep { creep, .. } => creep == EntityId::NONE,
         GameplayCommandKind::SetRegenCondition { unit, .. } => unit == EntityId::NONE,
+        // P11 新增命令：实体字段与非负半径 MUST 逐个校验，新增变体漏分支
+        // 即触发编译错误，MUST NOT 靠默认放行（ADR 0002 §3）。
+        GameplayCommandKind::CastPoint { caster, .. }
+        | GameplayCommandKind::CastDirection { caster, .. } => caster == EntityId::NONE,
+        GameplayCommandKind::CastArea {
+            caster, radius_raw, ..
+        } => caster == EntityId::NONE || radius_raw < 0,
+        GameplayCommandKind::LearnAbility { hero, .. }
+        | GameplayCommandKind::LevelUpHero { hero } => hero == EntityId::NONE,
     };
     if invalid {
         return Err(GameplayCommandError::InvalidEntity);
@@ -1979,6 +2171,9 @@ impl GameplayCommandQueue {
 // ---------------------------------------------------------------------------
 
 /// 全部玩法运行态的唯一容器，便于进入哈希 / 快照 / 差异诊断。
+///
+/// P11：`abilities` 承载技能系统新增权威运行态，与 `commands` 的未执行命令
+/// 分离；该字段 MUST 同时进入本容器哈希、本容器差异诊断、快照克隆与恢复。
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct WorldGameplayState {
     pub players: BTreeMap<u8, PlayerEconomy>,
@@ -1987,6 +2182,7 @@ pub struct WorldGameplayState {
     pub waves: BTreeMap<u32, WaveState>,
     pub auras: BTreeMap<u32, AuraState>,
     pub behaviors: BTreeMap<DefId, BehaviorSpec>,
+    pub abilities: AbilitySystemState,
     pub commands: GameplayCommandQueue,
 }
 
@@ -2055,6 +2251,9 @@ impl WorldGameplayState {
             hasher.write_i64(spec.extra_effect.amount);
             hasher.write_u32(spec.extra_effect.duration_frames);
         }
+        // P11：技能系统全部权威运行态进入 FNV-1a，字段顺序与
+        // AbilitySystemState::first_difference() 一致。
+        self.abilities.hash(hasher);
         self.commands.hash(hasher);
     }
 
@@ -2077,6 +2276,9 @@ impl WorldGameplayState {
         if self.behaviors != other.behaviors {
             return Some("behaviors");
         }
+        if let Some(field) = self.abilities.first_difference(&other.abilities) {
+            return Some(field);
+        }
         if self.commands != other.commands {
             return Some("gameplay_commands");
         }
@@ -2097,6 +2299,14 @@ pub fn resolve_effects(
     };
     let mut effects = def.effects.clone();
     if def.behavior != 0 {
+        // P11：先在单一行为目录查表追加原语，再保留既有注册行为的扩展效果。
+        if let Some(entry) = defs.ability_system().behaviors.entry_by_id(def.behavior) {
+            effects.push(EffectDef {
+                kind: entry.effect_kind,
+                amount: i64::from(def.behavior),
+                duration_frames: def.cooldown_frames,
+            });
+        }
         if let Some(spec) = world.behaviors.get(&def.behavior) {
             effects.push(spec.extra_effect);
         }

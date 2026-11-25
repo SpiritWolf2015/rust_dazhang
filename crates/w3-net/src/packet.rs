@@ -41,8 +41,13 @@ pub const MAGIC: [u8; 4] = *b"W3N1";
 ///     `GameplayCommand.oneof` 只追加 tag 46–58，`reserved 14 to 32` 与
 ///     tag 33–45 一字不动）；明确拒绝 v7，玩法命令字段不被静默当作
 ///     unknown field，客户端与 relay 同步发布。
+/// 9 = 新增 5 个 P11 技能系统施法 / 英雄技能玩法命令变体（ADR 0005 §3，
+///     `GameplayCommand.oneof` 只追加 tag 59–63，`reserved 14 to 32` 与
+///     tag 4–13 / 33–58 一字不动，`EffectDef` 字段编号保持不动）；明确
+///     拒绝 v8，玩法命令字段不被静默当作 unknown field，客户端与 relay
+///     同步发布。
 /// 与 `w3-core` 的 `SNAPSHOT_VERSION` / `SIM_VERSION` 是相互独立的版本号。
-pub const PROTOCOL_VERSION: u8 = 8;
+pub const PROTOCOL_VERSION: u8 = 9;
 /// 固定包头长度：magic4 + version1 + kind1 + sender1 + seq4 + frame8 + len2 + sum4。
 pub const HEADER_LEN: usize = 25;
 const MAX_PAYLOAD: usize = u16::MAX as usize;
@@ -421,7 +426,7 @@ mod tests {
             bytes[4], PROTOCOL_VERSION,
             "PROTOCOL_VERSION bumped for breaking payload change"
         );
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
         assert_eq!(&bytes[7..11], &7u32.to_le_bytes());
         assert_eq!(&bytes[11..19], &4u64.to_le_bytes());
         assert_eq!(&bytes[19..21], &(payload.len() as u16).to_le_bytes());
@@ -593,6 +598,38 @@ mod tests {
                 assert_eq!(found, 7);
             }
             other => panic!("version=7 must be rejected decisively: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_eight_packet_carrying_new_variant_is_rejected_before_payload_decode() {
+        use w3_core::{GameplayCommand, GameplayCommandKind};
+
+        // PROTOCOL_VERSION 由 8 bump 到 9（新增 5 个 P11 技能系统施法命令变体）。
+        // 构造一个携带 tag 63 新玩法命令字段的 v9 载荷，再把包头版本字节
+        // 伪装成旧 v8；v8 端会把 tag 59–63 的字段当 unknown field 静默
+        // 丢弃，两端命令流不等 -> desync 不可见。因此必须在解码 payload
+        // 之前按 VersionMismatch 明确拒绝，不提供跨版本迁移、不静默兼容。
+        let gameplay = GameplayCommand::new(
+            Frame::new(3),
+            1,
+            1,
+            GameplayCommandKind::LevelUpHero {
+                hero: entity_from_raw(1),
+            },
+        );
+        let payload = encode_commands(&sample_commands(), &[gameplay]).unwrap();
+        let mut bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload)
+            .encode()
+            .unwrap();
+        bytes[4] = 8;
+
+        match Packet::decode(&bytes) {
+            Err(NetError::VersionMismatch { expected, found }) => {
+                assert_eq!(expected, PROTOCOL_VERSION);
+                assert_eq!(found, 8);
+            }
+            other => panic!("version=8 must be rejected decisively: {other:?}"),
         }
     }
 }

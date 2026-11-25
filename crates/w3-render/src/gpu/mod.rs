@@ -84,7 +84,7 @@ pub trait FrameProducer {
 /// 表现层相机：按地形范围生成 MVP（WebGPU 深度 0..1），支持平移 / 缩放 / 旋转。
 ///
 /// 全部字段都是**表现层专属**的 `f32` 状态，MUST NOT 反写 `RtsMatch`、
-/// 进入 FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 8）快照（design D5）。
+/// 进入 FNV-1a 状态哈希或 `SNAPSHOT_VERSION`（当前 9）快照（design D5）。
 /// 默认参数（pan 为零、zoom 为 1、yaw 为 0）生成与 P3 既有验收一致的固定视角，
 /// 因此扩展后已有呈现基线不变。
 #[derive(Clone, Copy, Debug)]

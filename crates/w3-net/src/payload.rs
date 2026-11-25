@@ -21,6 +21,12 @@
 //! 的 `RegenCondition` 以 `code()` 的 uint32 稳定码承载、网格坐标与
 //! 月亮井恢复量以 int64 定宽承载并在解码时显式校验值域；帧编排、
 //! `arrival` 语义与「恰好一次 `step()`」推进点一律不变（ADR 0005 §3）。
+//! `PROTOCOL_VERSION = 9` 再只追加 P11 技能系统施法命令 5 个变体
+//! （tag 59–63，kind 码 37–41），玩法变体累计 41 类；点 / 范围 / 方向
+//! 坐标、半径与方向向量均为 Q47.16 整数原始值，用 int64 无损承载，
+//! `EffectKind` 稳定码只追加 4–12 并继续沿用 `EffectDef.effect_kind`
+//! 的 uint32 字段（`reserved 4 to 8` 不动）；既有 1–36 kind 码与
+//! tag 33–58 编码逐字节不变（ADR 0005 §3）。
 
 use prost::Message;
 use w3_core::{
@@ -73,18 +79,37 @@ fn check_batch_len(commands: usize, gameplay: usize) -> Result<(), NetError> {
 // ---------------------------------------------------------------------------
 // EffectKind 稳定码（显式、平台无关的固定值，与 w3-core 状态哈希编码一致）
 // ---------------------------------------------------------------------------
-// 稳定码映射表：
+// 稳定码映射表（旧码 0–3 逐字节不动，P11 技能原语只追加唯一码 4–12）：
 //   0 -> EffectKind::Damage
 //   1 -> EffectKind::Heal
 //   2 -> EffectKind::BuffStat
 //   3 -> EffectKind::Stun
-// 线格式用 uint32 承载；任何未知码一律返回 NetError::Malformed，不猜测、
-// 不静默降级、不按枚举索引隐式转换。
+//   4 -> EffectKind::Zone
+//   5 -> EffectKind::Summon
+//   6 -> EffectKind::AuraBeneficiaries
+//   7 -> EffectKind::PassiveProc
+//   8 -> EffectKind::Transform
+//   9 -> EffectKind::PointTarget
+//  10 -> EffectKind::RemoveBuffCategory
+//  11 -> EffectKind::ChainBounce
+//  12 -> EffectKind::RandomDraw
+// 线格式继续用 `EffectDef.effect_kind` 的 uint32 承载（字段编号与
+// `reserved 4 to 8` 保持不动）；任何未知码一律返回 NetError::Malformed，
+// 不猜测、不静默降级、不按枚举索引隐式转换。
 
 const EFFECT_KIND_DAMAGE: u32 = 0;
 const EFFECT_KIND_HEAL: u32 = 1;
 const EFFECT_KIND_BUFF_STAT: u32 = 2;
 const EFFECT_KIND_STUN: u32 = 3;
+const EFFECT_KIND_ZONE: u32 = 4;
+const EFFECT_KIND_SUMMON: u32 = 5;
+const EFFECT_KIND_AURA_BENEFICIARIES: u32 = 6;
+const EFFECT_KIND_PASSIVE_PROC: u32 = 7;
+const EFFECT_KIND_TRANSFORM: u32 = 8;
+const EFFECT_KIND_POINT_TARGET: u32 = 9;
+const EFFECT_KIND_REMOVE_BUFF_CATEGORY: u32 = 10;
+const EFFECT_KIND_CHAIN_BOUNCE: u32 = 11;
+const EFFECT_KIND_RANDOM_DRAW: u32 = 12;
 
 fn to_effect_kind_code(kind: EffectKind) -> u32 {
     match kind {
@@ -92,6 +117,17 @@ fn to_effect_kind_code(kind: EffectKind) -> u32 {
         EffectKind::Heal => EFFECT_KIND_HEAL,
         EffectKind::BuffStat => EFFECT_KIND_BUFF_STAT,
         EffectKind::Stun => EFFECT_KIND_STUN,
+        // P11 技能原语稳定码：只追加，与 w3-core 的 `effect_kind_code`
+        // 一一对应，`EffectDef` 字段编号保持不动（ADR 0005 §3）。
+        EffectKind::Zone => EFFECT_KIND_ZONE,
+        EffectKind::Summon => EFFECT_KIND_SUMMON,
+        EffectKind::AuraBeneficiaries => EFFECT_KIND_AURA_BENEFICIARIES,
+        EffectKind::PassiveProc => EFFECT_KIND_PASSIVE_PROC,
+        EffectKind::Transform => EFFECT_KIND_TRANSFORM,
+        EffectKind::PointTarget => EFFECT_KIND_POINT_TARGET,
+        EffectKind::RemoveBuffCategory => EFFECT_KIND_REMOVE_BUFF_CATEGORY,
+        EffectKind::ChainBounce => EFFECT_KIND_CHAIN_BOUNCE,
+        EffectKind::RandomDraw => EFFECT_KIND_RANDOM_DRAW,
     }
 }
 
@@ -101,6 +137,15 @@ fn from_effect_kind_code(code: u32) -> Result<EffectKind, NetError> {
         EFFECT_KIND_HEAL => Ok(EffectKind::Heal),
         EFFECT_KIND_BUFF_STAT => Ok(EffectKind::BuffStat),
         EFFECT_KIND_STUN => Ok(EffectKind::Stun),
+        EFFECT_KIND_ZONE => Ok(EffectKind::Zone),
+        EFFECT_KIND_SUMMON => Ok(EffectKind::Summon),
+        EFFECT_KIND_AURA_BENEFICIARIES => Ok(EffectKind::AuraBeneficiaries),
+        EFFECT_KIND_PASSIVE_PROC => Ok(EffectKind::PassiveProc),
+        EFFECT_KIND_TRANSFORM => Ok(EffectKind::Transform),
+        EFFECT_KIND_POINT_TARGET => Ok(EffectKind::PointTarget),
+        EFFECT_KIND_REMOVE_BUFF_CATEGORY => Ok(EffectKind::RemoveBuffCategory),
+        EFFECT_KIND_CHAIN_BOUNCE => Ok(EffectKind::ChainBounce),
+        EFFECT_KIND_RANDOM_DRAW => Ok(EffectKind::RandomDraw),
         _ => Err(NetError::Malformed(format!(
             "unknown effect kind: code={code}"
         ))),
@@ -211,10 +256,10 @@ fn from_pb_kind(kind: pb::command::Kind) -> CommandKind {
 }
 
 // ---------------------------------------------------------------------------
-// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（36 变体）
+// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（41 变体）
 // ---------------------------------------------------------------------------
 
-/// 把 36 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
+/// 把 41 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
 pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::Kind {
     match *kind {
         GameplayCommandKind::Cast {
@@ -450,10 +495,59 @@ pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::
                 condition: u32::from(condition.code()),
             })
         }
+        // P11 / PROTOCOL_VERSION 9 五个技能系统施法命令变体（tag 59–63，
+        // kind 码 37–41）：EntityId 一律用 uint64 的 value()，DefId 用
+        // uint32 定宽，点 / 范围 / 方向坐标、半径与方向向量均为 Q47.16
+        // 整数原始值 i64 -> int64 无损映射，无收窄、无溢出分支。一个变体
+        // 对应一个 proto tag、不合并、不复用（ADR 0005 §3）。
+        GameplayCommandKind::CastPoint {
+            caster,
+            ability,
+            x,
+            y,
+        } => pb::gameplay_command::Kind::CastPoint(pb::GameplayCastPoint {
+            caster: caster.value(),
+            ability,
+            x,
+            y,
+        }),
+        GameplayCommandKind::CastArea {
+            caster,
+            ability,
+            x,
+            y,
+            radius_raw,
+        } => pb::gameplay_command::Kind::CastArea(pb::GameplayCastArea {
+            caster: caster.value(),
+            ability,
+            x,
+            y,
+            radius_raw,
+        }),
+        GameplayCommandKind::CastDirection {
+            caster,
+            ability,
+            dx,
+            dy,
+        } => pb::gameplay_command::Kind::CastDirection(pb::GameplayCastDirection {
+            caster: caster.value(),
+            ability,
+            dx,
+            dy,
+        }),
+        GameplayCommandKind::LearnAbility { hero, ability } => {
+            pb::gameplay_command::Kind::LearnAbility(pb::GameplayLearnAbility {
+                hero: hero.value(),
+                ability,
+            })
+        }
+        GameplayCommandKind::LevelUpHero { hero } => {
+            pb::gameplay_command::Kind::LevelUpHero(pb::GameplayLevelUpHero { hero: hero.value() })
+        }
     }
 }
 
-/// 把 protobuf `GameplayCommand.kind` oneof 还原为 36 类 `GameplayCommandKind`；穷尽匹配。
+/// 把 protobuf `GameplayCommand.kind` oneof 还原为 41 类 `GameplayCommandKind`；穷尽匹配。
 /// 缺 `kind` / 缺 `effect` / 未知效果码 / 未知等级 / 数值溢出一律显式返回 `NetError`，
 /// 不猜测、不回退。
 pub fn from_pb_gameplay_kind(
@@ -642,6 +736,36 @@ pub fn from_pb_gameplay_kind(
                 condition,
             }
         }
+        // P11 / PROTOCOL_VERSION 9 五个变体（tag 59–63）：uint64 -> EntityId
+        // 与 uint32 -> DefId 与 int64 -> i64 均为无损定宽映射，无收窄溢出
+        // 分支；语义合法性（caster / hero 非 NONE、ability 合法、玩家归属）
+        // 由 w3-core 同源校验承担，线格式层只忠实还原字段、不猜测、不回退。
+        pb::gameplay_command::Kind::CastPoint(m) => GameplayCommandKind::CastPoint {
+            caster: entity_from_raw(m.caster),
+            ability: m.ability,
+            x: m.x,
+            y: m.y,
+        },
+        pb::gameplay_command::Kind::CastArea(m) => GameplayCommandKind::CastArea {
+            caster: entity_from_raw(m.caster),
+            ability: m.ability,
+            x: m.x,
+            y: m.y,
+            radius_raw: m.radius_raw,
+        },
+        pb::gameplay_command::Kind::CastDirection(m) => GameplayCommandKind::CastDirection {
+            caster: entity_from_raw(m.caster),
+            ability: m.ability,
+            dx: m.dx,
+            dy: m.dy,
+        },
+        pb::gameplay_command::Kind::LearnAbility(m) => GameplayCommandKind::LearnAbility {
+            hero: entity_from_raw(m.hero),
+            ability: m.ability,
+        },
+        pb::gameplay_command::Kind::LevelUpHero(m) => GameplayCommandKind::LevelUpHero {
+            hero: entity_from_raw(m.hero),
+        },
     })
 }
 
@@ -1179,12 +1303,28 @@ mod tests {
 
     #[test]
     fn all_effect_kind_codes_roundtrip_and_unknown_is_rejected() {
+        // 旧码 0–3 与 P11 追加码 4–12 全部穷尽覆盖；线格式稳定码 MUST
+        // 与 w3-core 状态哈希用的 `effect_kind_code` 逐码一致（ADR 0002）。
         for kind in [
             EffectKind::Damage,
             EffectKind::Heal,
             EffectKind::BuffStat,
             EffectKind::Stun,
+            EffectKind::Zone,
+            EffectKind::Summon,
+            EffectKind::AuraBeneficiaries,
+            EffectKind::PassiveProc,
+            EffectKind::Transform,
+            EffectKind::PointTarget,
+            EffectKind::RemoveBuffCategory,
+            EffectKind::ChainBounce,
+            EffectKind::RandomDraw,
         ] {
+            assert_eq!(
+                to_effect_kind_code(kind),
+                u32::from(w3_core::effect_kind_code(kind)),
+                "wire effect code must match core state hash code: kind={kind:?}"
+            );
             let effect = EffectDef {
                 kind,
                 amount: 12345,
@@ -1200,8 +1340,9 @@ mod tests {
             let (_, decoded) = decode_commands(&bytes).unwrap();
             assert_eq!(decoded[0].kind, command.kind);
         }
+        // 13 是 P11 之后第一个空闲码；任何未知码一律显式拒绝，不静默降级。
         assert!(matches!(
-            from_effect_kind_code(4),
+            from_effect_kind_code(13),
             Err(NetError::Malformed(_))
         ));
         assert!(matches!(
@@ -1683,7 +1824,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_appends_only_tags_33_through_58_and_preserves_reserved() {
+    fn schema_appends_only_tags_33_through_63_and_preserves_reserved() {
         let schema = include_str!("proto/w3net.proto");
         assert!(schema.contains("reserved 14 to 32;"));
         assert!(schema.contains("message GameplayReviveHero {"));
@@ -1725,8 +1866,8 @@ mod tests {
         assert!(schema.contains("uint32 shop = 1;"));
         assert!(schema.contains("uint32 batch = 2;"));
         // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加
-        // 33 / 34 / 35 / 36、P8.5d 的 37–45，再追加 P9 的 46–58
-        // （reserved 段跳过），既有 tag 编号与顺序一个不动。
+        // 33 / 34 / 35 / 36、P8.5d 的 37–45、P9 的 46–58，再追加
+        // P11 的 59–63（reserved 段跳过），既有 tag 编号与顺序一个不动。
         let oneof = schema
             .split("oneof kind {")
             .nth(2)
@@ -1746,9 +1887,9 @@ mod tests {
             tags,
             vec![
                 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58
+                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63
             ],
-            "oneof tags must be append-only (4-13 + 33-36 + 37-45 + 46-58)"
+            "oneof tags must be append-only (4-13 + 33-36 + 37-45 + 46-58 + 59-63)"
         );
         // 新消息尾部保留 reserved；既有编号段零改动。
         assert!(schema.contains("reserved 5 to 8;"));
@@ -2368,8 +2509,8 @@ mod tests {
             }
         }
         // 字段编号只追加：reserved 14 to 32 原样保留、tag 36 唯一；
-        // PROTOCOL_VERSION 8 追加 tag 46–58 后，下一个空闲 tag 是 59，
-        // 因此断言「不存在 = 59;」维持「只追加、顶点之后留空」的边界语义。
+        // PROTOCOL_VERSION 9 追加 tag 59–63 后，下一个空闲 tag 是 64，
+        // 因此断言「不存在 = 64;」维持「只追加、顶点之后留空」的边界语义。
         assert!(schema.contains("reserved 14 to 32;"));
         assert_eq!(
             schema
@@ -2378,7 +2519,7 @@ mod tests {
             1,
             "tag 36 must be appended exactly once"
         );
-        assert!(!schema.contains("= 59;"));
+        assert!(!schema.contains("= 64;"));
     }
 
     // ---- PROTOCOL_VERSION 7：P8.5d 九个玩法变体的线格式回归 ----
@@ -2666,7 +2807,7 @@ mod tests {
         assert!(schema.contains("uint32 shop = 1;"));
         assert!(schema.contains("uint32 batch = 2;"));
         // 字段编号只追加：reserved 14 to 32 原样保留、tag 37–45 各唯一、
-        // P9 追加 tag 46–58 后 tag 59 留空。
+        // P9 追加 tag 46–58、P11 追加 tag 59–63 后 tag 64 留空。
         assert!(schema.contains("reserved 14 to 32;"));
         for (name, tag) in [
             ("pickup_ground_item", 37),
@@ -2685,7 +2826,7 @@ mod tests {
                 "tag {tag} ({name}) must be appended exactly once"
             );
         }
-        assert!(!schema.contains("= 59;"));
+        assert!(!schema.contains("= 64;"));
         // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码，
         // 避免把「禁止 float」这类说明文字算成声明字段。
         for line in schema.lines() {
@@ -3144,7 +3285,8 @@ mod tests {
         assert!(schema.contains("uint32 decay_frames = 2;"));
         assert!(schema.contains("int64 restore = 2;"));
         assert!(schema.contains("uint32 condition = 2;"));
-        // 只追加：reserved 14 to 32 原样保留、tag 46–58 各唯一、tag 59 留空。
+        // 只追加：reserved 14 to 32 原样保留、tag 46–58 各唯一、
+        // P11 追加 tag 59–63 后 tag 64 留空。
         assert!(schema.contains("reserved 14 to 32;"));
         for (name, tag) in [
             ("seed_blight", 46),
@@ -3167,7 +3309,7 @@ mod tests {
                 "tag {tag} ({name}) must be appended exactly once"
             );
         }
-        assert!(!schema.contains("= 59;"));
+        assert!(!schema.contains("= 64;"));
         // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码。
         for line in schema.lines() {
             let code = line.split("//").next().unwrap_or("");
@@ -3205,6 +3347,258 @@ mod tests {
             encode_commands(&commands, &decoded).unwrap(),
             bytes,
             "36 kinds must stay canonical"
+        );
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    // ---- PROTOCOL_VERSION 9：P11 五个技能系统施法命令变体的线格式回归 ----
+
+    /// 五个 P11 新变体的样本，每类恰好一条；字段覆盖 uint64 / uint32 /
+    /// int64 边界值（i64::MIN / i64::MAX / u32::MAX），证明定宽无损映射。
+    fn sample_p11_gameplay() -> Vec<GameplayCommand> {
+        let caster = entity_from_raw(1);
+        let hero = entity_from_raw(u64::MAX);
+        vec![
+            GameplayCommand::new(
+                Frame::new(40),
+                1,
+                1,
+                GameplayCommandKind::CastPoint {
+                    caster,
+                    ability: 10,
+                    x: i64::MIN,
+                    y: i64::MAX,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(41),
+                1,
+                2,
+                GameplayCommandKind::CastArea {
+                    caster,
+                    ability: 11,
+                    x: -65536,
+                    y: 131072,
+                    radius_raw: i64::MIN,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(42),
+                1,
+                3,
+                GameplayCommandKind::CastDirection {
+                    caster,
+                    ability: u32::MAX,
+                    dx: i64::MAX,
+                    dy: i64::MIN,
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(43),
+                1,
+                4,
+                GameplayCommandKind::LearnAbility { hero, ability: 12 },
+            ),
+            GameplayCommand::new(
+                Frame::new(44),
+                1,
+                5,
+                GameplayCommandKind::LevelUpHero { hero },
+            ),
+        ]
+    }
+
+    #[test]
+    fn p11_five_variants_roundtrip_is_canonical() {
+        let gameplay = sample_p11_gameplay();
+        assert_eq!(gameplay.len(), 5, "sample must cover all 5 new kinds");
+        let first = encode_commands(&[], &gameplay).unwrap();
+        let second = encode_commands(&[], &gameplay).unwrap();
+        assert_eq!(first, second, "two encodes must be byte-identical");
+        let (commands, decoded) = decode_commands(&first).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            first,
+            "decode -> encode must be canonical"
+        );
+        // 逐条单独往返，避免批量编码掩盖某个变体的歧义映射。
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    /// tag 59–63 / wire 2 的 key varint：
+    /// 59=474->[0xda,0x03]，60=482->[0xe2,0x03]，61=490->[0xea,0x03]，
+    /// 62=498->[0xf2,0x03]，63=506->[0xfa,0x03]。
+    #[test]
+    fn p11_variants_use_wire_tags_59_to_63() {
+        let gameplay = sample_p11_gameplay();
+        let keys: [[u8; 2]; 5] = [
+            [0xda, 0x03],
+            [0xe2, 0x03],
+            [0xea, 0x03],
+            [0xf2, 0x03],
+            [0xfa, 0x03],
+        ];
+        for (command, key) in gameplay.iter().zip(keys.iter()) {
+            let bytes = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            assert!(
+                bytes.windows(2).any(|w| w == &key[..]),
+                "variant {:?} must be encoded on its own tag",
+                command.kind
+            );
+            // 解码能还原为同一变体，证明 tag 未被错放 / 复用。
+            let (_, decoded) = decode_commands(&bytes).unwrap();
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].kind, command.kind);
+        }
+    }
+
+    #[test]
+    fn p11_schema_keeps_canonical_constraints() {
+        let schema = include_str!("proto/w3net.proto");
+        // 五个新消息与定宽字段：EntityId 用 uint64、DefId 用 uint32、
+        // 点 / 范围 / 方向坐标、半径与方向向量用 int64。
+        for message in [
+            "message GameplayCastPoint {",
+            "message GameplayCastArea {",
+            "message GameplayCastDirection {",
+            "message GameplayLearnAbility {",
+            "message GameplayLevelUpHero {",
+        ] {
+            assert!(schema.contains(message), "missing {message}");
+        }
+        assert!(schema.contains("uint64 caster = 1;"));
+        assert!(schema.contains("uint32 ability = 2;"));
+        assert!(schema.contains("int64 x = 3;"));
+        assert!(schema.contains("int64 y = 4;"));
+        assert!(schema.contains("int64 radius_raw = 5;"));
+        assert!(schema.contains("int64 dx = 3;"));
+        assert!(schema.contains("int64 dy = 4;"));
+        assert!(schema.contains("uint64 hero = 1;"));
+        // EffectDef 字段编号与 reserved 4 to 8 保持不动（P11 只沿用
+        // effect_kind 的 uint32 承载 0–12 稳定码，不改字段编号）。
+        assert!(schema.contains("uint32 effect_kind = 1;"));
+        assert!(schema.contains("int64 amount = 2;"));
+        assert!(schema.contains("reserved 4 to 8;"));
+        // 只追加：reserved 14 to 32 原样保留、tag 59–63 各唯一、tag 64 留空。
+        assert!(schema.contains("reserved 14 to 32;"));
+        for (name, tag) in [
+            ("cast_point", 59),
+            ("cast_area", 60),
+            ("cast_direction", 61),
+            ("learn_ability", 62),
+            ("level_up_hero", 63),
+        ] {
+            assert_eq!(
+                schema.matches(&format!("= {tag};")).count(),
+                1,
+                "tag {tag} ({name}) must be appended exactly once"
+            );
+        }
+        assert!(!schema.contains("= 64;"));
+        // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码。
+        for line in schema.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            for forbidden in ["map<", "float", "double"] {
+                assert!(
+                    !code.contains(forbidden),
+                    "schema must not declare {forbidden}: {line}"
+                );
+            }
+        }
+        // 线格式只传玩家输入命令，MUST NOT 承载权威状态 / 快照 / fog 可见性。
+        for forbidden in [
+            "message Snapshot",
+            "message WorldState",
+            "fog_visibility",
+            "state_hash",
+        ] {
+            assert!(
+                !schema.contains(forbidden),
+                "wire must not carry state: {forbidden}"
+            );
+        }
+    }
+
+    /// 手工拼装 `GameplayCastPoint` 载荷（uint64 + uint32 + 两个 int64，
+    /// 仅测试用）；int64 负数按补码 u64 写 varint，与 prost 的 int64 编码一致。
+    fn cast_point_payload(caster: u64, ability: u32, x: i64, y: i64) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend(field_varint(1, caster));
+        payload.extend(field_varint(2, u64::from(ability)));
+        payload.extend(field_varint(3, x as u64));
+        payload.extend(field_varint(4, y as u64));
+        payload
+    }
+
+    #[test]
+    fn reserved_tag_rejects_p11_payload() {
+        let payload = cast_point_payload(91, 10, -7, 9);
+        // 缺陷态：把 CastPoint 载荷错放进 reserved 14 to 32 段的 tag 14 / 32。
+        // prost 视作 unknown field 丢弃，kind 变 None，解码显式返回 Malformed。
+        for tag in [14, 32] {
+            let defect =
+                command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(tag, &payload));
+            assert!(
+                matches!(decode_commands(&defect), Err(NetError::Malformed(_))),
+                "reserved tag must be rejected: tag={tag}"
+            );
+        }
+        // 元断言防退化：同一载荷改回规范 tag 59 必须成功解码为 CastPoint。
+        let good = command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(59, &payload));
+        let (commands, gameplay) = decode_commands(&good).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 1);
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::CastPoint {
+                caster: entity_from_raw(91),
+                ability: 10,
+                x: -7,
+                y: 9,
+            }
+        );
+    }
+
+    #[test]
+    fn p11_unknown_fields_are_dropped_not_echoed() {
+        let gameplay = sample_p11_gameplay();
+        let mut bytes = encode_commands(&[], &gameplay).unwrap();
+        // 追加一个合法但未知字段（field 1000, varint 0）。
+        bytes.extend_from_slice(&[0xc0, 0x3e, 0x00]);
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        let reencoded = encode_commands(&commands, &decoded).unwrap();
+        assert!(
+            !reencoded.ends_with(&[0xc0, 0x3e, 0x00]),
+            "unknown fields must not be echoed"
+        );
+        assert_eq!(reencoded, encode_commands(&[], &gameplay).unwrap());
+    }
+
+    #[test]
+    fn all_forty_one_gameplay_kinds_roundtrip() {
+        // 双向穷尽映射一一对应：既有 36 变体逐字节不变 + 新增 5 变体往返一致。
+        let mut gameplay = sample_gameplay();
+        gameplay.extend(sample_p9_gameplay());
+        gameplay.extend(sample_p11_gameplay());
+        assert_eq!(gameplay.len(), 41, "sample must cover every gameplay kind");
+        let bytes = encode_commands(&[], &gameplay).unwrap();
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            bytes,
+            "41 kinds must stay canonical"
         );
         for command in &gameplay {
             let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
@@ -3335,8 +3729,8 @@ mod tests {
 
         // 回放：同一命令序列 + 同一冻结定义哈希 / 内容哈希重建，逐帧哈希一致。
         let baseline = p9_test_match().capture_snapshot();
-        assert_eq!(baseline.version, 8, "SNAPSHOT_VERSION must be 8");
-        assert_eq!(baseline.sim_version, 8, "SIM_VERSION must be 8");
+        assert_eq!(baseline.version, 9, "SNAPSHOT_VERSION must be 9");
+        assert_eq!(baseline.sim_version, 9, "SIM_VERSION must be 9");
         let mut replay = p9_test_match();
         for (index, (commands, gameplay)) in decoded.iter().enumerate() {
             let hash = apply_frame(&mut replay, commands, gameplay).unwrap();
@@ -3357,7 +3751,7 @@ mod tests {
         }
         assert_eq!(replay.first_difference(&a), None);
 
-        // v8 快照恢复后逐帧哈希一致，恢复后再推进一帧仍与权威实例一致。
+        // v9 快照恢复后逐帧哈希一致，恢复后再推进一帧仍与权威实例一致。
         let world = w3_core::StaticWorld::open_world(8, 8, SimFixed::from_int(4).unwrap());
         let mut restored = w3_core::RtsMatch::restore_snapshot(
             snapshots_a.last().unwrap().clone(),

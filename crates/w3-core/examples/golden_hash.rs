@@ -29,7 +29,7 @@
 //! `0xada6506e1da36c11`）已失效，不沿用、不声称逐字节不变。
 //! **Debian 12 x86_64 侧 v4 / v5 离线逐字节比对仍待人工 / VM 执行；macOS、
 //! 其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项**，不得据本记录
-//! 声称跨平台确定性已达成或本 change 有新验证（Q7）。
+//! 扩大为跨平台确定性结论或声称本 change 有新验证（Q7）。
 //!
 //! P8.5c 基线重取（Q4 / Q12 / tasks 7.5）：新增野怪 / 营地 / 中立归属 /
 //! leash 状态机 / 掉落事实 / 地面物品 / 物品实例 / 击杀收益登记 / 确定性
@@ -44,7 +44,7 @@
 //! 上文 P8.5b 的 `final_hash=0xce89a7baf4d711ec` 已失效，不沿用。
 //! **Debian 12 x86_64 侧 v4 / v5 / v6 逐字节离线比对仍待人工 / VM 执行；
 //! macOS、其它 CPU 架构（ARM64 等）与其它 rustc 版本仍属待验证项**，
-//! 不得据本记录声称双平台 / 全平台确定性已验证或本 change 有新验证（Q12）。
+//! 不得据本记录扩大为跨平台确定性结论或声称本 change 有新验证（Q12）。
 //!
 //! P8.5d 基线重取（Q4 / Q12 / tasks 3.4）：新增顶层权威状态 `item_shop`
 //! （六格定长实例背包 / 复活死亡背包 / 拾取购买使用丢弃移交售卖事实 /
@@ -60,8 +60,8 @@
 //! 上文 P8.5c v6 的 `final_hash=0xc802b63cd6c55b74` 已失效、不沿用、
 //! 不声称逐字节不变。**Debian 12 x86_64 侧 v4 / v5 / v6 / v7 逐字节
 //! 离线比对仍待人工 / VM 执行；macOS、其它 CPU 架构（ARM64 等）与其它
-//! rustc 版本仍属待验证项**，不得据本记录声称双平台 / 全平台确定性
-//! 已验证或本 change 有新验证（Q12）；不声称 Debian 12 侧 v4 / v5 /
+//! rustc 版本仍属待验证项**，不得据本记录扩大为跨平台确定性结论或
+//! 声称本 change 有新验证（Q12）；不声称 Debian 12 侧 v4 / v5 /
 //! v6 / v7 逐字节比对已完成。
 //!
 //! P8 → P9 基线重取（Q2 / Q3 / Q5' / tasks 3.3 / 4.4）：新增 `w3-core`
@@ -78,9 +78,27 @@
 //! 上文 P8.5d v7 的 `final_hash=0x940cb016f6630f1e` 已失效、不沿用、
 //! 不声称逐字节不变。**Debian 12 x86_64 侧 v4 / v5 / v6 / v7 / v8
 //! 逐字节离线比对仍待人工 / VM 执行；macOS、其它 CPU 架构（ARM64 等）
-//! 与其它 rustc 版本仍属待验证项**，不得据本记录声称双平台 / 全平台
-//! 确定性已验证或本 change 有新验证（Q5' / Q8'）；不声称 Debian 12 侧
+//! 与其它 rustc 版本仍属待验证项**，不得据本记录扩大为跨平台确定性
+//! 结论或声称本 change 有新验证（Q5' / Q8'）；不声称 Debian 12 侧
 //! v4 / v5 / v6 / v7 / v8 逐字节比对已完成。
+//!
+//! P11 基线重取（Q3 / Q4 / Q5 / Q8 / tasks 7.3）：新增 `WorldGameplayState.abilities`
+//! 技能系统权威运行态（zone / 召唤 / 光环受益集 / 被动 proc / 变身 /
+//! buff 分类 / 链接 / `rng_draws` / 进行中施法）进入 `compute_state_hash()`，
+//! 技能清单 / 行为目录 / buff 分类 / 冻结常量段进入 `compute_defs_hash()`，
+//! `SNAPSHOT_VERSION` / `SIM_VERSION` bump 8→9，逐帧哈希布局再次实质变化，
+//! 故基线必变、不沿用 P9 v8 值 `0x0b53a047b1f8e5e0`、不声称逐字节不变。
+//! 本文件输出格式未变，`GOLDEN_SCHEMA` 仍为 `golden-hash/1`；记录值仅作
+//! 人工比对留档，不作自动断言。
+//!
+//! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按 v9 实现重取：
+//! - 41 行 / 1371 字节，`final_hash=0x240467029c2b423c`；
+//! - 整份文本 sha256 `4bb9e9f860a060bdaf1b0785c3307de35fa8c10bd1d8e70759b1b8041350fa60`。
+//! 上文 P9 的 `final_hash=0x0b53a047b1f8e5e0` 已失效、不沿用、不声称逐字节
+//! 不变。**Debian 12 x86_64 侧 v4 / v5 / v6 / v7 / v8 / v9、macOS、
+//! 其它 CPU 架构（ARM64 等）与其它 rustc 版本的逐字节离线比对仍待 VM / 人工
+//! 执行**，不得据本记录扩大为跨平台确定性结论或声称本 change 有新验证
+//! 结论（Q6 / Q8）；不声称 Debian 12 侧 v4–v9 逐字节比对已完成。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

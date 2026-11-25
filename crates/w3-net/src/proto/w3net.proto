@@ -34,6 +34,13 @@
 // 用 int64 定宽承载并在解码时显式校验 i32 / i64 值域，回血条件用
 // RegenCondition::code() 的 uint32 稳定码；明确拒绝 v7，玩法命令字段
 // 不被静默当作 unknown field（ADR 0005 §3）。
+// PROTOCOL_VERSION 9（P11 技能系统新增 5 个施法 / 英雄技能玩法命令变体）：
+// 在 GameplayCommand.oneof 只追加 tag 59–63，reserved 14 to 32 与
+// tag 4–13 / 33–58 一字不动；每个新 message 字段编号只追加、尾部保留 reserved；
+// EntityId 用 uint64 的 value()、DefId 用 uint32 定宽，点 / 范围 / 方向坐标、
+// 半径与方向向量一律用 int64 承载 Q47.16 整数原始值；EffectDef 沿用
+// uint32 effect_kind 承载 0–12 稳定效果码、字段编号与 reserved 4 to 8 保持不动；
+// 明确拒绝 v8，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
 
 syntax = "proto3";
 package w3net;
@@ -194,6 +201,11 @@ message GameplayCommand {
     GameplayMarkSightBlocker mark_sight_blocker = 56;
     GameplaySetCreepSleep set_creep_sleep = 57;
     GameplaySetRegenCondition set_regen_condition = 58;
+    GameplayCastPoint cast_point = 59;
+    GameplayCastArea cast_area = 60;
+    GameplayCastDirection cast_direction = 61;
+    GameplayLearnAbility learn_ability = 62;
+    GameplayLevelUpHero level_up_hero = 63;
   }
   reserved 14 to 32;
 }
@@ -436,6 +448,51 @@ message GameplaySetRegenCondition {
   uint64 unit = 1;
   uint32 condition = 2;
   reserved 3 to 8;
+}
+
+// 以下五个消息为 PROTOCOL_VERSION 9（P11 技能系统施法命令面）只追加：
+// oneof tag 59–63 与 w3-core 的 kind 码 37–41 一一对应、顺序一致。
+// EntityId 一律 uint64 的 value()、DefId 一律 uint32 定宽；点 / 范围 /
+// 方向坐标、半径与方向向量均为 Q47.16 整数原始值，用 int64 定宽承载
+// （解码侧 i64 无损还原、不收窄、不猜测、不回退）；语义合法性（caster /
+// hero 非 EntityId::NONE、ability 合法、玩家归属）由 w3-core 同源校验
+// 承担，线格式层只忠实传输。字段编号只追加、尾部保留 reserved，禁 map /
+// 禁 float / 禁 double 全部继续适用。
+// 点目标施法（kind 码 37，tag 59）：x / y 为点坐标整数原始值。
+message GameplayCastPoint {
+  uint64 caster = 1;
+  uint32 ability = 2;
+  int64 x = 3;
+  int64 y = 4;
+  reserved 5 to 8;
+}
+// 范围目标施法（kind 码 38，tag 60）：radius_raw 为半径整数原始值。
+message GameplayCastArea {
+  uint64 caster = 1;
+  uint32 ability = 2;
+  int64 x = 3;
+  int64 y = 4;
+  int64 radius_raw = 5;
+  reserved 6 to 8;
+}
+// 方向目标施法（kind 码 39，tag 61）：dx / dy 为方向向量整数原始值。
+message GameplayCastDirection {
+  uint64 caster = 1;
+  uint32 ability = 2;
+  int64 dx = 3;
+  int64 dy = 4;
+  reserved 5 to 8;
+}
+// 学习 / 升级英雄技能（kind 码 40，tag 62）：hero 与技能 DefId。
+message GameplayLearnAbility {
+  uint64 hero = 1;
+  uint32 ability = 2;
+  reserved 3 to 8;
+}
+// 英雄升级并累积技能点（kind 码 41，tag 63）：仅携带英雄 EntityId。
+message GameplayLevelUpHero {
+  uint64 hero = 1;
+  reserved 2 to 8;
 }
 
 // 一批玩法命令；集合一律 repeated + 显式顺序，禁止 map。

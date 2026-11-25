@@ -655,7 +655,7 @@ fn reverse_validation_defs_hash_sensitivity_degenerate_fails_the_same_assertion(
 // ---------------------------------------------------------------------------
 
 /// 版本闸门不变量：`gate_enabled = true` 为正式实现（明确拒绝 v7）；
-/// `gate_enabled = false` 为退化实现（静默把 v7 头部改写为 v8 后恢复）。
+/// `gate_enabled = false` 为退化实现（静默把 v7 头部改写为 v9 后恢复）。
 /// 两者 MUST 经同一个断言辅助函数，退化态同一断言必失败。
 fn version_gate_rejects(sim: &RtsMatch, content: u64, gate_enabled: bool) -> bool {
     let mut old = sim.capture_snapshot();
@@ -677,10 +677,10 @@ fn version_gate_rejects(sim: &RtsMatch, content: u64, gate_enabled: bool) -> boo
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 7,
-            expected: 8
+            expected: 9
         })
     );
-    version_rejected && sim_rejected && SNAPSHOT_VERSION == 8 && SIM_VERSION == 8
+    version_rejected && sim_rejected && SNAPSHOT_VERSION == 9 && SIM_VERSION == 9
 }
 
 #[test]

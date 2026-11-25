@@ -17,6 +17,7 @@
 //! `drain_events`、`capture_snapshot`、`restore_snapshot`、
 //! `compute_state_hash`、`first_difference`。
 
+pub mod ability_system;
 pub mod angle;
 pub mod command;
 pub mod creep;
@@ -32,6 +33,7 @@ pub mod snapshot;
 pub mod state_hash;
 pub mod world;
 
+pub use ability_system::*;
 pub use angle::{ANGLE_SCALE, Angle, slope_speed_scale};
 pub use command::{Command, CommandError, CommandKind, CommandQueue};
 pub use creep::{
@@ -55,7 +57,8 @@ pub use gameplay::{
     ReviveCharge, ReviveConstants, ReviveCost, ReviveQueueItem, SYNTHETIC_REVIVE_CONSTANTS,
     SYNTHETIC_TOWN_HALL_CONSTANTS, StatMods, TownHallConstants, TownHallCost, TownHallTier,
     TownHallUpgradeCharge, TownHallUpgradeItem, TownHallUpgradeState, UnitDef, UnitGameplayState,
-    UpgradeDef, VictoryState, WaveState, WorldGameplayState, resolve_effects, restore_by_percent,
+    UpgradeDef, VictoryState, WaveState, WorldGameplayState, decode_effect_kind, effect_kind_code,
+    resolve_effects, restore_by_percent,
 };
 pub use item_shop::{
     BAG_SLOTS, ItemBag, ItemCategory, ItemShopConstants, ItemShopDefinitions, ItemShopFact,

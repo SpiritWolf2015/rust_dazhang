@@ -2,10 +2,13 @@
 //! 这些测试是 ADR 0002 / 0004 与三个 spec delta 的门禁。
 
 use w3_core::{
-    AbilityDef, Command, CommandKind, EffectDef, EffectKind, EntityId, EventKind, Frame,
-    FrozenDefinitions, GameplayCommand, GameplayCommandKind, GroupPlanRecord, ItemDef, MatchConfig,
-    RtsMatch, SIM_VERSION, SimFixed, SnapshotError, StaticWorld, UnitDef, UpgradeDef,
+    AbilityDef, Command, CommandKind, EffectDef, EffectKind, EntityId, EventKind, FactionSlot,
+    Frame, FrozenDefinitions, GameplayCommand, GameplayCommandKind, GroupPlanRecord, ItemDef,
+    MatchConfig, RtsMatch, SIM_VERSION, SNAPSHOT_VERSION, SimFixed, SnapshotError, StaticWorld,
+    UnitDef, UpgradeDef,
 };
+
+mod ability_common;
 
 fn config() -> MatchConfig {
     MatchConfig {
@@ -1113,4 +1116,148 @@ fn stun_buff_blocks_player_actions() {
         target.goal.is_none(),
         "stunned unit must reject the player Move command"
     );
+}
+
+// ---------------------------------------------------------------------------
+// P11 技能系统确定性硬门禁（四席位 / 回放 / 联机 / v9 快照 / 旧 v8 拒绝）
+// ---------------------------------------------------------------------------
+
+/// 四席位技能帧流各自双实例交错逐帧哈希一致，且技能随机消费序列非空。
+#[test]
+fn four_faction_ability_streams_are_frame_deterministic() {
+    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    for faction in FactionSlot::ALL {
+        let stream = ability_common::command_stream(faction);
+        let (mut a, _, _) = ability_common::setup(&stream);
+        let (mut b, _, _) = ability_common::setup(&stream);
+        for frame in 0..40 {
+            if frame % 2 == 0 {
+                a.step();
+                b.step();
+            } else {
+                b.step();
+                a.step();
+            }
+            assert_eq!(
+                a.compute_state_hash(),
+                b.compute_state_hash(),
+                "reason=ability_stream_diverged faction={faction:?} frame={frame} diff={:?}",
+                a.first_difference(&b)
+            );
+            assert_eq!(
+                a.first_difference(&b),
+                None,
+                "reason=no_ability_difference faction={faction:?} frame={frame}"
+            );
+        }
+        assert!(
+            !a.ability_system_state().rng_draws.is_empty(),
+            "reason=rng_draws_present faction={faction:?}"
+        );
+    }
+}
+
+/// 真人 / 回放 / 联机三路径对同一 `Cast` 帧流逐帧一致；联机路径倒序提交
+/// 只改变冻结到达序号，命令仍按 `ExecuteFrame → PlayerId → Sequence → Arrival`
+/// 稳定排序执行。
+#[test]
+fn ability_replay_and_lockstep_paths_match_frame_hashes() {
+    let stream = ability_common::command_stream(FactionSlot::Third);
+    let (mut live, _, _) = ability_common::setup(&stream);
+    let (mut replay, _, _) = ability_common::setup(&stream);
+    let mut network_stream = stream.clone();
+    network_stream.reverse();
+    let (mut network, _, _) = ability_common::setup(&network_stream);
+    for frame in 0..40 {
+        live.step();
+        replay.step();
+        network.step();
+        assert_eq!(
+            live.compute_state_hash(),
+            replay.compute_state_hash(),
+            "reason=live_replay_diverged frame={frame} diff={:?}",
+            live.first_difference(&replay)
+        );
+        if frame >= 18 {
+            assert_eq!(
+                live.compute_state_hash(),
+                network.compute_state_hash(),
+                "reason=live_network_diverged frame={frame} diff={:?}",
+                live.first_difference(&network)
+            );
+            assert_eq!(
+                live.first_difference(&network),
+                None,
+                "reason=no_network_difference frame={frame}"
+            );
+        }
+    }
+}
+
+/// v9 快照销毁重建后从 N+1 续算一致；含进行中权威技能运行态与 `rng_draws`。
+#[test]
+fn ability_v9_snapshot_roundtrip_continues_identically() {
+    let stream = ability_common::command_stream(FactionSlot::Fourth);
+    let (mut original, _, content) = ability_common::setup(&stream);
+    for _ in 0..10 {
+        original.step();
+    }
+    let snapshot = original.capture_snapshot();
+    assert_eq!(snapshot.version, 9, "reason=snapshot_version_9");
+    assert_eq!(snapshot.sim_version, 9, "reason=sim_version_9");
+    assert_eq!(
+        snapshot.gameplay.abilities,
+        original.ability_system_state(),
+        "reason=snapshot_contains_ability_state"
+    );
+    let mut restored =
+        RtsMatch::restore_snapshot(snapshot.clone(), StaticWorld::default(), content)
+            .expect("determinism: reason=ability_restore_ok");
+    for frame in 10..40 {
+        original.step();
+        restored.step();
+        assert_eq!(
+            original.compute_state_hash(),
+            restored.compute_state_hash(),
+            "reason=snapshot_roundtrip_diverged frame={frame} diff={:?}",
+            original.first_difference(&restored)
+        );
+        assert_eq!(
+            original.first_difference(&restored),
+            None,
+            "reason=no_restore_difference frame={frame}"
+        );
+    }
+}
+
+/// 旧 v8 快照 / 回放明确拒绝；不提供跨版本迁移，也不静默兼容。
+#[test]
+fn old_v8_snapshot_and_sim_version_are_explicitly_rejected() {
+    let mut sim = RtsMatch::create(config());
+    sim.step();
+    let snapshot = sim.capture_snapshot();
+    let mut old_version = snapshot.clone();
+    old_version.version = 8;
+    assert!(
+        matches!(
+            RtsMatch::restore_snapshot(old_version, StaticWorld::default(), config().content_hash),
+            Err(SnapshotError::UnsupportedVersion { found: 8 })
+        ),
+        "reason=old_v8_snapshot_rejected"
+    );
+    let mut old_sim = snapshot;
+    old_sim.sim_version = 8;
+    assert!(
+        matches!(
+            RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), config().content_hash),
+            Err(SnapshotError::SimVersionMismatch {
+                found: 8,
+                expected: SIM_VERSION,
+            })
+        ),
+        "reason=old_v8_sim_version_rejected"
+    );
+    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
 }

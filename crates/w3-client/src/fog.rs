@@ -1,7 +1,7 @@
 //! 战争迷雾：表现层本地只读派生（P8.5e / R10.1 / R10.5 / §0.3 T3 / ADR 0002 §5）。
 //!
 //! 本模块是**表现层专属**，MUST NOT 进入 `w3-core` 权威状态、FNV-1a 状态哈希、
-//! `SNAPSHOT_VERSION`（当前 8）定义的快照或 `first_difference()`。唯一的权威写入者
+//! `SNAPSHOT_VERSION`（当前 9）定义的快照或 `first_difference()`。唯一的权威写入者
 //! 仍是 `RtsMatch`；迷雾网格 / 当前可见 / 已探索层 / 雾遮罩全部是
 //! [`FogGrid`] 内的表现层本地跨帧累积状态，每个本地视角一份（design D5）。
 //!
@@ -16,7 +16,9 @@
 //! 雾遮罩不透明度全部为**表现层合成原创编译期整数常量 `[待核]`**（B 类）。
 //! 它们 MUST NOT 进 `w3-core::FrozenDefinitions` / `UnitDef` /
 //! `compute_defs_hash` / `defs_hash` / `content_hash`：否则定义层内容变化会
-//! 改变 golden hash 基线，与 P8.5e 当时「保持 7 不 bump」决策自相矛盾（design D3 / Q6；P9 已按 Q2 / Q3 拍板 bump 8，golden hash 按 v8 重取）。
+//! 改变 golden hash 基线，与 P8.5e 当时「保持 7 不 bump」决策自相矛盾（design D3 / Q6；
+//! P9 已按 Q2 / Q3 拍板 bump 8、P11 已按 Q5 拍板三者同步 bump 9，两次均按当期
+//! 版本重取 golden hash 基线；本行属历史沿革叙述，按先例保留并加夹注）。
 //! 数值不含任何 MPQ 派生数据 / 真实导出 JSON / PNG / GLB / Warsmash
 //! `GRID_STEP` / `PATHING_RATIO` / `DYING_UNIT_VISION_RADIUS`、godot 网页值
 //! 或 `melee.jui` JASS UI 帧定义值；不读 `config.toml`、零文件 IO（ADR 0001 / §14）。

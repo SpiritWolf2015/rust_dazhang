@@ -46,8 +46,8 @@ fn full_bag() -> ItemBag {
 
 #[test]
 fn frozen_item_shop_defs_are_zero_asset_and_content_sensitive() {
-    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
-    assert_eq!(SIM_VERSION, 8, "reason=sim_version_8");
+    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
     let base = defs();
 
     // 干净环境构造成功、零文件 IO：只由编译期整数常量装配。
@@ -64,8 +64,8 @@ fn frozen_item_shop_defs_are_zero_asset_and_content_sensitive() {
     let snapshot = sim.capture_snapshot();
     assert_eq!(snapshot.defs_hash, base.content_hash());
     assert_eq!(snapshot.content_hash, base.content_hash());
-    assert_eq!(snapshot.version, 8);
-    assert_eq!(snapshot.sim_version, 8);
+    assert_eq!(snapshot.version, 9);
+    assert_eq!(snapshot.sim_version, 9);
 
     // Q8：改任一货架 / 价格 / 库存 / 回城施法帧 / 类别常量即改变 content_hash()。
     let rebuild = |item_shop: w3_core::ItemShopDefinitions| {
@@ -1367,7 +1367,7 @@ fn old_v6_snapshot_and_sim_version_are_explicitly_rejected() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 6,
-            expected: 8
+            expected: 9
         })
     ));
 }

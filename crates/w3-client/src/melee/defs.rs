@@ -12,14 +12,17 @@
 //! `DEFAULT_UNIT_DEF` / `SOLDIER` / `BARRACKS` 等既有入口行为不变。
 //! P8.5b 主城升级需求链另用独立 `8xxx` 段真实定义，不属于两族 / 中立分段，
 //! 也不改既有命令行为。分段差异只经既有 `defs_hash` 字段天然覆盖，
-//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 8）与快照头部布局
+//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 9）与快照头部布局
 //! （ADR 0002）。
 //!
 //! P8.1 人族完整化：在人族段 `1xx` 追加远程 / 反重甲 / 人口 / 祭坛 /
 //! 研发 / 英雄六类 `UnitDef`，以及类别内唯一 ID 的英雄主动技能与攻防升级。
 //! 全部是冻结定义**内容变化**，经既有 `compute_defs_hash` 进 `defs_hash` /
-//! `content_hash` 快照头部；不新增权威状态字段、不改状态哈希字段集合、
-//! 不新增 `EffectKind` / 命令变体 / JASS VM（ADR 0002 / design D1–D7）。
+//! `content_hash` 快照头部；不新增权威状态字段、不改状态哈希字段集合。
+//! 当期「不新增 `EffectKind` / 命令变体」是 P8.1 change 内约束、非永久
+//! 门禁，P11 已按用户拍板「四族全量 + bump 9 全套」取代（design D1 /
+//! 结论 4 / Risks）：内核 `EffectKind` 扩到 13 变体并只追加技能命令变体；
+//! JASS VM（N5）本期仍不引入（ADR 0002 / design D1–D7）。
 //!
 //! P8.2 兽族完整化：在兽族段 `2xx` 对称追加远程 / 反重甲 / 人口地洞 /
 //! 祭坛 / 研发建筑 / 英雄六类 `UnitDef`，以及类别内唯一 ID 的兽族英雄
@@ -28,7 +31,7 @@
 //! 数值差异只以常量相对大小表达、标 `[取舍]`、引用 R2 / R5，MUST NOT
 //! 冒充经典事实或参考项目结论（design D1 / D10 / C6）。新增定义仍是
 //! 冻结定义**内容变化**，`w3-core` 零 diff、`SNAPSHOT_VERSION` 仍 3（P8.5a 起为 4、
-//! P8.5b 起为 5、P8.5c 起为 6、P8.5d 起为 7、P9 起为 8；本行属历史沿革叙述，按先例保留并加夹注）。
+//! P8.5b 起为 5、P8.5c 起为 6、P8.5d 起为 7、P9 起为 8、P11 起为 9；本行属历史沿革叙述，按先例保留并加夹注）。
 //!
 //! P8.5a 英雄复活接入：真实对局装配在 [`synthetic_definitions`] 内经纯链式
 //! [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与祭坛 / 英雄类别集合，
@@ -78,14 +81,38 @@
 //! 常量供 sim-owner 批次 B 引用，MUST NOT 冒充原版、不静默改规则、不改
 //! `w3-core::compute_defs_hash`；`Race` 分类字段 MUST NOT 进入 `w3-core`
 //! 的 `Player` / `RtsMatch`（Q6），本文件仍是纯装配层 / 定义层数据。
+//!
+//! P11 四族技能清单（Q1 两层口径 / design D1 / 结论 7 / C13）：本文件以
+//! 编译期常量表 [`FOUR_RACE_ABILITY_CATALOG`] 固化四族技能**清单的结构与
+//! 分类**；真实装配在 [`synthetic_definitions`] 末尾经内核
+//! `FrozenDefinitions::with_ability_system` 注入与该结构对齐的内核合成占位
+//! 冻结定义（`SYNTHETIC_ABILITY_CATALOG`，`ABILITY_CATALOG_LEN` 条）。两层
+//! 张力务必区分：对齐的是**清单条目与分类**（哪些技能、每族 4 英雄 ×
+//! 4 技能 = 英雄 3 普通 + 1 个 6 级大招、代表性单位 / 道具技能），
+//! **不是**照搬经典名称 / 四字符 rawcode / 数值。内部仍用合成原创 `DefId`
+//! （本装配层英雄技能沿用 `ABILITY=10` / 四族英雄 `11–14` 并扩四族；
+//! 内核清单与行为目录另用独立合成 `DefId` 段），MUST NOT 引入
+//! 「四字符 ID / 具名技能名 → `DefId`」映射层；名称合成原创、不冒充
+//! 经典具名技能，数值一律 `[待核]`、不冻结进权威定义；SLK 四字符 ID
+//! 只作核对依据，MUST NOT 进权威状态 / 状态哈希 / 快照 / 不入库
+//! （ADR 0001 / 0002 / 0004）。道具技能按 R7.6 走既有 `EffectDef` 组合
+//! 结算，MUST NOT 直接执行任意 JASS 技能（N5）。
+//!
+//! 诚实边界（关键）：Q1「清单逐项按本机导出 SLK 人工核对」是 apply 阶段
+//! 人工确认项（decision-memo C2 / C10 / C13 / 已知限制）。本表只按经典
+//! 清单结构口径（每族 4 英雄 × 4 技能）固化**清单结构与分类**，与内核
+//! `ABILITY_CATALOG_LEN=72` 的合成占位结构对齐，具体条目数与数值的逐项
+//! 人工核对属「待人工」，MUST NOT 冒充已逐项对齐 SLK、不臆造「四族全量
+//! = 某精确数字」。规模元数据只登记规模与分类，不写任何具体技能名 /
+//! rawcode / 数值；纯编译期常量、零文件 IO（见本文件 1–6 行）。
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use w3_core::{
-    AbilityDef, CampScript, DefId, DropSet, DropTable, EffectDef, EffectKind, FrozenDefinitions,
-    ItemDef, NeutralCategory, SCALE, SYNTHETIC_CREEP_CONSTANTS, SYNTHETIC_REVIVE_CONSTANTS,
-    SYNTHETIC_TOWN_HALL_CONSTANTS, SimFixed, TownHallTier, UnitDef, UpgradeDef,
-    synthetic_item_shop_definitions,
+    AbilityDef, AbilitySystemDefinitions, CampScript, DefId, DropSet, DropTable, EffectDef,
+    EffectKind, FrozenDefinitions, ItemDef, NeutralCategory, SCALE, SYNTHETIC_CREEP_CONSTANTS,
+    SYNTHETIC_REVIVE_CONSTANTS, SYNTHETIC_TOWN_HALL_CONSTANTS, SimFixed, TownHallTier, UnitDef,
+    UpgradeDef, synthetic_item_shop_definitions,
 };
 
 // 新类别槽位编号（表现层装配查表键，**不是** `EntityId`，MUST NOT 进入
@@ -660,6 +687,101 @@ fn unit_with_mana(
     }
 }
 
+/// 单族技能清单的结构与分类元数据（编译期常量，规模口径 `[待核]`）。
+///
+/// 只登记「该族几英雄、每英雄几技能、英雄 3 普通 + 1 个 6 级大招、
+/// 代表性单位 / 道具技能」这类**规模与分类**，MUST NOT 登记任何具体
+/// 技能名 / 四字符 rawcode / 玩法数值；这些结构计数取自经典清单结构
+/// 口径（R6），逐项按本机导出 SLK 人工核对属「待人工」确认项，
+/// 不是冒充已核对的经典精确条目数（design D1 / 结论 7 / C13）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FactionAbilityLayout {
+    /// 该族英雄数（经典清单结构口径）。
+    pub hero_slots: u8,
+    /// 每英雄技能数（3 普通 + 1 个 6 级大招 = 4）。
+    pub skills_per_hero: u8,
+    /// 每英雄普通技能数。
+    pub hero_basic_skills: u8,
+    /// 每英雄 6 级大招数（`level_req == 6`）。
+    pub hero_ultimate_skills: u8,
+    /// 代表性单位技能数。
+    pub unit_skills: u8,
+    /// 代表性道具技能数（R7.6 走既有 `EffectDef` 组合，不执行 JASS）。
+    pub item_skills: u8,
+}
+
+impl FactionAbilityLayout {
+    /// 按结构口径推导的该族清单条目数；是合成占位规模，不是
+    /// 「四族全量 = 某精确数字」的结论。
+    pub const fn catalog_len(self) -> usize {
+        (self.hero_slots as usize) * (self.skills_per_hero as usize)
+            + self.unit_skills as usize
+            + self.item_skills as usize
+    }
+}
+
+/// 四族技能清单的编译期常量表。
+///
+/// 四个席位与内核 `w3_core::FactionSlot::ALL` 一一对应（合成占位，
+/// 不对应经典名称 / rawcode）；四席位同构，本表每项只登记规模与分类的
+/// 编译期整数计数，不含任何 `DefId` / 名称 / rawcode / 数值，更 MUST NOT
+/// 引入「四字符 ID / 具名技能名 → `DefId`」映射层。真实技能与清单条目
+/// 仍用合成原创 `DefId`（装配层英雄技能沿用 `ABILITY=10` / 四族英雄
+/// `11–14`；内核清单与行为目录另用独立合成 `DefId` 段）；名称合成原创、
+/// 不冒充经典具名技能，玩法数值一律 `[待核]`、不冻结进权威定义；SLK
+/// 四字符 ID 只作核对依据，MUST NOT 进权威状态 / 状态哈希 / 快照 /
+/// 不入库（ADR 0001 / 0002 / 0004）。纯编译期常量、零文件 IO。
+pub const FOUR_RACE_ABILITY_CATALOG: [FactionAbilityLayout; w3_core::FactionSlot::ALL.len()] = [
+    FactionAbilityLayout {
+        hero_slots: 4,
+        skills_per_hero: 4,
+        hero_basic_skills: 3,
+        hero_ultimate_skills: 1,
+        unit_skills: 1,
+        item_skills: 1,
+    },
+    FactionAbilityLayout {
+        hero_slots: 4,
+        skills_per_hero: 4,
+        hero_basic_skills: 3,
+        hero_ultimate_skills: 1,
+        unit_skills: 1,
+        item_skills: 1,
+    },
+    FactionAbilityLayout {
+        hero_slots: 4,
+        skills_per_hero: 4,
+        hero_basic_skills: 3,
+        hero_ultimate_skills: 1,
+        unit_skills: 1,
+        item_skills: 1,
+    },
+    FactionAbilityLayout {
+        hero_slots: 4,
+        skills_per_hero: 4,
+        hero_basic_skills: 3,
+        hero_ultimate_skills: 1,
+        unit_skills: 1,
+        item_skills: 1,
+    },
+];
+
+/// 由四席位结构表推导的清单总条目数（编译期常量）。
+pub const FOUR_RACE_ABILITY_CATALOG_LEN: usize = {
+    let mut total = 0usize;
+    let mut index = 0usize;
+    while index < FOUR_RACE_ABILITY_CATALOG.len() {
+        total += FOUR_RACE_ABILITY_CATALOG[index].catalog_len();
+        index += 1;
+    }
+    total
+};
+
+// 编译期守卫：装配层清单规模 MUST 与内核合成占位清单长度对齐，
+// 防止两侧结构悄悄漂移；该断言只表达「合成占位结构对齐」，不声称
+// 已逐项对齐本机导出 SLK、不臆造经典精确条目数。
+const _: () = assert!(FOUR_RACE_ABILITY_CATALOG_LEN == w3_core::ABILITY_CATALOG_LEN);
+
 /// 合成冻结定义：既有 6 个基线单位 + 人族 / 兽族 / 中立资源分段单位 +
 /// P8.1 人族六类 + P8.2 兽族六类 + P8.5b 两条 T2 需求链真实定义 +
 /// 技能 / 升级 / 物品。
@@ -673,7 +795,7 @@ fn unit_with_mana(
 /// **相对大小**表达、标 `[取舍]`，是本项目在 R2 / R5 / R5.1 / R5.3
 /// `[已核]` 框架下的原创取舍，不是参考项目得来的经典事实（design D1 / D10）。
 /// 新增定义只改变 `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），
-/// 不改 `SNAPSHOT_VERSION`（当前 8）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// 不改 `SNAPSHOT_VERSION`（当前 9）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5a 起额外经 [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与
 /// 两族祭坛 / 英雄类别集合，使真实对局的复活命令面可达（Q3 / D2 / R1.2）。
 /// P8.5b 起再经 [`FrozenDefinitions::with_town_hall_upgrade`] 登记主城升级冻结
@@ -681,7 +803,7 @@ fn unit_with_mana(
 /// 写进 `units` / `upgrades` 表，使 `Train` / `Research` 在 T1 被拒、T2 完成后
 /// 能生成实体 / 结算科技效果（Q3 / Q4 / D2 / R1.2）。新增定义只改变
 /// `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），不改
-/// `SNAPSHOT_VERSION`（当前 8）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// `SNAPSHOT_VERSION`（当前 9）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5c 起再经 [`FrozenDefinitions::with_creep_camps`] 登记野怪冻结常量、
 /// 营地脚本、掉落表与中立类别；`9301` 野怪 DefId 同时写进 `units` 表，
 /// `9401` / `9402` 只作为掉落表与类别登记的道具 DefId，不新增资产 / 模型键。
@@ -791,10 +913,11 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
                 }],
             },
         ),
-        // P8.1 英雄主动技能（design D2）：只用既有 `EffectKind` +
-        // `EffectDef` 组合表达，走既有 `Cast` 命令面；MUST NOT 新增
-        // `EffectKind` 变体 / 命令变体 / JASS VM（N5）。伤害 + 眩晕 +
-        // 自身增益三段组合，数值 `[待核]`。
+        // P8.1 人族英雄主动技能（design D2 / P11）：以基础 `EffectKind`
+        // 的 `EffectDef` 组合表达，走既有 `Cast` 命令面；伤害 + 眩晕 +
+        // 自身增益三段组合，数值 `[待核]`。「不新增 EffectKind / 命令变体」
+        // 是 P8.1 当期约束、已被 P11 授权扩展取代（模块头 / design 结论 4）；
+        // JASS VM（N5）本期仍不引入。
         (
             HERO_ABILITY,
             AbilityDef {
@@ -821,10 +944,11 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
                 ],
             },
         ),
-        // P8.2 兽族英雄主动技能（design D2 / D10）：同样只用既有
-        // `EffectKind` + `EffectDef` 组合、走既有 `Cast`，MUST NOT 新增
-        // `EffectKind` / `GameplayCommandKind` / `CommandKind` 变体或
-        // JASS / wtg VM（N5）。语义只借 Warsmash `AbilityWarStomp.j`
+        // P8.2 兽族英雄主动技能（design D2 / D10 / P11）：同样以基础
+        // `EffectKind` 的 `EffectDef` 组合、走既有 `Cast`。「不新增
+        // `EffectKind` / 命令变体」是 P8.2 当期约束、已被 P11 授权扩展
+        // 取代（模块头 / design 结论 4），JASS / wtg VM（N5）仍不引入。
+        // 语义只借 Warsmash `AbilityWarStomp.j`
         // 「无目标 AoE 伤害 + 控制」的**结构**映射到 `Damage + Stun`
         // （另加一段 `BuffStat` 增益表达组合），MUST NOT 复制其代码 /
         // rawcode / 数值；不臆造对称兽族单位技能表（参考项目无
@@ -855,10 +979,11 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
                 ],
             },
         ),
-        // P9 不死英雄主动技能（Q1' / design D2 / N5）：只用既有
-        // `EffectKind::{Damage, Heal, BuffStat, Stun}` + `EffectDef` 组合、
-        // 走既有 `Cast` 命令面结算，MUST NOT 新增 `EffectKind` /
-        // `GameplayCommandKind` / JASS VM。数值合成原创 `[待核]`。
+        // P9 不死英雄主动技能（Q1' / design D2 / N5 / P11）：以基础
+        // `EffectKind` 的 `EffectDef` 组合、走既有 `Cast` 命令面结算。
+        // 「不新增 `EffectKind` / 命令变体」是 P9 当期约束、已被 P11
+        // 授权扩展取代（模块头 / design 结论 4），JASS VM（N5）仍不引入。
+        // 数值合成原创 `[待核]`。
         (
             UNDEAD_HERO_ABILITY,
             AbilityDef {
@@ -885,9 +1010,11 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
                 ],
             },
         ),
-        // P9 暗夜英雄主动技能（Q1' / design D2 / N5）：同样只用既有
-        // `EffectKind` + `EffectDef` 组合、走既有 `Cast`，以
-        // `Heal + Damage + BuffStat` 表达「月光 / 自然」语义结构，
+        // P9 暗夜英雄主动技能（Q1' / design D2 / N5 / P11）：同样以基础
+        // `EffectKind` 的 `EffectDef` 组合、走既有 `Cast`，以
+        // `Heal + Damage + BuffStat` 表达「月光 / 自然」语义结构。
+        // 「不新增 `EffectKind` / 命令变体」是 P9 当期约束、已被 P11
+        // 授权扩展取代（模块头 / design 结论 4），JASS VM（N5）仍不引入；
         // MUST NOT 复制任何参考项目代码 / rawcode / 数值。数值 `[待核]`。
         (
             NIGHT_ELF_HERO_ABILITY,
@@ -1189,6 +1316,19 @@ pub fn synthetic_definitions() -> FrozenDefinitions {
         // P8.5d：第五段冻结定义登记商店货架 / 道具类别 / 回城常量，
         // 使真实装配的购买 / 使用 / 回城 / 刷新命令面可达。
         .with_item_shop(synthetic_item_shop_definitions())
+        // P11：按内核 `with_ability_system` 注入路径登记四族技能冻结定义。
+        // 注入的是内核 `AbilitySystemDefinitions::synthetic()` 编译期常量表
+        // （`SYNTHETIC_ABILITY_CATALOG`，72 条合成原创 `DefId` 占位），与本
+        // 装配层 [`FOUR_RACE_ABILITY_CATALOG`] 的规模 / 分类结构对齐；两层
+        // 张力见模块头说明：对齐清单条目与分类，不照搬经典名称 / rawcode /
+        // 数值，不引入「四字符 ID → `DefId`」映射层，数值 `[待核]`、不入库。
+        // 道具技能走既有 `EffectDef` 组合（R7.6），MUST NOT 执行任意 JASS
+        // 技能（N5）。该段是**定义层冻结内容**，经 `compute_defs_hash` 进
+        // `defs_hash` / `content_hash` 快照头部，与技能权威运行态严格区分；
+        // 内核 `new` 默认即同一份 `synthetic()`，故显式注入内容幂等，
+        // 不新增权威状态字段、不改状态哈希字段集合或命令排序键（ADR 0002）。
+        // 清单逐项按本机导出 SLK 人工核对属「待人工」，此处不冒充已对齐。
+        .with_ability_system(AbilitySystemDefinitions::synthetic())
 }
 
 /// 本机导出数据的可选来源（ADR 0001 / design D2）。
@@ -2145,19 +2285,31 @@ mod tests {
         }
     }
 
-    /// 英雄主动技能（四族）只用既有 `EffectKind` 组合表达
-    /// （design D2 / N5）。穷尽匹配 `EffectKind` 的四个既有变体：若
-    /// `w3-core` 新增变体，本测试将无法编译，构成「不新增 EffectKind」
-    /// 的编译期守卫；P9 不死 / 暗夜技能同样不引入任何新变体（Q1' / D2）。
+    /// 四族英雄主动技能仍以既有 `EffectDef` 组合表达（design D2 / N5 / P11）。
+    ///
+    /// P8.1 曾以「穷尽匹配四个既有 `EffectKind` 变体」充当「不新增
+    /// `EffectKind`」的编译期守卫，并约定「若新增变体本测试将无法编译」；
+    /// 该约束是 P8.1 当期 change 内约束、非永久门禁，P11 已由用户
+    /// 2026-11-24 拍板「四族全量 + bump 9 全套」取代（design D1 /
+    /// 结论 4 / Risks）：内核 `EffectKind` 已扩到 13 变体（稳定码 0–12），
+    /// 并只追加点 / 范围 / 方向技能命令。本测试改用内核
+    /// `w3_core::effect_kind_code` 取稳定码，不再以编译失败阻止扩展；
+    /// 语义保留为「英雄技能仍用 `EffectDef` 组合表达、断言效果组合结构」：
+    /// 每条技能至少两段效果、组合内至少两种原语、稳定码可逆解码、
+    /// 四族技能只用基础四原语（码 0–3）组合、兽族技能含
+    /// `Damage + Stun` 结构（Q1' / D2 / T4）。JASS VM（N5）仍不做。
     #[test]
     fn hero_ability_uses_only_existing_effect_kinds() {
-        fn kind_tag(kind: EffectKind) -> u8 {
-            match kind {
-                EffectKind::Damage => 0,
-                EffectKind::Heal => 1,
-                EffectKind::BuffStat => 2,
-                EffectKind::Stun => 3,
-            }
+        // 元断言：稳定码覆盖 P11 全部 13 变体且解码可逆，防止
+        // `effect_kind_code` 退化成旧 4 变体口径时本测试悄悄恒真。
+        for code in 0u8..=12 {
+            let decoded = w3_core::decode_effect_kind(code)
+                .unwrap_or_else(|| panic!("reason=effect_kind_code_uncovered code={code}"));
+            assert_eq!(
+                w3_core::effect_kind_code(decoded),
+                code,
+                "reason=effect_kind_stable_code_roundtrip code={code}"
+            );
         }
         let defs = synthetic_definitions();
         for ability_id in NEW_ABILITY_IDS {
@@ -2169,14 +2321,22 @@ mod tests {
                 ability.effects.len() >= 2,
                 "reason=ability_must_compose_multiple_effects id={ability_id}"
             );
-            let mut tags: Vec<u8> = ability
+            let codes: BTreeSet<u8> = ability
                 .effects
                 .iter()
-                .map(|effect| kind_tag(effect.kind))
+                .map(|effect| w3_core::effect_kind_code(effect.kind))
                 .collect();
-            tags.sort_unstable();
-            assert!(tags.windows(2).all(|w| w[0] <= w[1]));
-            assert!(tags.iter().all(|tag| *tag <= 3));
+            assert!(
+                codes.len() >= 2,
+                "reason=ability_composes_distinct_effect_kinds id={ability_id}"
+            );
+            // 这四条合成原创英雄技能仍只用基础四原语（码 0–3）的
+            // `EffectDef` 组合表达；P11 新增九类原语由内核技能清单 /
+            // 行为目录承载，不在这些技能定义里直接混用（R7.6 / N5）。
+            assert!(
+                codes.iter().all(|code| *code <= 3),
+                "reason=hero_ability_uses_base_effect_kinds id={ability_id}"
+            );
         }
         // 兽族技能确实用 Damage + Stun 表达「伤害 + 控制」结构（D2 / T4）。
         let orc = defs.abilities().get(&ORC_HERO_ABILITY).unwrap();
@@ -2906,5 +3066,100 @@ mod tests {
         let formal = synthetic_definitions();
         assert!(rooted_ancient_does_not_move(&formal));
         assert!(p9_segments_stay_clean(&formal));
+    }
+
+    /// P11：四族技能清单编译期常量表的规模与分类（design D1 / 结论 7 / C13）。
+    /// 只断言结构与分类、不臆造「四族全量 = 某精确数字」；逐项按本机
+    /// 导出 SLK 人工核对属「待人工」，本测试不冒充已对齐 SLK。
+    #[test]
+    fn four_race_ability_catalog_is_synthetic_structure() {
+        assert_eq!(
+            FOUR_RACE_ABILITY_CATALOG.len(),
+            w3_core::FactionSlot::ALL.len(),
+            "reason=four_faction_slots"
+        );
+        for (faction_index, layout) in FOUR_RACE_ABILITY_CATALOG.iter().enumerate() {
+            assert_eq!(
+                layout.hero_slots, 4,
+                "reason=four_heroes_per_faction faction={faction_index}"
+            );
+            assert_eq!(
+                layout.skills_per_hero, 4,
+                "reason=four_skills_per_hero faction={faction_index}"
+            );
+            assert_eq!(
+                layout.hero_basic_skills, 3,
+                "reason=three_basic_skills faction={faction_index}"
+            );
+            assert_eq!(
+                layout.hero_ultimate_skills, 1,
+                "reason=one_level_six_ultimate faction={faction_index}"
+            );
+            assert_eq!(
+                layout.hero_basic_skills + layout.hero_ultimate_skills,
+                layout.skills_per_hero,
+                "reason=basic_plus_ultimate_equals_skills faction={faction_index}"
+            );
+            assert_eq!(
+                layout.unit_skills, 1,
+                "reason=representative_unit_skill faction={faction_index}"
+            );
+            assert_eq!(
+                layout.item_skills, 1,
+                "reason=representative_item_skill faction={faction_index}"
+            );
+        }
+        // 规模元数据推导的条目数与内核合成占位清单长度对齐（编译期守卫
+        // 已静态断言，此处为运行期复核，防常量被悄悄改写而守卫失效）。
+        assert_eq!(
+            FOUR_RACE_ABILITY_CATALOG_LEN,
+            w3_core::ABILITY_CATALOG_LEN,
+            "reason=catalog_len_matches_kernel_synthetic_placeholder"
+        );
+    }
+
+    /// P11：`with_ability_system` 注入路径把冻结定义纳入 `content_hash()`
+    /// （定义层 `defs_hash`），改一段冻结常量即改哈希（CODEBUDDY §5 形态①）；
+    /// 该段是定义层而非权威运行态，MUST NOT 反写权威状态 / 进状态哈希。
+    #[test]
+    fn ability_system_injection_is_frozen_definitions_not_runtime_state() {
+        let defs = synthetic_definitions();
+        let injected = defs.ability_system();
+        assert!(
+            injected
+                .first_difference(&w3_core::AbilitySystemDefinitions::synthetic())
+                .is_none(),
+            "reason=injected_definitions_are_kernel_synthetic_catalog"
+        );
+        assert_eq!(
+            injected.abilities.entries().len(),
+            w3_core::ABILITY_CATALOG_LEN,
+            "reason=injected_catalog_len"
+        );
+        // 反向验证：改一段冻结常量 → defs_hash 必变；证明注入段确实
+        // 进入 `compute_defs_hash`，不是绕过内容哈希的空登记。
+        let mut altered = w3_core::AbilitySystemDefinitions::synthetic();
+        altered.constants.zone_frames += 1;
+        let changed = defs.clone().with_ability_system(altered);
+        assert_ne!(
+            defs.content_hash(),
+            changed.content_hash(),
+            "reason=ability_system_definitions_change_defs_hash"
+        );
+        // 正向：同一装配两次生成完全一致，纯编译期零文件 IO、无墙钟。
+        assert_eq!(
+            defs.content_hash(),
+            synthetic_definitions().content_hash(),
+            "reason=definitions_are_pure_and_zero_file_io"
+        );
+        // `ExportSource` 回落也拿到同一份注入定义（零文件 IO 证据）。
+        assert!(
+            ExportSource::default()
+                .definitions()
+                .ability_system()
+                .first_difference(injected)
+                .is_none(),
+            "reason=export_source_fallback_carries_injected_catalog"
+        );
     }
 }

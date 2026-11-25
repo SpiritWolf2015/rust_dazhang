@@ -178,17 +178,17 @@ fn defs_hash_is_fixed_and_content_sensitive_meta_assertion() {
 }
 
 // ---------------------------------------------------------------------------
-// 5.1：bump 8 + 旧 v7 明确拒绝（不提供跨版本迁移、不静默兼容）
+// 5.1：bump 9 + 旧 v7 明确拒绝（不提供跨版本迁移、不静默兼容）
 // ---------------------------------------------------------------------------
 
 #[test]
-fn versions_are_bumped_to_8_and_old_v7_snapshot_is_explicitly_rejected() {
-    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_8");
-    assert_eq!(SIM_VERSION, 8, "reason=sim_version_8");
+fn versions_are_bumped_to_9_and_old_v7_snapshot_is_explicitly_rejected() {
+    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
     let (sim, content) = base_match();
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, 8);
-    assert_eq!(snapshot.sim_version, 8);
+    assert_eq!(snapshot.version, 9);
+    assert_eq!(snapshot.sim_version, 9);
 
     let mut old = snapshot.clone();
     old.version = 7;
@@ -202,13 +202,13 @@ fn versions_are_bumped_to_8_and_old_v7_snapshot_is_explicitly_rejected() {
         RtsMatch::restore_snapshot(old_sim, StaticWorld::default(), content),
         Err(SnapshotError::SimVersionMismatch {
             found: 7,
-            expected: 8
+            expected: 9
         })
     ));
-    // v8 快照自身合法（无静默拒绝、无迁移歧义）。
+    // v9 快照自身合法（无静默拒绝、无迁移歧义）。
     assert!(
         RtsMatch::restore_snapshot(snapshot, StaticWorld::default(), content).is_ok(),
-        "reason=v8_snapshot_valid"
+        "reason=v9_snapshot_valid"
     );
 }
 
@@ -336,10 +336,10 @@ fn all_new_authoritative_fields_are_four_way_synced_and_located() {
     assert_eq!(a.compute_state_hash(), b.compute_state_hash());
 }
 
-/// v8 快照契约：销毁实例 → restore_snapshot → 逐帧哈希与快照一致，
+/// v9 快照契约：销毁实例 → restore_snapshot → 逐帧哈希与快照一致，
 /// `first_difference()` 恒为 None（ADR 0002 §7 / Q3）。
 #[test]
-fn v8_snapshot_restore_keeps_frame_hashes_identical() {
+fn v9_snapshot_restore_keeps_frame_hashes_identical() {
     let (original, content) = base_match();
     // 注入一批族特色机制权威状态，确保恢复路径携带新顶层字段。
     let mut prepared = with_state(&original, content, |snapshot| {
@@ -349,7 +349,7 @@ fn v8_snapshot_restore_keeps_frame_hashes_identical() {
     });
     let snapshot = prepared.capture_snapshot();
     let mut restored = RtsMatch::restore_snapshot(snapshot, StaticWorld::default(), content)
-        .expect("faction_forward: reason=v8_restore_ok");
+        .expect("faction_forward: reason=v9_restore_ok");
     assert_eq!(prepared.compute_state_hash(), restored.compute_state_hash());
     for _ in 0..16 {
         prepared.step();

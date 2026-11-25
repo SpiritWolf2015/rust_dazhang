@@ -291,8 +291,8 @@ struct Harness {
 fn setup() -> Harness {
     assert_eq!(MAGIC, *b"W3N1", "reason=magic_mismatch");
     assert_eq!(HEADER_LEN, 25, "reason=header_len_unchanged");
-    assert_eq!(PROTOCOL_VERSION, 8, "reason=protocol_version_unchanged");
-    assert_eq!(SNAPSHOT_VERSION, 8, "reason=snapshot_version_unchanged");
+    assert_eq!(PROTOCOL_VERSION, 9, "reason=protocol_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_unchanged");
 
     let bus = LoopbackBus::shared();
     let relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);

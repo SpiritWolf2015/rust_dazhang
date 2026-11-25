@@ -5,7 +5,7 @@
 //! 驱动 `step()`，并只读消费 `WorldView` 与事实事件。任何新状态——整数帧
 //! 累加器余数、插值 `alpha`、窗口尺寸、选中集合、HUD 布局、相机位姿、
 //! `Instant` 宿主时钟——一律为表现层专属，MUST NOT 进入 FNV-1a 状态哈希或
-//! `SNAPSHOT_VERSION`（当前 8）定义的快照。
+//! `SNAPSHOT_VERSION`（当前 9）定义的快照。
 //!
 //! 逻辑帧由冻结的 `logic_fps = 30` 整数帧累加器驱动（ADR 0002 §2）：
 //! `step()` 不接受 delta、墙钟或刷新率；`RedrawRequested`、垂直同步与 GPU

@@ -1,6 +1,6 @@
 # ADR 0003：项目范围与分期（Melee 优先）
 
-- **状态**：Accepted（2026-11-14 部分修订：战争迷雾 / 隐身纳入 1.0；2026-11-25 部分修订：明确长期目标为像素级复刻 War3、引入 clean-room 反编译证据流程试点，见文末「修订记录」）
+- **状态**：Accepted（2026-11-14 部分修订：战争迷雾 / 隐身纳入 1.0；2026-11-25 部分修订：明确长期目标为像素级复刻 War3、引入 clean-room 反编译证据流程试点；2026-11-27 部分修订：p18 承接「机制全量 + 三版本号 9→10 全套契约」，见文末「修订记录」）
 - **日期**：2026-11-07（决策）/ 2026-11-14（修订）
 - **相关**：[ADR 0001](0001-license.md)、[ADR 0002](0002-determinism.md)；`README.md` 范围表
 
@@ -135,4 +135,19 @@
   - **1.0 范围不变**：S1–S6 / N1–N6、分期表、「明确不做（第一版）」清单、业务规则单一权威 `docs/references/WC3-MELEE-RULES.md §0` 全部不变；长期目标为像素级复刻 War3、1.0 为短期目标的口径不变（2026-11-25 第一次修订）。**不因取证范围扩展放宽 ADR 0001 / ADR 0002 的任何红线**。
 - **复核点补充**：「决定引入外部逆向工具的代码 / 依赖 / 接入 CI」「决定把取证范围再扩到原版数值真值冻结」时，MUST 回到 [ADR 0001](0001-license.md) 复核点重新评估许可证兼容性与零资产边界、并按 [ADR 0002](0002-determinism.md) 重走确定性门禁；本条仅记于本节，不改动正文「## 复核点」清单。
 - **流程说明**：本修订属纯文档 / 规则改动、目标与方向已清楚，按 **`CODEBUDDY.md` §9**「目标与方向已清楚的小改动、纯文档 / 规则改动可显式声明省略规格门」显式声明省略 OpenSpec 规格门，如实声明、不冒充已过规格门；该省略条款的出处是 **§9（Subagent 工作流 / 规格门串联）**，不是 §8（OpenSpec 四件套成文顺序与一致性），此前两次修订易踩此引用坑，本小节明确订正。批准依据为用户 2026-11-26 明确授权（仓库外证据 / 人工确认项），非 AI self-approve、非沉默授权。本修订本身不新建 change、不成文四件套、不 archive、不写 `status: approved` / 指纹到任何 decision-memo；`verify_all.py` 门禁不可省。p17 change 的四件套成文与规格门（用户已授权「规格门 → 真改 `w3-core`」，走完整 §9 串联：参考对照报告 → 四件套 → 规格门由人拍板 → apply 落代码 → 代码门 → 提交）属后续独立流程、由人拍板，与本修订省略规格门不冲突。
+- **未变**：30 Hz 整数帧、10 玩家 / 300 单位验证规模、零资产边界、自建 lobby / relay、P0–P6 分期状态、五个只读参考项目矩阵、其余复核点。
+
+### 2026-11-27（第四次修订）：p18 承接「机制全量 + 三版本号 9→10 全套契约」（用户拍板）
+
+- **触发**：第三次修订（`:125-138`，尤其 `:134`）明文「本修订不因扩范围放宽确定性门禁、不 bump 三版本号、不新增 `GameplayCommandKind`」，是当时 change `p17-melee-mechanism-alignment`「最小可验收闭环」的范围边界。用户 2026-11-27 明确拍板三项：① 新 change `p18-full-melee-mechanisms` 范围＝「机制全量 + 文档订正」、不是原版数值真值冻结，所有数值 `[待核]` + 合成占位；② `SNAPSHOT_VERSION` / `SIM_VERSION` / `PROTOCOL_VERSION` 的 9→10 全套 bump 由 p18 独占承接（p13 不再单独 bump）；③ 本轮终点＝规格门批准 + 锁定指纹，apply 落 `crates/` 是后续独立会话。这三点把 p17 顺延的机制全量（改权威状态字段集合）与三版本号 bump 正式纳入范围，属范围变更；按「由人拍板的修订记录承接」，以本小节承接，第三次修订原文一字不改、不静默改写。
+- **决议**：
+  - p18 承接 p17 顺延清单：三类经验机制运行时接线、R6.3 买活半血无蓝、R6.1 经验阈值分档表、R5.3 攻击类型 × 护甲类型克制矩阵、R7.4 回购价公式、R8.5 野怪三级 leash，以及 p17 代码门 R1 / R2 / R4 / R5 / R6 / R7 六项文档 / 测试订正；业务规则需求源仍为 `docs/references/WC3-MELEE-RULES.md` 的 `R-x.y`（ADR 记「为什么决定」、OpenSpec 记「系统该做什么」，`CODEBUDDY.md §8`）。
+  - **bump 9→10 是遵循门禁、不是放宽红线**：按 [ADR 0002](0002-determinism.md)，新增权威状态字段 MUST 四处同步（`compute_state_hash` / `first_difference` / `capture_snapshot` / `restore_snapshot`）进 FNV-1a 状态哈希与由 `SNAPSHOT_VERSION` 定义的 v10 快照、golden hash 如实重取、旧 v9 快照 / 回放按 `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、`cargo test -p w3-core --test determinism` 重跑 + `CODEBUDDY.md §5` 反向验证（改坏验红）；按 [ADR 0005](0005-protobuf-payload.md) §3，`w3net.proto` 只追加 tag / `reserved 14 to 32` 保持、payload 双向穷尽映射、relay 版本拒绝、canonical 往返、CI 双平台生成代码字节一致（待人工 / VM）。这是**收紧并履行**既有确定性门禁，不是放宽。
+  - **是否新增 `GameplayCommandKind`** 仍为 p18 规格门待确认项、不臆造；若新增则连带 proto tag / relay / canonical 全套，不旁路 ADR 0005 §3。
+- **红线不变（承 ADR 0001 / ADR 0002）**：
+  - [ADR 0001](0001-license.md)：零资产入库、MPQ 及派生文件不入库、不复制上游代码、不绕 EULA / DRM / 登录 / 反作弊；仅用于用户合法自备经典客户端，`README.md` 免责声明继续有效；仓库外一手明文数据只作机制锚、不入库 / 不分发 / 不冒充已核验，产物一律「只读 / 离线 / 本机 / 不入库 / 不随发行物分发」，证据 MUST NOT 进权威状态 / 状态哈希 / 快照 / golden hash / determinism 验收 / CI 门禁。
+  - [ADR 0002](0002-determinism.md)：`SimFixed` Q47.16、30 Hz 整数帧、`ExecuteFrame → PlayerId → Sequence → Arrival` 稳定排序、稳定 `EntityId` 顺序、FNV-1a 状态哈希、单 LCG、表现层只读派生不反写全部不变；表现层证据仍不进权威状态。
+  - **1.0 范围 S1–S6 / N1–N6、「明确不做（第一版）」清单、业务规则单一权威 `docs/references/WC3-MELEE-RULES.md §0`、五个只读参考项目矩阵（`WarsmashModEngine` AGPLv3 只借语义、`ConcordRTS` GPL-3.0-only 不作 WC3 事实来源）、长期目标「像素级复刻 War3」且 1.0 为短期目标的口径（2026-11-25 第一次修订）全部不变**；不因本次范围变更放宽 ADR 0001 / ADR 0002 的任何红线，不因 bump 声称跨平台确定性已达成（macOS / ARM64 / 其它 rustc / Debian 侧逐字节比对仍待 VM / 人工）。
+- **复核点补充**：「决定把取证范围再扩到原版数值真值冻结」时，MUST 回到 [ADR 0001](0001-license.md) 复核点重新评估零资产边界、并按 [ADR 0002](0002-determinism.md) 重走确定性门禁；本条仅记于本节，不改动正文「## 复核点」清单。
+- **流程说明**：本修订属纯文档 / 规则改动、目标与方向已清楚，按 **`CODEBUDDY.md` §9**「目标与方向已清楚的小改动、纯文档 / 规则改动可显式声明省略规格门」显式声明省略 OpenSpec 规格门，如实声明、不冒充已过规格门；该省略条款出处是 §9（Subagent 工作流 / 规格门串联）、不是 §8（OpenSpec 四件套成文顺序与一致性），沿用第三次修订 `:137` 的订正。批准依据为用户 2026-11-27 本会话三项明确拍板，非 AI self-approve、非沉默授权。本修订本身不新建 change、不成文四件套、不 archive、不写 `status: approved` / 指纹到任何 decision-memo；`verify_all.py` 门禁不可省。p18 change 的四件套成文与规格门（由人拍板）属后续独立流程，与本修订省略规格门不冲突。
 - **未变**：30 Hz 整数帧、10 玩家 / 300 单位验证规模、零资产边界、自建 lobby / relay、P0–P6 分期状态、五个只读参考项目矩阵、其余复核点。

@@ -77,6 +77,12 @@
 - **诚实边界**：本轮**未**同步活文档、未实现任何玩法（`git diff -- docs/references/WC3-MELEE-RULES.md` 应为空），MUST NOT 把「design 引用 `R-x.y`」或「代码将来会实现」冒充「该规则已完整实现 / 已人工验收」（`WC3-MELEE-RULES.md:393` 三态判定 / §14 第 5 条 / `critic.md:34` 清单第 13 项）；附录 R6 技能独立行状态在 apply 阶段据实更新、真窗口 8.x 人工清单一律「未执行 / 待人工」、不标通过；清单逐项 SLK 人工核对 / `[待核]` 数值仍待人工、不静默改规则（§14）。
 - 结构门禁：`tools/verify_all.py::rule_doc_sync_check()` 仅对过规格门 `status: approved` 的玩法 change 校验本小节存在且非空；本 change `status: pending` 豁免。本小节按 §14 第 5 条如实给出「需同步、待 apply 阶段」的结论、保持非空；`decision-memo.md` 不在四件套指纹集合内（C11），补该小节不触发 §8 规格解锁。
 
+## bump 归属补充登记（2026-11-27，用户拍板）
+
+- 本 change「待确认项」`:46` 原记「是否 bump 9→10 全套」待规格门拍板。用户 2026-11-27 明确拍板：`SNAPSHOT_VERSION` / `SIM_VERSION` / `PROTOCOL_VERSION` 的 9→10 全套 bump **由 change `p18-full-melee-mechanisms` 独占承接**，本 change（p13）**不再单独 bump**。该结论同步落在 ADR 0003 第四次修订与 p18 的 `decision-memo.md` / `proposal.md` / `design.md`。
+- 本节为 `decision-memo.md` 的**纯追加登记**：不改 p13 四件套（proposal / specs / design / tasks）、不改本小节下方「## 规格门」的 `status: approved` / 四件套指纹 `7c776a14…` / `approved_by` / `date`、不冒充用户重新批准 p13、不把 p13 写成「已实施 / 已 bump」。`decision-memo.md` 不在四件套指纹集合内（`tools/verify_all.py:175-195`），追加不触发 `CODEBUDDY.md §8` 规格解锁、不改已锁定指纹（`python tools/verify_all.py --fingerprint p13-ability-full-roster` 复核仍为 `7c776a14…`）。
+- 承接依据：p13 待确认项 `:46`；用户 2026-11-27 本会话明确拍板（仓库外证据 / 人工确认项）；ADR 0003 第四次修订「p18 承接机制全量 + 三版本号 9→10 全套契约」；p18 `decision-memo.md` C1 / C13 / P3。
+
 ## 规格门
 
 - status: approved

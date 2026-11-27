@@ -39,7 +39,9 @@ pub use command::{Command, CommandError, CommandKind, CommandQueue};
 pub use creep::{
     CREEP_RNG_SALT, CampScript, CampState, CreepCampState, CreepConstants, CreepDeathNotice,
     CreepState, DropSet, DropTable, GROUND_ITEM_ID_BASE, GroundItemState, ItemInstanceState,
-    KillReward, LeashPhase, NEUTRAL_OWNER, NeutralCategory, RngDraw, SYNTHETIC_CREEP_CONSTANTS,
+    KillReward, LeashPhase, MECHANISM_BUILDING_XP_SWITCH, MECHANISM_HERO_LEVEL_XP_TIERS,
+    MECHANISM_SUMMON_XP_FACTOR, NEUTRAL_OWNER, NeutralCategory, RngDraw, SYNTHETIC_CREEP_CONSTANTS,
+    synthetic_hero_level_xp_factor,
 };
 pub use entity::{EntityId, EntityStore};
 pub use faction_mechanics::{

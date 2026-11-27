@@ -4032,8 +4032,8 @@ impl RtsMatch {
                 }
             }
             // R6.5 第二环节：实际入账（整数分摊 + 等级因子，不反写表现层）。
-            // 满级英雄是否参与分摊 `[待核]`：本期不冻结该规则，所有集合内
-            // 英雄统一入账（§14 / R6.5）。
+            // 2026-11-26 按 `WC3-MELEE-RULES.md §14` 核对：满级英雄参与分摊
+            // （见 §15）；集合内英雄统一均分入账（R6.5）。
             let mut xp_credited = BTreeMap::new();
             let count = xp_candidates.len() as i64;
             if count > 0 {

@@ -12,7 +12,7 @@
 //! `DEFAULT_UNIT_DEF` / `SOLDIER` / `BARRACKS` 等既有入口行为不变。
 //! P8.5b 主城升级需求链另用独立 `8xxx` 段真实定义，不属于两族 / 中立分段，
 //! 也不改既有命令行为。分段差异只经既有 `defs_hash` 字段天然覆盖，
-//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 9）与快照头部布局
+//! 不新增权威状态字段、不改 `SNAPSHOT_VERSION`（当前 10）与快照头部布局
 //! （ADR 0002）。
 //!
 //! P8.1 人族完整化：在人族段 `1xx` 追加远程 / 反重甲 / 人口 / 祭坛 /
@@ -795,7 +795,7 @@ const _: () = assert!(FOUR_RACE_ABILITY_CATALOG_LEN == w3_core::ABILITY_CATALOG_
 /// **相对大小**表达、标 `[取舍]`，是本项目在 R2 / R5 / R5.1 / R5.3
 /// `[已核]` 框架下的原创取舍，不是参考项目得来的经典事实（design D1 / D10）。
 /// 新增定义只改变 `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），
-/// 不改 `SNAPSHOT_VERSION`（当前 9）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// 不改 `SNAPSHOT_VERSION`（当前 10）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5a 起额外经 [`FrozenDefinitions::with_hero_revive`] 登记复活冻结常量与
 /// 两族祭坛 / 英雄类别集合，使真实对局的复活命令面可达（Q3 / D2 / R1.2）。
 /// P8.5b 起再经 [`FrozenDefinitions::with_town_hall_upgrade`] 登记主城升级冻结
@@ -803,7 +803,7 @@ const _: () = assert!(FOUR_RACE_ABILITY_CATALOG_LEN == w3_core::ABILITY_CATALOG_
 /// 写进 `units` / `upgrades` 表，使 `Train` / `Research` 在 T1 被拒、T2 完成后
 /// 能生成实体 / 结算科技效果（Q3 / Q4 / D2 / R1.2）。新增定义只改变
 /// `FrozenDefinitions` 的内容哈希（`defs_hash` / `content_hash`），不改
-/// `SNAPSHOT_VERSION`（当前 9）、状态哈希字段集合或命令排序键（ADR 0002）。
+/// `SNAPSHOT_VERSION`（当前 10）、状态哈希字段集合或命令排序键（ADR 0002）。
 /// P8.5c 起再经 [`FrozenDefinitions::with_creep_camps`] 登记野怪冻结常量、
 /// 营地脚本、掉落表与中立类别；`9301` 野怪 DefId 同时写进 `units` 表，
 /// `9401` / `9402` 只作为掉落表与类别登记的道具 DefId，不新增资产 / 模型键。

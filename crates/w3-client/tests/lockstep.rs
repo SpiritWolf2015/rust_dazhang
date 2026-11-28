@@ -8,7 +8,7 @@
 //! - 网络包到达不驱动累加器：`advance_ticks(0)` 有大量包也不推进帧；
 //! - 联机玩法命令（施法 / 生产 / 取消生产）走上行广播、与本地同一权威状态，
 //!   上行失败显式返回错误（spec「本地与联机玩法命令一致」Scenario）；
-//! - 联机接入不新增权威状态，快照仍 v9 且头部含 `defs_hash` / `content_hash`；
+//! - 联机接入不新增权威状态，快照仍 v10 且头部含 `defs_hash` / `content_hash`；
 //! - ADR 0005 契约（W3N1 25B 头、protobuf 往返、checksum、first_difference）不变。
 
 use w3_client::{
@@ -519,7 +519,7 @@ fn online_gameplay_uplink_failure_is_explicit() {
 fn wire_format_contract_is_unchanged() {
     assert_eq!(&MAGIC, b"W3N1");
     assert_eq!(HEADER_LEN, 25);
-    assert_eq!(PROTOCOL_VERSION, 9);
+    assert_eq!(PROTOCOL_VERSION, 10);
 
     let commands = frame_commands(0);
     let encoded = encode_commands(&commands, &[]).expect("encode succeeds");
@@ -580,7 +580,7 @@ fn config() -> w3_core::MatchConfig {
 }
 
 #[test]
-fn online_session_keeps_snapshot_v9_with_defs_hash_header() {
+fn online_session_keeps_snapshot_v10_with_defs_hash_header() {
     let (mut driver, mut relay, _bus) = online();
     for frame in 0..4 {
         inject_frame(&mut relay, frame, frame as u32 + 1, &frame_commands(frame));
@@ -589,7 +589,7 @@ fn online_session_keeps_snapshot_v9_with_defs_hash_header() {
 
     let snapshot = driver.snapshot();
     assert_eq!(snapshot.version, SNAPSHOT_VERSION);
-    assert_eq!(SNAPSHOT_VERSION, 9);
+    assert_eq!(SNAPSHOT_VERSION, 10);
     // 头部身份字段仍在，且联机路径没有新增权威字段（与本地同帧快照逐字段相等）。
     let mut local = FixedStepClient::new(SEED, CONTENT_HASH, world());
     for frame in 0..4 {
@@ -630,19 +630,19 @@ fn deserialize_and_reject_unknown_wire_fields_cleanly() {
 }
 
 // ---------------------------------------------------------------------------
-// tasks 4.2（client 侧）：联机两端逐帧一致 + v9 新基线
+// tasks 4.2（client 侧）：联机两端逐帧一致 + v10 新基线
 // ---------------------------------------------------------------------------
 
 /// 联机 `apply_frame` 两端注入同一冻结帧命令脚本逐帧推进，逐帧
 /// `compute_state_hash()` / `capture_snapshot()` 字节相等、
-/// `first_difference()` 为 `None`，快照 v9 且头部 `defs_hash` /
+/// `first_difference()` 为 `None`，快照 v10 且头部 `defs_hash` /
 /// `content_hash` 一致；网络帧到达 MUST NOT 改帧序或引入第二份权威状态。
 /// MUST NOT 断言改动前 v7 旧基线数值相等（新增权威状态 + 定义层内容变化 +
 /// bump 8 后 golden hash 已重取）。
 #[test]
-fn online_apply_frame_two_instances_match_frame_by_frame_with_v9_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_v9");
-    assert_eq!(PROTOCOL_VERSION, 9, "reason=protocol_version_v9");
+fn online_apply_frame_two_instances_match_frame_by_frame_with_v10_snapshot() {
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_v10");
+    assert_eq!(PROTOCOL_VERSION, 10, "reason=protocol_version_v10");
     let mut first = w3_core::RtsMatch::create_with_world(config(), world());
     let mut second = w3_core::RtsMatch::create_with_world(config(), world());
     let mut previous = first.compute_state_hash();
@@ -667,7 +667,7 @@ fn online_apply_frame_two_instances_match_frame_by_frame_with_v9_snapshot() {
         );
         assert_eq!(
             snapshot_first.version, SNAPSHOT_VERSION,
-            "reason=online_snapshot_v9 frame={frame}"
+            "reason=online_snapshot_v10 frame={frame}"
         );
         assert_eq!(
             snapshot_first.defs_hash, snapshot_second.defs_hash,

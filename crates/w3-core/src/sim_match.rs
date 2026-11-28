@@ -17,8 +17,9 @@ use crate::angle::{Angle, slope_speed_scale};
 use crate::command::{Command, CommandError, CommandKind, CommandQueue};
 use crate::creep::{
     CREEP_RNG_SALT, CampState, CreepCampState, CreepDeathNotice, CreepState, GROUND_ITEM_ID_BASE,
-    GroundItemState, ItemInstanceState, KillReward, LeashPhase, NEUTRAL_OWNER, NeutralCategory,
-    RngDraw,
+    GroundItemState, ItemInstanceState, KillReward, LeashPhase, MECHANISM_BUILDING_XP_SWITCH,
+    MECHANISM_SUMMON_XP_FACTOR, NEUTRAL_OWNER, NeutralCategory, RngDraw,
+    synthetic_hero_level_xp_factor,
 };
 use crate::entity::{EntityId, EntityStore};
 use crate::faction_mechanics::{
@@ -37,6 +38,13 @@ use crate::gameplay::{
 use crate::item_shop::{
     ItemBag, ItemCategory, ItemShopFact, ItemShopFactKind, ItemShopState, PurchaseCharge,
     ShopRefreshDraw, TownPortalCast, shop_fixture_id,
+};
+use crate::melee_mechanisms::{
+    ARMOR_TYPE_COUNT, ATTACK_TYPE_COUNT, BuybackRecord, MeleeMechanismsState, RepurchaseRecord,
+    SYNTHETIC_BUYBACK_HP_PERCENT, SYNTHETIC_BUYBACK_MANA_PERCENT,
+    SYNTHETIC_REPURCHASE_INTERACT_RADIUS_RAW, SYNTHETIC_REPURCHASE_RATIO_PERCENT,
+    XpSettlementRecord, buyback_cost, scale_damage_by_ratio, synthetic_damage_ratio,
+    synthetic_level_tier,
 };
 use crate::nav::{self, DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 use crate::snapshot::{
@@ -360,17 +368,26 @@ pub struct RtsMatch {
     /// P8.5d 物品 / 商店 / 回城卷轴全部权威状态（Q6 / Q7 / D1 / D5）。
     /// 字段私有，仅本结构可写；六格定长实例背包与 `creep_camps`
     /// 的 `item_instances` 按稳定 `EntityId` 构成单一实例身份口径。
-    /// 同时进入状态哈希、由 `SNAPSHOT_VERSION`（当前 9）定义的快照与差异诊断。
+    /// 同时进入状态哈希、由 `SNAPSHOT_VERSION`（当前 10）定义的快照与差异诊断。
     item_shop: ItemShopState,
     /// P9 / Q2 / Q4 族特色机制顶层权威状态（腐地 / 尸体 / 金矿 / 古树 /
     /// 昼夜相位 / 隐身目标判定 / 月亮井 / 缠绕金矿 / 夜间隐身 + Q4 全量）。
     /// 字段私有，仅本结构可写；全部落 `BTreeMap` / `BTreeSet`
     /// 确定性有序容器、按稳定 `EntityId` 顺序遍历；四处同步进 FNV-1a
-    /// 状态哈希、由 `SNAPSHOT_VERSION`（9）定义的 `Snapshot` 顶层字段、
+    /// 状态哈希、由 `SNAPSHOT_VERSION`（10）定义的 `Snapshot` 顶层字段、
     /// `first_difference()` 与 `restore_snapshot`（ADR 0002 §6-8）。
     /// 迷雾 / 视野可见性 MUST 表现层只读派生，MUST NOT 进本字段 /
     /// 哈希 / 快照 / `first_difference()`（R10.5 / §0.3 T3 / Q2'）。
     faction_mechanics: FactionMechanicsState,
+    /// P18 全量 Melee 机制顶层权威运行态（三类经验机制结算 / 经验阈值分档 /
+    /// 克制矩阵查表 / 买活 / 回购 / leash 归巢计数）。
+    /// 字段私有，仅本结构可写；全落 `BTreeMap` 确定性有序容器、按稳定
+    /// `EntityId` 顺序遍历；四处同步进 FNV-1a 状态哈希、由
+    /// `SNAPSHOT_VERSION`（当前 10）定义的 `Snapshot` 顶层字段、
+    /// `first_difference()` 与 `restore_snapshot`（ADR 0002 §6-8 /
+    /// `CODEBUDDY.md §5` / D1）。机制常量属冻结占位层、MUST NOT 编入
+    /// `compute_defs_hash()`，不改 `content_hash()`（沿用 p17 体例）。
+    melee_mechanisms: MeleeMechanismsState,
 }
 
 /// 技能效果结算上下文：全部为冻结整数输入，不携带闭包或宿主随机源。
@@ -605,6 +622,9 @@ impl RtsMatch {
             creep_camps,
             item_shop: ItemShopState::default(),
             faction_mechanics: FactionMechanicsState::default(),
+            // P18：机制全量顶层权威运行态以空容器初始化，重开无残留
+            // （R11.5 / R12.4 / ADR 0002 §6-8）。
+            melee_mechanisms: MeleeMechanismsState::default(),
         }
     }
 
@@ -644,6 +664,14 @@ impl RtsMatch {
     /// 表现层只能消费 owned 投影，MUST NOT 反写权威状态（ADR 0002 §5）。
     pub fn ability_system_state(&self) -> AbilitySystemState {
         self.gameplay.abilities.clone()
+    }
+
+    /// P18 全量 Melee 机制顶层权威运行态的只读 owned 拷贝（只读投影）。
+    /// 表现层只能消费 owned 投影，MUST NOT 反写权威状态（ADR 0002 §5）；
+    /// 六字段与 `compute_state_hash` / `Snapshot.melee_mechanisms` /
+    /// `first_difference()` 四处同步一致（D1 / D5）。
+    pub fn melee_mechanisms_state(&self) -> MeleeMechanismsState {
+        self.melee_mechanisms.clone()
     }
 
     pub fn config(&self) -> MatchConfig {
@@ -827,6 +855,18 @@ impl RtsMatch {
                 if !self.is_actionable(entity, command.player_id) {
                     return;
                 }
+                // P18 / R1.4：命令分发处命中定义层可移动性过滤（只读派生，
+                // 不进权威状态 / 哈希 / 快照）。金矿 / 树木 / 建筑 / 资源点
+                // 等不可移动实体 MUST NOT 响应 `Move`、MUST NOT 改变位置；
+                // 判据用运行时权威 `UnitState.speed`（由定义层
+                // `UnitDef.speed_raw` 投影，`speed == 0` 即不可移动），
+                // MUST NOT 用建筑名字符串 / DefId 白名单（R1.2 / R13.3）。
+                // frame-0 `Spawn` 校验 speed > 0，故本判据只作用于运行时
+                // 动态实体，框选含建筑时只给可移动单位生成 `Move`（D7）。
+                // 机制全量 / leash / 回购落地 MUST NOT 借新命令旁路此过滤。
+                if !self.is_movable_entity(entity) {
+                    return;
+                }
                 if append {
                     if let Some(unit) = self.units.get_mut(&entity) {
                         if unit.pending.len() < MAX_PENDING_ORDERS {
@@ -907,6 +947,24 @@ impl RtsMatch {
                         .iter()
                         .any(|buff| buff.kind == EffectKind::Stun && buff.remaining > 0)
             })
+    }
+
+    /// P18 / R1.4 定义层可移动性只读判据：`speed == 0` 的实体（建筑 /
+    /// 资源点 / 金矿 / 树木）MUST NOT 响应 `Move`。
+    ///
+    /// 判据只读权威 `UnitState.speed`（由定义层 `UnitDef.speed_raw` 在
+    /// `complete_production` 投影写入），由定义层数据驱动、MUST NOT 用
+    /// 建筑名字符串或 DefId 白名单（R1.2 / R13.3 / D7）。此判据是表现层
+    /// 输入翻译层只读派生的内核等价物，**不新增 / 不改写**任何权威状态
+    /// 字段、不进状态哈希 / 快照 / `first_difference()`（ADR 0002 / D7
+    /// 「零影响」）。frame-0 `Spawn` 已校验 `speed > 0`，故 frame-0 装配
+    /// 实体恒可移动、不受本判据影响；运行时动态实体按 `speed == 0` 判定。
+    /// 群体规划提交（`advance_group_plans`）与野怪 leash（`run_creep_ai`）
+    /// 复用同一 `assign_move` 面时，野怪 speed > 0、归巢路径不受影响。
+    fn is_movable_entity(&self, entity: EntityId) -> bool {
+        self.units
+            .get(&entity)
+            .is_some_and(|unit| unit.speed.raw() != 0)
     }
 
     fn obstacle_in_bounds(&self, area: GridArea) -> bool {
@@ -1219,6 +1277,19 @@ impl RtsMatch {
             if isqrt((dx as i128) * (dx as i128) + (dy as i128) * (dy as i128)) > range as i128 {
                 continue;
             }
+            // P18 R5.3：攻击类型 × 护甲类型二维克制矩阵查表（编译期合成
+            // 占位 `[待核]`，结构对齐登记、不冒充倍率已核实）。类型码由稳定
+            // `EntityId` 确定性派生（纯整数、零文件 IO、干净环境可构造），
+            // 二维查表产出按 `(攻击方, 受击方)` 稳定键登记进权威运行态，
+            // 进哈希 / 快照 / `first_difference()` 四处同步；MUST NOT 把
+            // 合成占位倍率反写实际伤害数值（p17 攻击结算行为保持，D1 / G4）。
+            let attack_code = (attacker.value() % ATTACK_TYPE_COUNT as u64) as usize;
+            let armor_code = (target.value() % ARMOR_TYPE_COUNT as u64) as usize;
+            let ratio_percent = synthetic_damage_ratio(attack_code, armor_code);
+            let damage_outcome = scale_damage_by_ratio(damage, ratio_percent);
+            self.melee_mechanisms
+                .damage_outcomes
+                .insert((attacker, target), damage_outcome);
             // 单一结算所有者：攻击不得绕过 Settlement 直接改权威生命值。
             let outcome = self.apply_effect(
                 target,
@@ -2287,8 +2358,14 @@ impl RtsMatch {
             self.reject_item_command(frame, hero, 0);
             return;
         }
-        let shop_ok =
-            self.defs.item_shop().shop(shop).is_some() && self.defs.item_shop().is_shop_def(shop);
+        // P18 R7.4：固定回购比例 + 交互距离（编译期合成占位 `[待核]`）。
+        // 交互距离判据由冻结商店表的整数坐标驱动，`within_radius` 用
+        // `isqrt` 整数数学，MUST NOT 用 `f64` / 墙钟（ADR 0002 §1）。
+        let shop_pos = self.defs.item_shop().shop(shop).map(|f| (f.x, f.y));
+        let shop_ok = shop_pos.is_some() && self.defs.item_shop().is_shop_def(shop);
+        let radius_ok = shop_pos.is_some_and(|(x, y)| {
+            self.within_radius(hero, x, y, SYNTHETIC_REPURCHASE_INTERACT_RADIUS_RAW)
+        });
         let bag = self.item_bag(hero);
         let Some(slot) = bag.slot_of(instance_id) else {
             self.reject_item_command(frame, hero, shop);
@@ -2306,7 +2383,8 @@ impl RtsMatch {
             self.reject_item_command(frame, hero, shop);
             return;
         };
-        if !shop_ok || instance.holder != Some(hero) {
+        // P18 R7.4：距离外拒单不改资源 / 背包 / 实例（R9.3 / 显式拒单）。
+        if !shop_ok || !radius_ok || instance.holder != Some(hero) {
             self.reject_item_command(frame, hero, shop);
             return;
         }
@@ -2317,6 +2395,15 @@ impl RtsMatch {
         self.item_shop.bags.insert(hero, bag);
         let economy = self.gameplay.players.entry(player).or_default();
         economy.gold = economy.gold.saturating_add(price);
+        // P18 R7.4：固定回购比例 + 交互距离成交登记进权威运行态
+        // （按稳定实例 EntityId，进哈希 / 快照 / `first_difference()` 四处）。
+        self.melee_mechanisms.repurchases.insert(
+            instance_id,
+            RepurchaseRecord {
+                price,
+                ratio_percent: SYNTHETIC_REPURCHASE_RATIO_PERCENT,
+            },
+        );
         self.record_item_fact(
             frame,
             ItemShopFactKind::Sell,
@@ -3031,6 +3118,11 @@ impl RtsMatch {
                 self.learn_ability(hero, ability, player)
             }
             GameplayCommandKind::LevelUpHero { hero } => self.level_up_hero(hero, player),
+            // P18 唯一新增变体穷尽分发：酒馆买活走独立结算路径，与祭坛
+            // `ReviveHero` 的队列 / 满血满蓝参数分离（R6.3 / D4）。
+            GameplayCommandKind::BuybackHero { hero, tavern } => {
+                self.submit_buyback(hero, tavern, player, frame)
+            }
         }
     }
 
@@ -3239,6 +3331,103 @@ impl RtsMatch {
         unit.path_index = 0;
         unit.blocked_frames = 0;
         unit.group = 0;
+        self.push_event(frame, hero, EventKind::Revived);
+    }
+
+    // -----------------------------------------------------------------------
+    // P18 / R6.3 酒馆买活（祭坛复活与买活参数 / 命令分离，D1 / G4）
+    // -----------------------------------------------------------------------
+
+    /// 酒馆买活即时结算（与祭坛 `submit_revive` / `complete_revive` 分离）。
+    ///
+    /// 费用 / 时间读独立的 `BuybackConstants`「基数 + 等级系数 → 绝对上限」
+    /// 公式（`i128` 中间量、整数截断、无浮点、上限处不越界无负值），
+    /// MUST NOT 串用祭坛 `ReviveConstants` 的费用或 100% 恢复百分比；
+    /// 买活英雄以半血无蓝入场，祭坛复活不受该参数影响（R6.3 / R9.3）。
+    /// 校验失败显式拒单（no-op），不改变任何权威状态、不静默免费复活。
+    fn submit_buyback(&mut self, hero: EntityId, tavern: EntityId, player: u8, frame: Frame) {
+        // 酒馆实体存活即可（可为中立建筑，合成占位不引入酒馆名 / rawcode
+        // 白名单；R1.2 数据驱动）。英雄归属 / 阵亡登记在下方单独校验。
+        let tavern_pos = self
+            .units
+            .get(&tavern)
+            .filter(|unit| unit.alive)
+            .map(|unit| (unit.x, unit.y));
+        let Some((tavern_x, tavern_y)) = tavern_pos else {
+            return;
+        };
+        // 英雄实体阵亡、归属本族、已登记死亡，且不在祭坛复活队列。
+        let hero_ok = self.units.get(&hero).is_some_and(|unit| {
+            !unit.alive && unit.owner == player && unit.gameplay.hero.is_some()
+        });
+        if !hero_ok
+            || self.revive.queue.contains_key(&hero)
+            || !self.revive.deaths.contains_key(&hero)
+        {
+            return;
+        }
+        let level = self
+            .revive
+            .deaths
+            .get(&hero)
+            .and_then(|record| record.gameplay.hero.map(|state| state.level))
+            .unwrap_or(1);
+        let cost = buyback_cost(level);
+        {
+            let economy = self.gameplay.players.entry(player).or_default();
+            if economy.gold < cost.gold || economy.lumber < cost.lumber {
+                return;
+            }
+            economy.gold -= cost.gold;
+            economy.lumber -= cost.lumber;
+        }
+        let Some(death) = self.revive.deaths.remove(&hero) else {
+            return;
+        };
+        // 费用已消耗：清掉可能残留的祭坛扣费登记，不重复退款。
+        self.revive.charges.remove(&hero);
+        let Some(unit) = self.units.get_mut(&hero) else {
+            return;
+        };
+        unit.alive = true;
+        // 半血无蓝：只受独立的买活合成常量驱动（R6.3）。
+        unit.hp = restore_by_percent(death.max_hp, SYNTHETIC_BUYBACK_HP_PERCENT);
+        unit.gameplay = death.gameplay;
+        unit.gameplay.mana =
+            restore_by_percent(unit.gameplay.max_mana, SYNTHETIC_BUYBACK_MANA_PERCENT);
+        unit.x = tavern_x;
+        unit.y = tavern_y;
+        // 沿用阵亡时的订单 / 路径清理语义，不删实体、不判负。
+        unit.order = Order::Idle;
+        unit.pending.clear();
+        unit.goal = None;
+        unit.path.clear();
+        unit.path_index = 0;
+        unit.blocked_frames = 0;
+        unit.group = 0;
+        // P18：P8.5d 六格实例背包按实例 EntityId 身份恢复（同祭坛语义，
+        // 与买活参数分离无关），不刷新充能 / 冷却。
+        if let Some(bag) = self.item_shop.death_bags.remove(&hero) {
+            for (slot, slot_instance) in bag.slots.iter().enumerate() {
+                if let Some(instance_id) = slot_instance {
+                    if let Some(instance) = self.creep_camps.item_instances.get_mut(instance_id) {
+                        instance.holder = Some(hero);
+                        instance.slot = Some(slot as u8);
+                    }
+                }
+            }
+            self.item_shop.bags.insert(hero, bag);
+        }
+        self.melee_mechanisms.buybacks.insert(
+            hero,
+            BuybackRecord {
+                hp_percent: SYNTHETIC_BUYBACK_HP_PERCENT,
+                mana_percent: SYNTHETIC_BUYBACK_MANA_PERCENT,
+                gold: cost.gold,
+                lumber: cost.lumber,
+                frames: cost.frames,
+            },
+        );
         self.push_event(frame, hero, EventKind::Revived);
     }
 
@@ -3927,11 +4116,20 @@ impl RtsMatch {
                     }
                 }
                 LeashPhase::Returning => {
+                    // P18 R8.5：归巢判据由冻结 `[待核]` 合成常量
+                    // `return_threshold_raw` / `leash_radius_raw` 驱动，
+                    // 越界即 RETURNING、回 home 阈值内恢复 IDLE，
+                    // MUST NOT 无限追出营地；三级状态机为权威运行态按
+                    // 稳定 EntityId 顺序进哈希 / 快照 / `first_difference()`。
                     if home_distance <= constants.return_threshold_raw as i128 {
                         if let Some(creep) = self.creep_camps.creeps.get_mut(&id) {
                             creep.phase = LeashPhase::Idle;
                             creep.target = None;
                         }
+                        // 归巢完成计数（按稳定 EntityId，进 P18 新增顶层
+                        // 权威运行态，四处同步，供逐帧哈希 / 快照一致性验证）。
+                        let count = self.melee_mechanisms.leash_returns.entry(id).or_insert(0);
+                        *count = count.saturating_add(1);
                         self.stop_unit(id);
                         self.push_event(frame, id, EventKind::CreepLeashReturned);
                     } else if frame.value() % period == 0 {
@@ -4031,6 +4229,50 @@ impl RtsMatch {
                     xp_candidates.insert(id);
                 }
             }
+            // P18 三类经验机制（R6.1 / R6.5）生产结算路径消费者：
+            // 建筑击杀布尔开关、召唤物击杀折减因子、按英雄等级分档递减的
+            // 经验因子查表。三者为编译期合成整数常量 `[待核]`，消费者 MUST
+            // 落在 `xp_candidates` 结算附近（p17 R3 缺口，MUST NOT 仅被测试
+            // 引用）；但作用结果只登记进 P18 新增顶层权威运行态，MUST NOT
+            // 改写「集合内均分入账」的 `xp_credited` / `state.xp` 数值
+            // （p17 已锁定行为 / R6.5 / `verified_mechanisms.rs`）。
+            let killer_is_building = notice.killer != EntityId::NONE
+                && self
+                    .units
+                    .get(&notice.killer)
+                    .is_some_and(|unit| unit.speed.raw() == 0);
+            let killer_is_summon = notice.killer != EntityId::NONE
+                && self.gameplay.abilities.summons.contains_key(&notice.killer);
+            let building_switch = MECHANISM_BUILDING_XP_SWITCH;
+            let summon_factor_percent = if killer_is_summon {
+                MECHANISM_SUMMON_XP_FACTOR
+            } else {
+                100
+            };
+            // 「进入分摊集合」与「经验入账」两环节分离：按稳定 EntityId
+            // 顺序对候选集合查等级分档递减因子（不改集合、不改均分数值）。
+            let mut tier_factors = BTreeMap::new();
+            for &hero in &xp_candidates {
+                let level = self
+                    .units
+                    .get(&hero)
+                    .and_then(|unit| unit.gameplay.hero.map(|state| state.level))
+                    .unwrap_or(0);
+                tier_factors.insert(hero, synthetic_hero_level_xp_factor(level));
+            }
+            // 机制调整后经验池：先由建筑击杀布尔开关门控，再按召唤物折减
+            // 因子缩放；`i128` 中间量、整数截断、无浮点（ADR 0002 §1）。
+            let base_total = i128::from(script.xp.max(0))
+                * i128::from(constants.hero_level_xp_factor.max(0))
+                / 100;
+            let gated_total = if building_switch == 0 && killer_is_building {
+                0
+            } else {
+                base_total
+            };
+            let adjusted_xp_total = (gated_total * i128::from(summon_factor_percent.max(0)) / 100)
+                .clamp(0, i128::from(i64::MAX)) as i64;
+
             // R6.5 第二环节：实际入账（整数分摊 + 等级因子，不反写表现层）。
             // 2026-11-26 按 `WC3-MELEE-RULES.md §14` 核对：满级英雄参与分摊
             // （见 §15）；集合内英雄统一均分入账（R6.5）。
@@ -4048,6 +4290,32 @@ impl RtsMatch {
                     xp_credited.insert(hero, share);
                 }
             }
+            // R6.1 经验阈值分档运行态：按冻结 `[待核]` 分档常量从入账后的
+            // 累计经验确定档位，按稳定 EntityId 顺序登记；MUST NOT 改
+            // `HeroState.level` 命令面（p11 升级回归保持）。
+            for &hero in &xp_candidates {
+                let tier = self
+                    .units
+                    .get(&hero)
+                    .and_then(|unit| {
+                        unit.gameplay
+                            .hero
+                            .map(|state| synthetic_level_tier(state.xp))
+                    })
+                    .unwrap_or(1);
+                self.melee_mechanisms.hero_tiers.insert(hero, tier);
+            }
+            // 三类机制结算登记（按稳定 EntityId = 被击杀野怪，确定性幂等：
+            // `death_processed` 保证每只野怪只结算一次）。
+            self.melee_mechanisms.xp_settlements.insert(
+                creep,
+                XpSettlementRecord {
+                    building_switch,
+                    summon_factor_percent,
+                    tier_factors,
+                    adjusted_xp_total,
+                },
+            );
 
             // R8.3 金币给击杀方（MUST NOT 由表现层反写 `PlayerEconomy.gold`）。
             let gold = if notice.killer_owner == NEUTRAL_OWNER {
@@ -4391,6 +4659,11 @@ impl RtsMatch {
         // 按稳定 EntityId 顺序遍历（ADR 0002 §6 / CODEBUDDY.md §5）。
         // fog 可见性 MUST NOT 进入哈希（R10.5 / §0.3 T3）。
         self.faction_mechanics.hash(&mut hasher);
+        // P18：全量 Melee 机制顶层权威运行态（三类经验机制结算 / 阈值分档 /
+        // 克制矩阵查表 / 买活 / 回购 / leash 归巢计数）必须进入哈希；
+        // 六字段经 `MeleeMechanismsState::hash` 按稳定 EntityId 顺序编码，
+        // 漏接任一字段 MUST 在反向验证中验红（ADR 0002 §6 / D1 / D5）。
+        self.melee_mechanisms.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -4472,6 +4745,15 @@ impl RtsMatch {
         if let Some(field) = self
             .faction_mechanics
             .first_difference(&other.faction_mechanics)
+        {
+            return Some(field);
+        }
+        // P18：全量 Melee 机制顶层权威运行态按同一稳定顺序定位首个差异
+        // 字段（六字段独立诊断名），漏接任一字段 MUST 在反向验证中验红
+        // （ADR 0002 §6 / CODEBUDDY.md §5 / D1 / D5）。
+        if let Some(field) = self
+            .melee_mechanisms
+            .first_difference(&other.melee_mechanisms)
         {
             return Some(field);
         }
@@ -4569,10 +4851,14 @@ impl RtsMatch {
             // 恢复后从 N+1 继续不残留、不重复购买或刷新（ADR 0002 §6-8 / R11.5）。
             item_shop: self.item_shop.clone(),
             // P9 / Q2 / Q4：帧 N 提交后的完整状态 MUST 含族特色机制顶层
-            // 权威状态（由 SNAPSHOT_VERSION = 9 定义的 Snapshot 顶层字段），
+            // 权威状态（由 SNAPSHOT_VERSION = 10 定义的 Snapshot 顶层字段），
             // 恢复后从 N+1 继续不残留、不重复结算（ADR 0002 §6-8）。
             // fog 可见性 MUST NOT 进入快照（R10.5 / §0.3 T3）。
             faction_mechanics: self.faction_mechanics.clone(),
+            // P18：帧 N 提交后的完整状态 MUST 含全量 Melee 机制顶层权威
+            // 运行态（六字段全落 BTreeMap 稳定序），恢复后从 N+1 继续
+            // 不残留、不重复结算（ADR 0002 §6-8 / D1 / D5 / R12.4）。
+            melee_mechanisms: self.melee_mechanisms.clone(),
         }
     }
 
@@ -4721,16 +5007,19 @@ impl RtsMatch {
             events: Vec::new(),
             next_event_seq: snapshot.next_event_seq,
             defs: snapshot.defs.clone(),
-            // P11：从 v9 快照恢复技能权威运行态；五重头部校验通过后，
+            // P11：从 v10 快照恢复技能权威运行态；五重头部校验通过后，
             // 克隆完整 `WorldGameplayState` 即可逐帧哈希与销毁前一致。
             gameplay: snapshot.gameplay.clone(),
             revive: snapshot.revive.clone(),
             town_hall: snapshot.town_hall.clone(),
             creep_camps: snapshot.creep_camps.clone(),
             item_shop: snapshot.item_shop.clone(),
-            // P9 / Q2 / Q4：从 v9 快照恢复族特色机制顶层权威状态，
+            // P9 / Q2 / Q4：从 v10 快照恢复族特色机制顶层权威状态，
             // 逐帧哈希与销毁前一致（ADR 0002 §6-8 / Q3）。
             faction_mechanics: snapshot.faction_mechanics.clone(),
+            // P18：从快照恢复全量 Melee 机制顶层权威运行态，四处同步，
+            // 逐帧哈希与销毁前一致（ADR 0002 §6-8 / D1 / D3）。
+            melee_mechanisms: snapshot.melee_mechanisms.clone(),
         })
     }
 }
@@ -5067,12 +5356,12 @@ mod tests {
     }
 
     /// 确定性零冲击：同一对局序列的两个同构实例逐帧哈希 / 快照 / 只读视图一致，
-    /// 快照版本为 9（P9 新增族特色机制顶层权威状态），只读视图消费与快照往返均不
-    /// 改变权威状态。
+    /// 快照版本为 10（P18 新增全量 Melee 机制顶层权威状态；族特色机制由 P9 引入），
+    /// 只读视图消费与快照往返均不改变权威状态。
     #[test]
     fn readonly_speed_projection_has_zero_hash_and_snapshot_impact() {
-        assert_eq!(SNAPSHOT_VERSION, 9, "snapshot version must be 9");
-        assert_eq!(SIM_VERSION, 9, "sim version must be 9");
+        assert_eq!(SNAPSHOT_VERSION, 10, "snapshot version must be 10");
+        assert_eq!(SIM_VERSION, 10, "sim version must be 10");
 
         let (defs, _, _) = movability_defs();
         let config = MatchConfig {
@@ -5146,9 +5435,12 @@ mod tests {
         let snapshot = a.capture_snapshot();
         assert_eq!(
             snapshot.version, SNAPSHOT_VERSION,
-            "snapshot version must stay 9"
+            "snapshot version must stay 10"
         );
-        assert_eq!(snapshot.sim_version, SIM_VERSION, "sim version must stay 9");
+        assert_eq!(
+            snapshot.sim_version, SIM_VERSION,
+            "sim version must stay 10"
+        );
         assert_eq!(
             snapshot.defs_hash,
             defs.content_hash(),

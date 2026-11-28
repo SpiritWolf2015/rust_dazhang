@@ -99,6 +99,27 @@
 //! 其它 CPU 架构（ARM64 等）与其它 rustc 版本的逐字节离线比对仍待 VM / 人工
 //! 执行**，不得据本记录扩大为跨平台确定性结论或声称本 change 有新验证
 //! 结论（Q6 / Q8）；不声称 Debian 12 侧 v4–v9 逐字节比对已完成。
+//!
+//! P18 基线重取（Q1 / Q2 / Q3 / tasks 3.3；ADR 0002 §6-7 / D1 / D3）：
+//! P18 新增顶层权威状态 `melee_mechanisms`（六字段稳定序）经
+//! `MeleeMechanismsState::hash` 进入 `compute_state_hash()`，逐帧哈希布局
+//! 因此实质变化、基线必变、不沿用 P11 v9 值 `0x240467029c2b423c`、不声称
+//! 逐字节不变；`BuybackHero` 为唯一新增玩法命令变体。诚实说明：`SNAPSHOT_VERSION`
+//! / `SIM_VERSION` bump 9→10 是配套版本门禁，版本号常量本身 MUST NOT 进入
+//! `compute_state_hash()`（哈希参与字段固定，ADR 0002 §6），故基线变化的
+//! 主因是新增权威运行态字段、不是版本号字面量。机制常量属编译期合成
+//! 占位层、MUST NOT 编入 `compute_defs_hash()`，不改 `content_hash()`。
+//! 本文件输出格式未变，`GOLDEN_SCHEMA` 仍为 `golden-hash/1`；记录值仅作
+//! 人工比对留档，不作自动断言。
+//!
+//! Windows 侧（Windows 11 / x86_64 / rustc 1.99.1）按 v10 实现重取：
+//! - 41 行 / 1371 字节，`final_hash=0x313ebf22ede567ef`；
+//! - 整份文本 sha256 `39b9c82c958109807c8930807cc30d1f8ba2b3f3b9ec1152ddd12f07aa2e969c`。
+//! 上文 P11 的 `final_hash=0x240467029c2b423c` 已失效、不沿用、不声称逐字节
+//! 不变。**Debian 12 x86_64 侧 v4 / v5 / v6 / v7 / v8 / v9 / v10、macOS、
+//! 其它 CPU 架构（ARM64 等）与其它 rustc 版本的逐字节离线比对仍待 VM / 人工
+//! 执行**，不得据本记录扩大为跨平台确定性结论或声称本 change 有新验证
+//! 结论；不声称 Debian 12 侧 v4–v10 逐字节比对已完成。
 
 use w3_core::{
     Command, CommandKind, EntityId, Frame, MatchConfig, RtsMatch, SimFixed, StaticWorld,

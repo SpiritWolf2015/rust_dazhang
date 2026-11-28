@@ -27,6 +27,10 @@
 //! `EffectKind` 稳定码只追加 4–12 并继续沿用 `EffectDef.effect_kind`
 //! 的 uint32 字段（`reserved 4 to 8` 不动）；既有 1–36 kind 码与
 //! tag 33–58 编码逐字节不变（ADR 0005 §3）。
+//! `PROTOCOL_VERSION = 10` 再只追加 P18 酒馆买活命令 1 个变体
+//! （tag 64，kind 码 42），玩法变体累计 42 类；两个 EntityId 字段
+//! 均用 uint64 的 value() 无损承载、解码无符号不溢出；既有 1–41
+//! kind 码与 tag 33–63 编码逐字节不变（ADR 0005 §3）。
 
 use prost::Message;
 use w3_core::{
@@ -256,10 +260,10 @@ fn from_pb_kind(kind: pb::command::Kind) -> CommandKind {
 }
 
 // ---------------------------------------------------------------------------
-// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（41 变体）
+// 玩法命令：to_pb_gameplay_kind / from_pb_gameplay_kind 双向穷尽映射（42 变体）
 // ---------------------------------------------------------------------------
 
-/// 把 41 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
+/// 把 42 类 `GameplayCommandKind` 映射为 protobuf `GameplayCommand.kind` oneof；穷尽匹配。
 pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::Kind {
     match *kind {
         GameplayCommandKind::Cast {
@@ -544,10 +548,21 @@ pub fn to_pb_gameplay_kind(kind: &GameplayCommandKind) -> pb::gameplay_command::
         GameplayCommandKind::LevelUpHero { hero } => {
             pb::gameplay_command::Kind::LevelUpHero(pb::GameplayLevelUpHero { hero: hero.value() })
         }
+        // P18 / PROTOCOL_VERSION 10 唯一新增玩法命令变体（tag 64，kind 码 42）：
+        // 酒馆买活两个字段均为 EntityId，一律用 uint64 的 value() 无损承载，
+        // 解码侧无符号不溢出；语义合法性（hero / tavern 非 NONE）由 w3-core
+        // 同源校验承担，线格式层只忠实传输、不猜测、不回退。一个变体对应
+        // 一个 proto tag、不合并、不复用（ADR 0005 §3）。
+        GameplayCommandKind::BuybackHero { hero, tavern } => {
+            pb::gameplay_command::Kind::BuybackHero(pb::GameplayBuybackHero {
+                hero: hero.value(),
+                tavern: tavern.value(),
+            })
+        }
     }
 }
 
-/// 把 protobuf `GameplayCommand.kind` oneof 还原为 41 类 `GameplayCommandKind`；穷尽匹配。
+/// 把 protobuf `GameplayCommand.kind` oneof 还原为 42 类 `GameplayCommandKind`；穷尽匹配。
 /// 缺 `kind` / 缺 `effect` / 未知效果码 / 未知等级 / 数值溢出一律显式返回 `NetError`，
 /// 不猜测、不回退。
 pub fn from_pb_gameplay_kind(
@@ -765,6 +780,13 @@ pub fn from_pb_gameplay_kind(
         },
         pb::gameplay_command::Kind::LevelUpHero(m) => GameplayCommandKind::LevelUpHero {
             hero: entity_from_raw(m.hero),
+        },
+        // P18 / PROTOCOL_VERSION 10 唯一新增变体（tag 64）：uint64 -> EntityId
+        // 均为无损定宽映射，无收窄溢出分支；语义合法性（hero / tavern 非 NONE）
+        // 由 w3-core 同源校验承担，线格式层只忠实还原字段、不猜测、不回退。
+        pb::gameplay_command::Kind::BuybackHero(m) => GameplayCommandKind::BuybackHero {
+            hero: entity_from_raw(m.hero),
+            tavern: entity_from_raw(m.tavern),
         },
     })
 }
@@ -1824,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_appends_only_tags_33_through_63_and_preserves_reserved() {
+    fn schema_appends_only_tags_33_through_64_and_preserves_reserved() {
         let schema = include_str!("proto/w3net.proto");
         assert!(schema.contains("reserved 14 to 32;"));
         assert!(schema.contains("message GameplayReviveHero {"));
@@ -1866,8 +1888,8 @@ mod tests {
         assert!(schema.contains("uint32 shop = 1;"));
         assert!(schema.contains("uint32 batch = 2;"));
         // 只追加：解析玩法 oneof 的全部 tag，必须恰好是既有 4–13 加
-        // 33 / 34 / 35 / 36、P8.5d 的 37–45、P9 的 46–58，再追加
-        // P11 的 59–63（reserved 段跳过），既有 tag 编号与顺序一个不动。
+        // 33 / 34 / 35 / 36、P8.5d 的 37–45、P9 的 46–58、P11 的 59–63，
+        // 再追加 P18 的 64（reserved 段跳过），既有 tag 编号与顺序一个不动。
         let oneof = schema
             .split("oneof kind {")
             .nth(2)
@@ -1887,9 +1909,9 @@ mod tests {
             tags,
             vec![
                 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
-                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63
+                45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64
             ],
-            "oneof tags must be append-only (4-13 + 33-36 + 37-45 + 46-58 + 59-63)"
+            "oneof tags must be append-only (4-13 + 33-36 + 37-45 + 46-58 + 59-63 + 64)"
         );
         // 新消息尾部保留 reserved；既有编号段零改动。
         assert!(schema.contains("reserved 5 to 8;"));
@@ -2509,8 +2531,8 @@ mod tests {
             }
         }
         // 字段编号只追加：reserved 14 to 32 原样保留、tag 36 唯一；
-        // PROTOCOL_VERSION 9 追加 tag 59–63 后，下一个空闲 tag 是 64，
-        // 因此断言「不存在 = 64;」维持「只追加、顶点之后留空」的边界语义。
+        // P18 / PROTOCOL_VERSION 10 追加 tag 64 后，下一个空闲 tag 是 65，
+        // 因此断言「不存在 = 65;」维持「只追加、顶点之后留空」的边界语义。
         assert!(schema.contains("reserved 14 to 32;"));
         assert_eq!(
             schema
@@ -2519,7 +2541,7 @@ mod tests {
             1,
             "tag 36 must be appended exactly once"
         );
-        assert!(!schema.contains("= 64;"));
+        assert!(!schema.contains("= 65;"));
     }
 
     // ---- PROTOCOL_VERSION 7：P8.5d 九个玩法变体的线格式回归 ----
@@ -2807,7 +2829,7 @@ mod tests {
         assert!(schema.contains("uint32 shop = 1;"));
         assert!(schema.contains("uint32 batch = 2;"));
         // 字段编号只追加：reserved 14 to 32 原样保留、tag 37–45 各唯一、
-        // P9 追加 tag 46–58、P11 追加 tag 59–63 后 tag 64 留空。
+        // P9 追加 tag 46–58、P11 追加 tag 59–63、P18 追加 tag 64 后 tag 65 留空。
         assert!(schema.contains("reserved 14 to 32;"));
         for (name, tag) in [
             ("pickup_ground_item", 37),
@@ -2826,7 +2848,7 @@ mod tests {
                 "tag {tag} ({name}) must be appended exactly once"
             );
         }
-        assert!(!schema.contains("= 64;"));
+        assert!(!schema.contains("= 65;"));
         // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码，
         // 避免把「禁止 float」这类说明文字算成声明字段。
         for line in schema.lines() {
@@ -3286,7 +3308,7 @@ mod tests {
         assert!(schema.contains("int64 restore = 2;"));
         assert!(schema.contains("uint32 condition = 2;"));
         // 只追加：reserved 14 to 32 原样保留、tag 46–58 各唯一、
-        // P11 追加 tag 59–63 后 tag 64 留空。
+        // P11 追加 tag 59–63、P18 追加 tag 64 后 tag 65 留空。
         assert!(schema.contains("reserved 14 to 32;"));
         for (name, tag) in [
             ("seed_blight", 46),
@@ -3309,7 +3331,7 @@ mod tests {
                 "tag {tag} ({name}) must be appended exactly once"
             );
         }
-        assert!(!schema.contains("= 64;"));
+        assert!(!schema.contains("= 65;"));
         // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码。
         for line in schema.lines() {
             let code = line.split("//").next().unwrap_or("");
@@ -3489,7 +3511,7 @@ mod tests {
         assert!(schema.contains("uint32 effect_kind = 1;"));
         assert!(schema.contains("int64 amount = 2;"));
         assert!(schema.contains("reserved 4 to 8;"));
-        // 只追加：reserved 14 to 32 原样保留、tag 59–63 各唯一、tag 64 留空。
+        // 只追加：reserved 14 to 32 原样保留、tag 59–63 各唯一、P18 追加 tag 64 后 tag 65 留空。
         assert!(schema.contains("reserved 14 to 32;"));
         for (name, tag) in [
             ("cast_point", 59),
@@ -3504,7 +3526,7 @@ mod tests {
                 "tag {tag} ({name}) must be appended exactly once"
             );
         }
-        assert!(!schema.contains("= 64;"));
+        assert!(!schema.contains("= 65;"));
         // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码。
         for line in schema.lines() {
             let code = line.split("//").next().unwrap_or("");
@@ -3605,6 +3627,299 @@ mod tests {
             let (_, one_decoded) = decode_commands(&one).unwrap();
             assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
         }
+    }
+
+    // ---- PROTOCOL_VERSION 10：P18 酒馆买活 BuybackHero 变体的线格式回归 ----
+
+    /// P18 唯一新增变体的样本：覆盖 uint64 边界值，两个 EntityId 字段
+    /// 均为无损定宽映射（hero / tavern 非 NONE，语义合法）。
+    fn sample_p18_gameplay() -> Vec<GameplayCommand> {
+        vec![
+            GameplayCommand::new(
+                Frame::new(45),
+                1,
+                1,
+                GameplayCommandKind::BuybackHero {
+                    hero: entity_from_raw(30),
+                    tavern: entity_from_raw(31),
+                },
+            ),
+            GameplayCommand::new(
+                Frame::new(46),
+                2,
+                2,
+                GameplayCommandKind::BuybackHero {
+                    hero: entity_from_raw(u64::MAX),
+                    tavern: entity_from_raw(u64::MAX),
+                },
+            ),
+        ]
+    }
+
+    /// 手工拼装 `GameplayBuybackHero` 载荷（2 个 uint64 字段，仅测试用）。
+    fn buyback_hero_payload(hero: u64, tavern: u64) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend(field_varint(1, hero));
+        payload.extend(field_varint(2, tavern));
+        payload
+    }
+
+    #[test]
+    fn p18_buyback_hero_roundtrip_is_canonical() {
+        let gameplay = sample_p18_gameplay();
+        let first = encode_commands(&[], &gameplay).unwrap();
+        let second = encode_commands(&[], &gameplay).unwrap();
+        assert_eq!(first, second, "two encodes must be byte-identical");
+        let (commands, decoded) = decode_commands(&first).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            first,
+            "decode -> encode must be canonical"
+        );
+        // 逐条单独往返，避免批量编码掩盖某个字段的歧义映射。
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    /// tag 64 / wire 2 的 key varint：(64<<3)|2 = 514 -> [0x82,0x04]。
+    #[test]
+    fn p18_variant_uses_wire_tag_64() {
+        let sample = sample_p18_gameplay();
+        let bytes = encode_commands(&[], &sample[..1]).unwrap();
+        assert!(
+            bytes.windows(2).any(|w| w == &[0x82, 0x04][..]),
+            "BuybackHero must be encoded on tag 64"
+        );
+        // 反向断言：绝不误编码到既有 tag 63（LevelUpHero）的 wire key。
+        assert!(
+            !bytes.windows(2).any(|w| w == &[0xfa, 0x03][..]),
+            "BuybackHero must not reuse tag 63"
+        );
+        let (_, decoded) = decode_commands(&bytes).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].kind, sample[0].kind);
+    }
+
+    #[test]
+    fn p18_schema_keeps_canonical_constraints() {
+        let schema = include_str!("proto/w3net.proto");
+        assert!(schema.contains("message GameplayBuybackHero {"));
+        assert!(schema.contains("GameplayBuybackHero buyback_hero = 64;"));
+        assert!(schema.contains("uint64 hero = 1;"));
+        assert!(schema.contains("uint64 tavern = 2;"));
+        assert!(schema.contains("reserved 3 to 8;"));
+        assert!(schema.contains("reserved 14 to 32;"));
+        assert_eq!(
+            schema.matches("= 64;").count(),
+            1,
+            "tag 64 must be appended exactly once"
+        );
+        // 只追加：顶点之后下一个 tag 65 仍留空。
+        assert!(!schema.contains("= 65;"));
+        // 禁 map / 禁 float / 禁 double：只看去掉行内注释后的代码。
+        for line in schema.lines() {
+            let code = line.split("//").next().unwrap_or("");
+            for forbidden in ["map<", "float", "double"] {
+                assert!(
+                    !code.contains(forbidden),
+                    "schema must not declare {forbidden}: {line}"
+                );
+            }
+        }
+        // 线格式只传玩家输入命令，MUST NOT 承载权威状态 / 快照 / fog 可见性。
+        for forbidden in [
+            "message Snapshot",
+            "message WorldState",
+            "fog_visibility",
+            "state_hash",
+        ] {
+            assert!(
+                !schema.contains(forbidden),
+                "wire must not carry state: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn p18_unknown_fields_are_dropped_not_echoed() {
+        let gameplay = sample_p18_gameplay();
+        let mut bytes = encode_commands(&[], &gameplay).unwrap();
+        // 追加一个合法但未知字段（field 1000, varint 0）。
+        bytes.extend_from_slice(&[0xc0, 0x3e, 0x00]);
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        let reencoded = encode_commands(&commands, &decoded).unwrap();
+        assert!(
+            !reencoded.ends_with(&[0xc0, 0x3e, 0x00]),
+            "unknown fields must not be echoed"
+        );
+        assert_eq!(reencoded, encode_commands(&[], &gameplay).unwrap());
+    }
+
+    #[test]
+    fn p18_non_canonical_varint_is_rejected_and_never_echoed() {
+        let payload = buyback_hero_payload(30, 31);
+        // 溢出型非规范 varint（10 个以上 continuation 字节）：明确转成 Malformed。
+        let mut overlong_cmd = vec![0x08];
+        overlong_cmd.extend_from_slice(&[0x80u8; 11]);
+        overlong_cmd.push(0x00);
+        overlong_cmd.extend(field_varint(2, 1)); // player_id = 1
+        overlong_cmd.extend(field_varint(3, 1)); // sequence = 1
+        overlong_cmd.extend(field_bytes(64, &payload));
+        assert!(matches!(
+            decode_commands(&command_batch_with_gameplay(overlong_cmd)),
+            Err(NetError::Malformed(_))
+        ));
+
+        // overlong 但可解码的 varint：解码 -> 再编码产出规范最短字节，
+        // 绝不回显非规范字节（ADR 0005 §3 canonical 往返约束）。
+        let mut non_canonical = vec![0x08];
+        non_canonical.extend_from_slice(&[0x81, 0x00]); // execute_frame = 1（overlong）
+        non_canonical.extend(field_varint(2, 1));
+        non_canonical.extend(field_varint(3, 1));
+        non_canonical.extend(field_bytes(64, &payload));
+        let bytes = command_batch_with_gameplay(non_canonical);
+        let (commands, gameplay) = decode_commands(&bytes).unwrap();
+        assert_eq!(gameplay.len(), 1);
+        assert!(matches!(
+            gameplay[0].kind,
+            GameplayCommandKind::BuybackHero { .. }
+        ));
+        let reencoded = encode_commands(&commands, &gameplay).unwrap();
+        assert_ne!(reencoded, bytes, "non-canonical bytes must not be echoed");
+        assert!(
+            reencoded.windows(2).any(|w| w == &[0x08, 0x01][..]),
+            "re-encode must use minimal varint for execute_frame=1"
+        );
+        assert!(
+            !reencoded.windows(3).any(|w| w == &[0x08, 0x81, 0x00][..]),
+            "overlong varint must not survive re-encode"
+        );
+    }
+
+    #[test]
+    fn reserved_tag_rejects_p18_buyback_hero_payload() {
+        let payload = buyback_hero_payload(30, 31);
+        // 缺陷态：把 BuybackHero 载荷错放进 reserved 14 to 32 段的 tag 14 / 32。
+        // prost 视作 unknown field 丢弃，kind 变 None，解码显式返回 Malformed。
+        for tag in [14, 32] {
+            let defect =
+                command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(tag, &payload));
+            assert!(
+                matches!(decode_commands(&defect), Err(NetError::Malformed(_))),
+                "reserved tag must be rejected: tag={tag}"
+            );
+        }
+        // 元断言防退化：同一载荷改回规范 tag 64 必须成功解码为 BuybackHero。
+        let good = command_batch_with_gameplay(gameplay_command_with_p8_5d_tag(64, &payload));
+        let (commands, gameplay) = decode_commands(&good).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(gameplay.len(), 1);
+        assert_eq!(
+            gameplay[0].kind,
+            GameplayCommandKind::BuybackHero {
+                hero: entity_from_raw(30),
+                tavern: entity_from_raw(31),
+            }
+        );
+    }
+
+    #[test]
+    fn p18_none_entities_carried_faithfully_and_rejected_by_core() {
+        use crate::frame::apply_frame;
+        // 线格式层忠实传输 0 值（EntityId::NONE），不猜测、不回退；
+        // 语义合法性（hero / tavern 非 NONE）由权威提交入口 apply_frame 承担。
+        let command = GameplayCommand::new(
+            Frame::new(0),
+            1,
+            1,
+            GameplayCommandKind::BuybackHero {
+                hero: entity_from_raw(0),
+                tavern: entity_from_raw(31),
+            },
+        );
+        let bytes = encode_commands(&[], &[command]).unwrap();
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        assert!(commands.is_empty());
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(
+            decoded[0].kind, command.kind,
+            "wire must carry zero ids faithfully, never coerce them"
+        );
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            bytes,
+            "decode -> encode must stay canonical for zero ids"
+        );
+        let mut sim = seed_test_match();
+        let before = sim.read_view().tick;
+        assert!(
+            matches!(
+                apply_frame(&mut sim, &[], &decoded),
+                Err(NetError::Session(_))
+            ),
+            "NONE entity must be rejected by authoritative submit path"
+        );
+        assert_eq!(sim.read_view().tick, before, "rejection must not step");
+    }
+
+    #[test]
+    fn all_forty_two_gameplay_kinds_roundtrip() {
+        // 双向穷尽映射一一对应：既有 41 变体 + P18 新增 BuybackHero 往返一致。
+        let mut gameplay = sample_gameplay();
+        gameplay.extend(sample_p9_gameplay());
+        gameplay.extend(sample_p11_gameplay());
+        gameplay.extend(sample_p18_gameplay()[..1].to_vec());
+        assert_eq!(gameplay.len(), 42, "sample must cover every gameplay kind");
+        let bytes = encode_commands(&[], &gameplay).unwrap();
+        let (commands, decoded) = decode_commands(&bytes).unwrap();
+        assert!(commands.is_empty());
+        assert_gameplay_eq(&decoded, &gameplay);
+        assert_eq!(
+            encode_commands(&commands, &decoded).unwrap(),
+            bytes,
+            "42 kinds must stay canonical"
+        );
+        for command in &gameplay {
+            let one = encode_commands(&[], std::slice::from_ref(command)).unwrap();
+            let (_, one_decoded) = decode_commands(&one).unwrap();
+            assert_gameplay_eq(&one_decoded, std::slice::from_ref(command));
+        }
+    }
+
+    #[test]
+    fn adding_tag_64_does_not_change_existing_forty_one_wire_bytes() {
+        // 以生成的 pb 类型解码两个批：仅含既有 41 变体 vs 既有 41 + 新变体。
+        // 取出内层 GameplayCommandBatch 字节，断言后者以前者完整前缀开头，
+        // 证明新增 tag 64 不改动任何既有变体的逐字节编码（ADR 0005 §3）。
+        let mut existing = sample_gameplay();
+        existing.extend(sample_p9_gameplay());
+        existing.extend(sample_p11_gameplay());
+        assert_eq!(existing.len(), 41);
+        let mut with_new = existing.clone();
+        with_new.extend(sample_p18_gameplay()[..1].to_vec());
+
+        let existing_bytes = encode_commands(&[], &existing).unwrap();
+        let with_new_bytes = encode_commands(&[], &with_new).unwrap();
+        let pb_existing = pb::CommandBatch::decode(existing_bytes.as_slice()).unwrap();
+        let pb_with_new = pb::CommandBatch::decode(with_new_bytes.as_slice()).unwrap();
+        let inner_existing = pb_existing.gameplay.unwrap().encode_to_vec();
+        let inner_with_new = pb_with_new.gameplay.unwrap().encode_to_vec();
+        assert!(
+            inner_with_new.starts_with(&inner_existing),
+            "existing 41 variant wire bytes must be unchanged"
+        );
+        // 新变体确实追加在其后，且解码还原为 BuybackHero。
+        let (_, decoded) = decode_commands(&with_new_bytes).unwrap();
+        assert_eq!(decoded.len(), 42);
+        assert!(matches!(
+            decoded[41].kind,
+            GameplayCommandKind::BuybackHero { .. }
+        ));
     }
 
     // ---- 任务 4.2：同脚本两实例 / 联机两端 / 回放逐帧一致 ----
@@ -3729,8 +4044,8 @@ mod tests {
 
         // 回放：同一命令序列 + 同一冻结定义哈希 / 内容哈希重建，逐帧哈希一致。
         let baseline = p9_test_match().capture_snapshot();
-        assert_eq!(baseline.version, 9, "SNAPSHOT_VERSION must be 9");
-        assert_eq!(baseline.sim_version, 9, "SIM_VERSION must be 9");
+        assert_eq!(baseline.version, 10, "SNAPSHOT_VERSION must be 10");
+        assert_eq!(baseline.sim_version, 10, "SIM_VERSION must be 10");
         let mut replay = p9_test_match();
         for (index, (commands, gameplay)) in decoded.iter().enumerate() {
             let hash = apply_frame(&mut replay, commands, gameplay).unwrap();

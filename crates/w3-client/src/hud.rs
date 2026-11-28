@@ -492,7 +492,7 @@ pub struct HudItemShopFact {
 /// 只从只读 [`w3_core::Snapshot::item_shop`] 的 `bags` / `stock` / `casts` /
 /// `facts` 与 `drain_events()` 的十一类事实事件拷贝派生：六格背包、货架库存、
 /// 回城施法进度、购买 / 拾取 / 使用 / 拒单事实都只是整数值拷贝。本结构不持有
-/// `RtsMatch`，结构上无法反写模拟状态，也不进入 FNV-1a 状态哈希、v9 快照或
+/// `RtsMatch`，结构上无法反写模拟状态，也不进入 FNV-1a 状态哈希、v10 快照或
 /// `first_difference()`（ADR 0002 §5 / R10.5 / R13.5）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ItemShopHudModel {
@@ -620,7 +620,7 @@ impl ItemShopHudModel {
 /// 与 `ReviveHudModel` / `TownHallUpgradeHudModel` / `CreepCampHudModel` /
 /// `ItemShopHudModel` 同构：只消费只读 `Snapshot`、事实事件拷贝与表现层本地
 /// [`FogGrid`] 的 owned 值拷贝，不持有 `RtsMatch`，结构上无法反写模拟状态。
-/// 本结构 MUST NOT 进 FNV-1a 状态哈希、v9 快照或 `first_difference()`。
+/// 本结构 MUST NOT 进 FNV-1a 状态哈希、v10 快照或 `first_difference()`。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FogHudModel {
     /// 最近一次只读快照帧号。

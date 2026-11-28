@@ -1,7 +1,7 @@
 //! 战争迷雾：表现层本地只读派生（P8.5e / R10.1 / R10.5 / §0.3 T3 / ADR 0002 §5）。
 //!
 //! 本模块是**表现层专属**，MUST NOT 进入 `w3-core` 权威状态、FNV-1a 状态哈希、
-//! `SNAPSHOT_VERSION`（当前 9）定义的快照或 `first_difference()`。唯一的权威写入者
+//! `SNAPSHOT_VERSION`（当前 10）定义的快照或 `first_difference()`。唯一的权威写入者
 //! 仍是 `RtsMatch`；迷雾网格 / 当前可见 / 已探索层 / 雾遮罩全部是
 //! [`FogGrid`] 内的表现层本地跨帧累积状态，每个本地视角一份（design D5）。
 //!

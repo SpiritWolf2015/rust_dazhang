@@ -473,10 +473,10 @@ fn creep_camp_events_do_not_change_state_hash() {
 /// 回城施法 / 市场刷新 / 消费序列由 `w3-core` 权威状态写入，HUD 只读派生），
 /// 重复投递按 sequence 去重；连续 16 帧重绘、插值与事件重复消费 MUST NOT
 /// 反写权威状态、不改 `compute_state_hash()` / `capture_snapshot()` 字节，
-/// 快照版本仍为 v9（ADR 0002 §5 / tasks 6.2 / R10.5）。
+/// 快照版本仍为 v10（ADR 0002 §5 / tasks 6.2 / R10.5）。
 #[test]
 fn item_shop_events_do_not_change_state_hash() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
     let mut rendered = build_match();
     let mut plain = build_match();
     submit_move(&mut rendered);
@@ -600,7 +600,7 @@ fn item_shop_events_do_not_change_state_hash() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=item_shop_snapshot_stays_v9"
+            "reason=item_shop_snapshot_stays_v10"
         );
         assert_eq!(
             view,
@@ -613,7 +613,7 @@ fn item_shop_events_do_not_change_state_hash() {
 /// P8.5e 战争迷雾：可见性过滤 / 重复事实事件投递 / 多帧重绘只读隔离。
 ///
 /// 本测试不新增任何 `EventKind`：重复投递 P8.5c / P8.5d 既有事实事件，
-/// 并在 `Scene` 上切换只读迷雾可见性；MUST NOT 改变内核哈希、v9 快照、
+/// 并在 `Scene` 上切换只读迷雾可见性；MUST NOT 改变内核哈希、v10 快照、
 /// `read_view()` / `drain_events()` 输出或 `first_difference()`。
 #[test]
 fn fog_of_war_events_do_not_change_state_hash() {
@@ -712,8 +712,8 @@ fn fog_of_war_events_do_not_change_state_hash() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=fog_snapshot_stays_v9"
+            "reason=fog_snapshot_stays_v10"
         );
-        assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+        assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
     }
 }

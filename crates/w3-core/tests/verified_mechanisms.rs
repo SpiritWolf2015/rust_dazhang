@@ -188,8 +188,8 @@ fn maxed_hero_still_enters_share_set_and_is_credited() {
         baseline_before,
         "reason=state_hash_advances_after_settlement"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
 }
 
 // ---------------------------------------------------------------------------
@@ -406,10 +406,10 @@ fn per_frame_hash_matches_same_script_baseline() {
         );
     }
 
-    // 快照往返：`SNAPSHOT_VERSION`（当前 9）头部完整、恢复后逐帧一致。
+    // 快照往返：`SNAPSHOT_VERSION`（当前 10）头部完整、恢复后逐帧一致。
     let snapshot = baseline.capture_snapshot();
-    assert_eq!(snapshot.version, 9, "reason=snapshot_version_9");
-    assert_eq!(snapshot.sim_version, 9, "reason=sim_version_9");
+    assert_eq!(snapshot.version, 10, "reason=snapshot_version_10");
+    assert_eq!(snapshot.sim_version, 10, "reason=sim_version_10");
     assert_eq!(
         snapshot.defs_hash,
         snapshot.defs.content_hash(),
@@ -678,13 +678,13 @@ fn synthetic_mechanism_structures_are_compile_time_integers() {
         );
     }
 
-    // 机制结构 MUST NOT 改变冻结定义内容哈希（编译期常量不进
-    // `compute_defs_hash`），故三版本号仍为 9、v9 golden hash 基线不变。
-    assert_eq!(
-        frozen.content_hash(),
-        defs().content_hash(),
-        "reason=mechanism_constants_leave_content_hash_unchanged"
-    );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    // R4 订正（p18 apply 第 2 批 / tasks 6.2）：删除 p17 的恒真断言
+    // `assert_eq!(frozen.content_hash(), defs().content_hash())`——同一构造
+    // 两次自比较恒为真、无鉴别力。冻结定义内容哈希的证据力改由
+    // `revive_parameters_are_separated_and_enter_defs_hash` 的参数分离
+    // `assert_ne!`（改常量 → content_hash 变化）与 `golden_hash` example
+    // 的 v10 基线承担；本节只保留「干净环境构造成功」的独立判据
+    // （`frozen.creep_constants().hero_level_xp_factor > 0`）。
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
 }

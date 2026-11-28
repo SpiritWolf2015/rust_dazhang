@@ -2,12 +2,13 @@
 //!
 //! 两个 `RtsMatch` 经自建 relay 的权威帧命令流推进，只传输入命令、
 //! 不传状态；逐帧比对 `compute_state_hash()`、`read_view()`、
-//! `first_difference()` 与双方 checksum 交换结果。权威帧批轮转携带全部
-//! 36 类玩法命令（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
+//! `first_difference()` 与双方 checksum 交换结果。权威帧批轮转携带 37 类
+//! 玩法命令样本（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
 //! `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`、
 //! PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`、PROTOCOL_VERSION 7
-//! 新增的 9 个 P8.5d 物品 / 商店 / 回城变体，以及 PROTOCOL_VERSION 8
-//! 新增的 13 个 P9 族特色机制变体），验证联机与本地行为一致、
+//! 新增的 9 个 P8.5d 物品 / 商店 / 回城变体、PROTOCOL_VERSION 8 新增的
+//! 13 个 P9 族特色机制变体，以及 PROTOCOL_VERSION 10 新增的 P18 酒馆买活
+//! `BuybackHero` 变体），验证联机与本地行为一致、
 //! 联机唯一推进点仍是 `w3_net::apply_frame`。
 //! 注意：此处两个客户端实例跑在内存回环总线上；真实 UDP 双进程实机
 //! 验收另见 `vera20k-mapping.md`，对应 tasks.md 的人工验收项。
@@ -22,7 +23,7 @@ use w3_net::transport::{Endpoint, LoopbackBus, LoopbackTransport, SharedBus, Tra
 use w3_net::{ClientSession, apply_frame};
 use w3_relay::Relay;
 
-const FRAMES: u64 = 36;
+const FRAMES: u64 = 37;
 
 fn new_match() -> RtsMatch {
     RtsMatch::create_with_world(
@@ -74,18 +75,19 @@ fn commands_for(frame: u64, player: u8) -> Vec<Command> {
     )]
 }
 
-/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖全部 36 类
-/// `GameplayCommandKind`（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
+/// 每个玩家每帧提交一条玩法命令；按帧号轮换覆盖 37 类
+/// `GameplayCommandKind` 样本（含 PROTOCOL_VERSION 4 新增的 `ReviveHero` /
 /// `CancelRevive`、PROTOCOL_VERSION 5 新增的 `UpgradeTownHall`、
 /// PROTOCOL_VERSION 6 新增的系统级 `SeedCreepCamp`、PROTOCOL_VERSION 7
-/// 新增的 9 个 P8.5d 物品 / 商店 / 回城变体，以及 PROTOCOL_VERSION 8
-/// 新增的 13 个 P9 族特色机制变体），且 `execute_frame` 落在原定帧，
+/// 新增的 9 个 P8.5d 物品 / 商店 / 回城变体、PROTOCOL_VERSION 8 新增的
+/// 13 个 P9 族特色机制变体，以及 PROTOCOL_VERSION 10 新增的 P18 酒馆
+/// 买活 `BuybackHero` 变体），且 `execute_frame` 落在原定帧，
 /// 验证玩法命令仍在原定 `ExecuteFrame` 执行一次、不改变帧序、
 /// 两端逐帧哈希一致。
 fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
     let entity = EntityId::new(u64::from(player)).unwrap();
     let altar = EntityId::new(u64::from(player) + 100).unwrap();
-    let slot = frame % 36;
+    let slot = frame % 37;
     let kind = match slot {
         0 => GameplayCommandKind::Cast {
             caster: entity,
@@ -230,10 +232,17 @@ fn gameplay_for(frame: u64, player: u8) -> Vec<GameplayCommand> {
             unit: entity,
             condition: RegenCondition::Night,
         },
+        // 36：PROTOCOL_VERSION 10 新增的 P18 酒馆买活命令（tag 64）。
+        // hero / tavern 均为合法非零 EntityId，保证 `apply_frame` 提交时
+        // 同源校验通过；语义结算由 w3-core 权威帧阶段确定性完成。
+        36 => GameplayCommandKind::BuybackHero {
+            hero: entity,
+            tavern: altar,
+        },
         _ => unreachable!("slot out of range: slot={slot}"),
     };
     // 两个系统级命令（slot 13 `SeedCreepCamp` / slot 22 `RefreshMarket`）
-    // 由中立归属提交；其余 34 类沿用玩家 id，保证两端一致。
+    // 由中立归属提交；其余 35 类沿用玩家 id，保证两端一致。
     let command_player = if slot == 13 || slot == 22 {
         NEUTRAL_OWNER
     } else {
@@ -567,6 +576,46 @@ fn relay_rejects_version_eight_carrying_p11_variant() {
         .encode()
         .unwrap();
     stale[4] = 8;
+
+    client.send(&Endpoint::Loopback(0), &stale).unwrap();
+    relay.poll().unwrap();
+    let (_, bytes) = client.recv().unwrap().unwrap();
+    let reject = Packet::decode(&bytes).unwrap();
+    assert_eq!(reject.kind, PacketKind::Reject);
+    assert_eq!(
+        parse_reject(&reject.payload).unwrap(),
+        "protocol version mismatch"
+    );
+    assert!(
+        relay.log().is_empty(),
+        "stale payload must not enter command stream"
+    );
+}
+
+#[test]
+fn relay_rejects_version_nine_carrying_p18_variant() {
+    // 伪装成旧 v9 的 Input 包，载荷携带 PROTOCOL_VERSION 10 新增的
+    // BuybackHero（tag 64）；v10 relay 必须在解码 payload 之前回
+    // Reject("protocol version mismatch")，tag 64 玩法命令字段绝不
+    // 被静默当作 unknown field 丢弃后进入权威命令流（ADR 0005 §3 / R12.2）。
+    let bus = LoopbackBus::shared();
+    let mut relay = Relay::new(LoopbackTransport::new(0, &bus), 2, 2);
+    let mut client = LoopbackTransport::new(1, &bus);
+
+    let gameplay = GameplayCommand::new(
+        Frame::new(0),
+        1,
+        1,
+        GameplayCommandKind::BuybackHero {
+            hero: EntityId::new(20).unwrap(),
+            tavern: EntityId::new(21).unwrap(),
+        },
+    );
+    let payload = encode_commands(&[], &[gameplay]).unwrap();
+    let mut stale = Packet::new(PacketKind::Input, 1, 7, 0, payload)
+        .encode()
+        .unwrap();
+    stale[4] = 9;
 
     client.send(&Endpoint::Loopback(0), &stale).unwrap();
     relay.poll().unwrap();

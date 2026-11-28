@@ -380,8 +380,8 @@ fn move_targets(commands: &[ClientCommand]) -> Vec<u64> {
 
 #[test]
 fn real_assembly_registers_item_shop_defs_and_snapshot_header() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
     let defs = synthetic_definitions();
     assert!(
         defs.units().contains_key(&SHOP_DEF),
@@ -504,7 +504,7 @@ fn real_assembly_commands_reach_item_shop_snapshot_and_replay_matches() {
     }
 
     let after = a.capture_snapshot();
-    assert_eq!(after.version, SNAPSHOT_VERSION, "reason=snapshot_stays_v9");
+    assert_eq!(after.version, SNAPSHOT_VERSION, "reason=snapshot_stays_v10");
     let price = defs
         .item_shop()
         .shelf(SHELF_CONSUMABLE)
@@ -724,7 +724,7 @@ fn reverse_validation_missing_item_shop_segment_makes_commands_unreachable() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn item_shop_hud_derive_is_read_only_and_snapshot_stays_v9() {
+fn item_shop_hud_derive_is_read_only_and_snapshot_stays_v10() {
     let defs = synthetic_definitions();
     let (mut sim, _, fixture) = prepared_match(&defs);
     submit_and_step(&mut sim, &fixture, 16);
@@ -781,11 +781,11 @@ fn item_shop_hud_derive_is_read_only_and_snapshot_stays_v9() {
         snapshot_before,
         "reason=hud_derive_does_not_change_snapshot"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
     assert_eq!(
         snapshot_before.version, SNAPSHOT_VERSION,
-        "reason=snapshot_header_v9"
+        "reason=snapshot_header_v10"
     );
 }
 

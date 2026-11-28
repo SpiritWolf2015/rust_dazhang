@@ -41,6 +41,11 @@
 // 半径与方向向量一律用 int64 承载 Q47.16 整数原始值；EffectDef 沿用
 // uint32 effect_kind 承载 0–12 稳定效果码、字段编号与 reserved 4 to 8 保持不动；
 // 明确拒绝 v8，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
+// PROTOCOL_VERSION 10（P18 新增酒馆买活玩法命令变体 BuybackHero）：
+// 在 GameplayCommand.oneof 只追加 tag 64，reserved 14 to 32 与
+// tag 4–13 / 33–63 一字不动；新增 GameplayBuybackHero 消息，两个字段
+// 均为 EntityId，一律用 uint64 的 value()、字段编号只追加、尾部保留 reserved；
+// 明确拒绝 v9，玩法命令字段不被静默当作 unknown field（ADR 0005 §3）。
 
 syntax = "proto3";
 package w3net;
@@ -206,6 +211,7 @@ message GameplayCommand {
     GameplayCastDirection cast_direction = 61;
     GameplayLearnAbility learn_ability = 62;
     GameplayLevelUpHero level_up_hero = 63;
+    GameplayBuybackHero buyback_hero = 64;
   }
   reserved 14 to 32;
 }
@@ -493,6 +499,18 @@ message GameplayLearnAbility {
 message GameplayLevelUpHero {
   uint64 hero = 1;
   reserved 2 to 8;
+}
+
+// p18 / PROTOCOL_VERSION 10 唯一新增玩法命令变体（kind 码 42，tag 64）：
+// 酒馆买活（R6.3），与祭坛 `ReviveHero` 的参数 / 命令分离。`hero` 为阵亡
+// 英雄、`tavern` 为酒馆，均为 EntityId，一律用 uint64 的 value() 承载；
+// 语义合法性（两者非 EntityId::NONE、英雄归属 / 阵亡登记）由 w3-core
+// 同源校验承担，线格式层只忠实传输、不猜测、不回退。字段编号只追加、
+// 尾部保留 reserved，禁 map / 禁 float / 禁 double 全部继续适用。
+message GameplayBuybackHero {
+  uint64 hero = 1;
+  uint64 tavern = 2;
+  reserved 3 to 8;
 }
 
 // 一批玩法命令；集合一律 repeated + 显式顺序，禁止 map。

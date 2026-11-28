@@ -1119,14 +1119,14 @@ fn stun_buff_blocks_player_actions() {
 }
 
 // ---------------------------------------------------------------------------
-// P11 技能系统确定性硬门禁（四席位 / 回放 / 联机 / v9 快照 / 旧 v8 拒绝）
+// P11 技能系统确定性硬门禁（四席位 / 回放 / 联机 / v10 快照 / 旧 v8 拒绝）
 // ---------------------------------------------------------------------------
 
 /// 四席位技能帧流各自双实例交错逐帧哈希一致，且技能随机消费序列非空。
 #[test]
 fn four_faction_ability_streams_are_frame_deterministic() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
     for faction in FactionSlot::ALL {
         let stream = ability_common::command_stream(faction);
         let (mut a, _, _) = ability_common::setup(&stream);
@@ -1195,17 +1195,17 @@ fn ability_replay_and_lockstep_paths_match_frame_hashes() {
     }
 }
 
-/// v9 快照销毁重建后从 N+1 续算一致；含进行中权威技能运行态与 `rng_draws`。
+/// v10 快照销毁重建后从 N+1 续算一致；含进行中权威技能运行态与 `rng_draws`。
 #[test]
-fn ability_v9_snapshot_roundtrip_continues_identically() {
+fn ability_v10_snapshot_roundtrip_continues_identically() {
     let stream = ability_common::command_stream(FactionSlot::Fourth);
     let (mut original, _, content) = ability_common::setup(&stream);
     for _ in 0..10 {
         original.step();
     }
     let snapshot = original.capture_snapshot();
-    assert_eq!(snapshot.version, 9, "reason=snapshot_version_9");
-    assert_eq!(snapshot.sim_version, 9, "reason=sim_version_9");
+    assert_eq!(snapshot.version, 10, "reason=snapshot_version_10");
+    assert_eq!(snapshot.sim_version, 10, "reason=sim_version_10");
     assert_eq!(
         snapshot.gameplay.abilities,
         original.ability_system_state(),
@@ -1258,6 +1258,6 @@ fn old_v8_snapshot_and_sim_version_are_explicitly_rejected() {
         ),
         "reason=old_v8_sim_version_rejected"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
 }

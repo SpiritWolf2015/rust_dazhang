@@ -5,7 +5,7 @@
 //! - Q1 窗口内选族是表现层本地只读状态：确认后经既有
 //!   `MeleeSetup::with_races` 派生开局，本地 / AI 席位 `def_ids` 落所选族
 //!   段、中立恒 `9xx`，`Spawn` / `gameplay_commands` 逐字节不变，
-//!   `SNAPSHOT_VERSION == 9`、逐帧 `compute_state_hash()` /
+//!   `SNAPSHOT_VERSION == 10`、逐帧 `compute_state_hash()` /
 //!   `capture_snapshot()` 不变，AI 命令源按所选 `ai_race` 产出；
 //! - Q2 命令卡按本地族只读查表分派：兽族 Producer / Build / Train 卡
 //!   `TrainUnit { unit_def, .. }` 全落 `2xx`、无 `HUMAN_*`，人族装配
@@ -219,12 +219,12 @@ fn q1_default_selection_falls_back_to_new() {
     );
 }
 
-/// 选族是表现层本地只读状态：无新增权威状态字段、`SNAPSHOT_VERSION` 仍 9、
+/// 选族是表现层本地只读状态：无新增权威状态字段、`SNAPSHOT_VERSION` 仍 10、
 /// 逐帧 `compute_state_hash()` / `capture_snapshot()` 字节与基线一致
 /// （ADR 0002 / C1 / C2）。
 #[test]
 fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
     let defs = synthetic_definitions();
 
     // 两个不同选族装配的真实对局（Spawn 字节相同）逐帧哈希 / 快照一致。
@@ -246,7 +246,7 @@ fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
         );
         assert_eq!(
             snap_h.version, SNAPSHOT_VERSION,
-            "reason=snapshot_version_9"
+            "reason=snapshot_version_10"
         );
         assert_eq!(snap_h.defs_hash, defs.content_hash(), "reason=defs_hash");
         assert_eq!(snap_h.content_hash, CONTENT_HASH, "reason=content_hash");
@@ -255,7 +255,7 @@ fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
     }
 }
 
-/// tasks 3.5：HUD 只读投影在 v9 新基线下复核（批次 A 四族投影已落地）。
+/// tasks 3.5：HUD 只读投影在 v10 新基线下复核（批次 A 四族投影已落地）。
 ///
 /// - 不选族回落人族段：`FactionSelection::default()` 与 `MeleeSetup::new()`
 ///   的 `Spawn` / `gameplay_commands` / `def_ids` 逐字节一致；
@@ -264,12 +264,12 @@ fn q1_selection_is_presentation_only_and_never_changes_hash_or_snapshot() {
 ///   网格重算）派生后，真实 `RtsMatch` 的 `compute_state_hash()` /
 ///   `capture_snapshot()` 与派生前逐字节一致（HUD / 选中 / 相机 / 迷雾
 ///   MUST NOT 反写权威状态，`FogHudModel` 只读语义不变）；
-/// - 十六组合四族投影逐帧哈希 / 快照与不选族 v9 基线一致，快照 v9 且头部
+/// - 十六组合四族投影逐帧哈希 / 快照与不选族 v10 基线一致，快照 v10 且头部
 ///   `defs_hash` / `content_hash` 一致；
 /// - 不扩展 `WorldView` / `EntityView`（沿用 [`runtime_view`] 既有字段）。
 #[test]
-fn q1_hud_projection_is_read_only_and_matches_unselected_v9_baseline() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+fn q1_hud_projection_is_read_only_and_matches_unselected_v10_baseline() {
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
     let defs = synthetic_definitions();
 
     // 1) 不选族回落人族段（Q1 未选族回落）。
@@ -305,7 +305,7 @@ fn q1_hud_projection_is_read_only_and_matches_unselected_v9_baseline() {
     let snapshot_before = sim.capture_snapshot();
     assert_eq!(
         snapshot_before.version, SNAPSHOT_VERSION,
-        "reason=baseline_snapshot_v9"
+        "reason=baseline_snapshot_v10"
     );
     let mut fog_grid = w3_client::FogGrid::new(LOCAL_PLAYER);
     for _ in 0..8 {
@@ -330,7 +330,7 @@ fn q1_hud_projection_is_read_only_and_matches_unselected_v9_baseline() {
         "reason=fog_hud_derives_snapshot_tick"
     );
 
-    // 3) 十六组合四族投影与不选族 v9 基线逐帧一致（选族只停装配层）。
+    // 3) 十六组合四族投影与不选族 v10 基线逐帧一致（选族只停装配层）。
     for (local, ai) in COMBINATIONS {
         let setup = assembled(FactionSelection::with_races(local, ai));
         let mut selected = build_sim(&setup, &defs);
@@ -349,7 +349,7 @@ fn q1_hud_projection_is_read_only_and_matches_unselected_v9_baseline() {
             );
             assert_eq!(
                 selected_snapshot.version, SNAPSHOT_VERSION,
-                "reason=hud_projection_snapshot_v9 frame={frame}"
+                "reason=hud_projection_snapshot_v10 frame={frame}"
             );
             assert_eq!(
                 selected_snapshot.defs_hash,
@@ -401,7 +401,7 @@ fn q1_command_card_race_refresh_never_changes_hash_or_snapshot() {
         );
         assert_eq!(snapshot(&rendered).version, SNAPSHOT_VERSION);
     }
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
 }
 
 /// 选族后 AI 命令源按所选 `ai_race` 产出（P8.3 回归接新入口）：
@@ -1455,10 +1455,10 @@ fn q3_missing_asset_is_explicitly_diagnosable_with_clear_fallback() {
 
 /// 模型键 / 几何只读，不进权威状态 / FNV-1a 状态哈希 / 快照：
 /// 真实 `RtsMatch` 在「跑完整 Q3 呈现管线」与「不跑」两侧逐帧一致，
-/// `SNAPSHOT_VERSION == 9`（ADR 0002 / C1 / tasks 5.4）。
+/// `SNAPSHOT_VERSION == 10`（ADR 0002 / C1 / tasks 5.4）。
 #[test]
 fn q3_model_key_resolution_never_changes_hash_or_snapshot() {
-    assert_eq!(SNAPSHOT_VERSION, 9);
+    assert_eq!(SNAPSHOT_VERSION, 10);
     let defs = synthetic_definitions();
     let setup = MeleeSetup::new();
     let mut rendered = build_sim(&setup, &defs);

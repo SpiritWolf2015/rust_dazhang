@@ -1111,7 +1111,7 @@ fn play_human_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// 人族 P8.1 完整一局与基线一致：逐帧状态哈希与 `capture_snapshot()`
-/// 快照逐条相等，快照仍为 v9、冻结定义内容哈希仍由 `defs_hash` 承载。
+/// 快照逐条相等，快照仍为 v10、冻结定义内容哈希仍由 `defs_hash` 承载。
 #[test]
 fn human_full_match_matches_baseline_and_restart_is_clean() {
     let baseline = play_human_full_match(&MeleeSetup::new());
@@ -1129,9 +1129,9 @@ fn human_full_match_matches_baseline_and_restart_is_clean() {
             .snapshots
             .iter()
             .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-        "reason=all_snapshots_are_v9"
+        "reason=all_snapshots_are_v10"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_unchanged");
     assert!(
         baseline.victory_frame > 0,
         "reason=baseline_victory_frame_recorded"
@@ -1582,7 +1582,7 @@ fn play_orc_full_match(setup: &MeleeSetup) -> FullMatchTrace {
 }
 
 /// P8.2 兽族完整一局与基线一致：同一兽族脚本两实例逐帧状态哈希与
-/// `capture_snapshot()` 快照逐条相等，快照仍 v9、冻结定义内容哈希仍由
+/// `capture_snapshot()` 快照逐条相等，快照仍 v10、冻结定义内容哈希仍由
 /// `defs_hash` 承载（不依赖改动前的旧哈希数值）。胜负只结算一次、重开干净。
 #[test]
 fn orc_full_match_matches_baseline_and_restart_is_clean() {
@@ -1601,9 +1601,12 @@ fn orc_full_match_matches_baseline_and_restart_is_clean() {
             .snapshots
             .iter()
             .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-        "reason=all_orc_snapshots_are_v9"
+        "reason=all_orc_snapshots_are_v10"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=orc_snapshot_version_unchanged");
+    assert_eq!(
+        SNAPSHOT_VERSION, 10,
+        "reason=orc_snapshot_version_unchanged"
+    );
     assert!(
         baseline.victory_frame > 0,
         "reason=orc_baseline_victory_frame_recorded"
@@ -1613,7 +1616,7 @@ fn orc_full_match_matches_baseline_and_restart_is_clean() {
         "reason=orc_final_snapshot_uses_recorded_victory_frame"
     );
     // 新增定义是冻结定义内容变化：`defs_hash` 由 `synthetic_definitions()`
-    // 的 `content_hash()` 承载，进入 v9 快照头部（C2 / D2）。
+    // 的 `content_hash()` 承载，进入 v10 快照头部（C2 / D2）。
     let defs = synthetic_definitions();
     assert_eq!(
         baseline.final_snapshot.defs_hash,
@@ -2079,7 +2082,7 @@ fn ai_commands_land_in_ai_race(setup: &MeleeSetup, ai_race: Race) -> bool {
 /// 全量机制触发）：人 / 兽 / 不死 / 暗夜席位都按 `setup.race` 只读分派取
 /// 本族六类槽位 / 英雄技能 / 攻防升级 ID，逐阶段打完一局，不再 panic、
 /// 不再分流到 P8.1 / P8.2 人兽专属脚本。P8.1 / P8.2 两族函数保留用于
-/// 既有两族 v9 基线与反向验证（tasks 4.2 / 6.x）。
+/// 既有两族 v10 基线与反向验证（tasks 4.2 / 6.x）。
 fn play_dual_faction_full_match(setup: &MeleeSetup) -> FullMatchTrace {
     play_full_match_all_stages(setup)
 }
@@ -2635,7 +2638,7 @@ fn play_full_match_all_stages(setup: &MeleeSetup) -> FullMatchTrace {
     );
     assert_eq!(
         fresh_snapshot.version, SNAPSHOT_VERSION,
-        "reason=restart_snapshot_v9 race={race:?}"
+        "reason=restart_snapshot_v10 race={race:?}"
     );
 
     trace.final_snapshot = final_snapshot;
@@ -2648,7 +2651,7 @@ fn play_full_match_all_stages(setup: &MeleeSetup) -> FullMatchTrace {
 /// [`play_full_match_all_stages`] 按「采集 → 建造 → 训练 → 英雄施法 →
 /// 研发 → Q2 / Q4 全量机制触发 → 战斗 → 摧毁敌方主城结算 → 重开」
 /// 逐阶段断言打完一局；`resolve_victory` 只结算一次且按稳定顺序、
-/// `victory.winner` 为本地玩家、结算帧进权威状态、重开无残留、快照 v9。
+/// `victory.winner` 为本地玩家、结算帧进权威状态、重开无残留、快照 v10。
 /// 只断言组内两实例逐帧哈希 / 快照字节一致，MUST NOT 断言跨组合或
 /// 改动前 v7 旧基线数值相等。
 #[test]
@@ -2658,7 +2661,7 @@ fn sixteen_combinations_play_full_match_all_stages_and_within_combo_frame_hashes
         16,
         "reason=full_match_covers_sixteen_combinations"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_unchanged");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_unchanged");
     for (local, ai) in SEGMENT_COMBINATIONS {
         let setup = MeleeSetup::with_races(local, ai);
         assert_eq!(setup.race, local, "reason=local_race_alias local={local:?}");
@@ -2704,7 +2707,7 @@ fn sixteen_combinations_play_full_match_all_stages_and_within_combo_frame_hashes
 
         // 胜负只结算一次（通用脚本推进 10 帧后 `victory` 不变）、结算帧进
         // 权威状态（`final_snapshot.gameplay.victory.resolved_frame`）、
-        // `victory.winner` 为本地玩家、快照 v9。
+        // `victory.winner` 为本地玩家、快照 v10。
         assert!(
             first.final_snapshot.gameplay.victory.resolved,
             "reason=victory_resolved local={local:?} ai={ai:?}"
@@ -2727,7 +2730,7 @@ fn sixteen_combinations_play_full_match_all_stages_and_within_combo_frame_hashes
                 .snapshots
                 .iter()
                 .all(|snapshot| snapshot.version == SNAPSHOT_VERSION),
-            "reason=all_snapshots_v9 local={local:?} ai={ai:?}"
+            "reason=all_snapshots_v10 local={local:?} ai={ai:?}"
         );
         // Q2 / Q4 全量机制触发后的权威状态进入终局快照（tasks 4.1）。
         let mechanics = &first.final_snapshot.faction_mechanics;
@@ -2742,7 +2745,7 @@ fn sixteen_combinations_play_full_match_all_stages_and_within_combo_frame_hashes
         );
 
         // 重开无残留：`victory.resolved == false`、entities / positions /
-        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 9`。
+        // players 视图为空、结算帧清零，且 `SNAPSHOT_VERSION == 10`。
         let fresh = build_driver(&setup, 300);
         assert!(
             !fresh.snapshot().gameplay.victory.resolved,
@@ -2767,7 +2770,7 @@ fn sixteen_combinations_play_full_match_all_stages_and_within_combo_frame_hashes
         );
         assert_eq!(
             fresh_snapshot.version, SNAPSHOT_VERSION,
-            "reason=restart_snapshot_v9 local={local:?} ai={ai:?}"
+            "reason=restart_snapshot_v10 local={local:?} ai={ai:?}"
         );
     }
     // MUST NOT 断言「十六组合之间哈希数值相等」或「与改动前 v7 旧基线
@@ -2981,12 +2984,12 @@ fn reverse_validation_ai_race_local_fallback_degenerate_fails_the_same_assertion
 /// 十六组合各构造两实例，注入同一 Q2 / Q4 全量机制脚本逐帧推进，逐帧
 /// `compute_state_hash()` 与 `capture_snapshot()` 字节相等、
 /// `first_difference()` 为 `None`（含 P9 新增族特色机制权威状态字段），
-/// 重开 `victory.resolved == false` 且视图为空、快照 v9。MUST NOT 断言
+/// 重开 `victory.resolved == false` 且视图为空、快照 v10。MUST NOT 断言
 /// 跨组合或改动前 v7 旧基线数值相等（新增权威状态 + 定义层内容变化 +
 /// bump 8 后 golden hash 已重取）。
 #[test]
 fn same_script_two_instances_match_frame_by_frame_with_first_difference_none() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_v9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_v10");
     for (local, ai) in SEGMENT_COMBINATIONS {
         let setup = MeleeSetup::with_races(local, ai);
         let mut first = build_driver(&setup, 0);
@@ -3019,7 +3022,7 @@ fn same_script_two_instances_match_frame_by_frame_with_first_difference_none() {
             );
             assert_eq!(
                 snapshot_first.version, SNAPSHOT_VERSION,
-                "reason=frame_snapshot_v9 local={local:?} ai={ai:?}"
+                "reason=frame_snapshot_v10 local={local:?} ai={ai:?}"
             );
             assert_eq!(
                 first.sim().first_difference(second.sim()),
@@ -3046,7 +3049,7 @@ fn same_script_two_instances_match_frame_by_frame_with_first_difference_none() {
         assert_eq!(
             fresh.snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=restart_snapshot_v9 local={local:?} ai={ai:?}"
+            "reason=restart_snapshot_v10 local={local:?} ai={ai:?}"
         );
     }
 }

@@ -391,7 +391,7 @@ pub struct CreepDeathNotice {
 ///
 /// 全部落 `BTreeMap` / `BTreeSet` 确定性有序容器，按稳定 `EntityId` /
 /// `u32` / `u64` 键顺序遍历；MUST 同时进入 FNV-1a 状态哈希、由
-/// `SNAPSHOT_VERSION`（当前 9）定义的快照与 `first_difference()`
+/// `SNAPSHOT_VERSION`（当前 10）定义的快照与 `first_difference()`
 /// （ADR 0002 §6-8 / `CODEBUDDY.md §5` / D1 / D5）。
 /// P8.5d 起 `item_instances` 追加 `holder` / `slot`，与
 /// `ItemShopState.bags` 同属单一实例身份口径（Q7）。
@@ -631,45 +631,46 @@ impl CreepCampState {
 // R6.1 / R6.5 布尔与因子机制结构（编译期合成占位 `[待核]`）
 // ---------------------------------------------------------------------------
 //
-// 本节只登记三类机制的**结构**，全部是编译期合成原创整数常量 `[待核]`：
-// 布尔开关、经验折减因子、按等级分档递减的因子表。它们 MUST NOT 接进
-// `sim_match.rs` 的野怪死亡结算（结算行为保持不变，`design.md` D2 / D3），
-// 也不新增 / 不修改任何运行时权威状态字段集合（D7）。
+// 本节登记三类机制的**结构**，全部是编译期合成原创整数常量 `[待核]`：
+// 布尔开关、经验折减因子、按等级分档递减的因子表。P18 起它们已作为消费者
+// 接进 `sim_match.rs::settle_creep_deaths` 的野怪死亡结算生产路径（MUST NOT
+// 仅被测试引用）：布尔开关 / 召唤物折减因子作用于击杀者分类门控与经验池
+// 派生，等级分档查表按稳定 `EntityId` 顺序登记进 `MeleeMechanismsState`
+// 的 `xp_settlements`（R6.1 / R6.5 两环节分离，集合内均分入账数值不变）。
 //
 // 关键约束：本节常量 MUST NOT 编入 `CreepConstants::hash()` /
-// `compute_defs_hash()`。`content_hash()` 与逐帧 `compute_state_hash()`
-// 因此逐字节不变，`SNAPSHOT_VERSION` / `SIM_VERSION` 仍为 9，v9 golden
-// hash 基线不受影响（本 change 不 bump、不重取基线，双平台逐字节比对仍
-// 待人工 / 待 VM）。这与 `NEUTRAL_OWNER` / `GROUND_ITEM_ID_BASE` /
-// `CREEP_RNG_SALT` 等编译期常量不进定义哈希的既有体例一致。
+// `compute_defs_hash()`，`content_hash()` 不因这些编译期常量改变；与
+// `NEUTRAL_OWNER` / `GROUND_ITEM_ID_BASE` / `CREEP_RNG_SALT` 等编译期常量
+// 不进定义哈希的既有体例一致。三类机制接线产生的运行态登记进 P18 新增的
+// 顶层权威状态，MUST 四处同步进 FNV-1a 状态哈希 / 快照 /
+// `first_difference()` / 恢复（ADR 0002 §6-8 / `CODEBUDDY.md §5`）。
 //
-// 「建筑击杀者」「召唤物击杀者」的运行时实体分类判定、「按英雄等级分档
-// 实际入账」的结算接线，需要新增权威状态字段 / 实体分类或改结算表达式，
-// 超出首期最小闭环，按 `design.md` D7 / tasks 3.2 顺延 p18 并登记为
-// 已知限制；数值一律 `[待核]` 合成占位，不冻结任何真值
-// （附录「核实约定」 / ADR 0001 / ADR 0004）。
+// 数值一律 `[待核]` 合成占位、不冻结任何真值、不含 `f64` / MPQ 派生数据 /
+// 原版字段名 / rawcode / 技能名（附录「核实约定」 / ADR 0001 / ADR 0004）。
 
 /// 建筑击杀者是否授予经验的布尔开关（编译期合成整数 `[待核]`）。
 ///
-/// `1` 表示授予、`0` 表示不授予；只登记布尔开关这一机制结构，
-/// 判定「击杀者是否建筑」的运行时实体分类顺延 p18。
+/// `1` 表示授予、`0` 表示不授予；P18 起由 `settle_creep_deaths` 读取，
+/// 判定「击杀者是否建筑」用定义层可移动性数据（`speed == 0` 的实体），
+/// MUST NOT 用建筑名字符串白名单（R1.2）。
 pub const MECHANISM_BUILDING_XP_SWITCH: u8 = 1;
 
 /// 召唤物击杀经验折减因子百分比（编译期合成整数 `[待核]`）。
 ///
-/// 只登记折减因子这一机制结构，召唤物击杀者判定顺延 p18。
+/// P18 起由 `settle_creep_deaths` 读取；召唤物击杀者判定查
+/// `AbilitySystemState.summons` 登记（数据驱动，非字符串白名单）。
 pub const MECHANISM_SUMMON_XP_FACTOR: i64 = 50;
 
 /// 按英雄等级分档递减的经验因子表（编译期合成整数 `[待核]`）。
 ///
-/// 下标对应「等级减一」档位，取值逐级递减；只登记分档表这一机制结构，
-/// 等级阈值分档与实际入账接线顺延 p18。
+/// 下标对应「等级减一」档位，取值逐级递减；P18 起经查表函数被结算路径
+/// 读取，按稳定 `EntityId` 顺序登记进 `XpSettlementRecord.tier_factors`。
 pub const MECHANISM_HERO_LEVEL_XP_TIERS: [i64; 4] = [100, 80, 60, 40];
 
 /// 按英雄等级查分档递减经验因子（纯整数、无浮点、越界钳到末档）。
 ///
-/// 只表达「分档递减」公式族结构，MUST NOT 被结算路径读取；
-/// `level` 为 0 与超出表长时都确定性钳到首 / 末档，不引入分支不确定性。
+/// P18 起由 `settle_creep_deaths` 在生产结算路径读取；`level` 为 0 与超出
+/// 表长时都确定性钳到首 / 末档，不引入分支不确定性。
 pub fn synthetic_hero_level_xp_factor(level: u32) -> i64 {
     let tiers = MECHANISM_HERO_LEVEL_XP_TIERS;
     let last = (tiers.len() - 1) as u32;

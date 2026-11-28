@@ -772,7 +772,7 @@ impl PurchaseCharge {
 ///
 /// 全部落 `BTreeMap` / `BTreeSet` / 定长数组，按稳定 `EntityId` / `u32` /
 /// `u64` 键序遍历；MUST 同时进入 FNV-1a 状态哈希、由 `SNAPSHOT_VERSION`
-/// （当前 9）定义的快照与 `first_difference()`
+/// （当前 10）定义的快照与 `first_difference()`
 /// （ADR 0002 §6-8 / `CODEBUDDY.md §5`）。
 ///
 /// 随机码消费复用 P8.5c `CreepCampState.rng_state` / `rng_draws` /

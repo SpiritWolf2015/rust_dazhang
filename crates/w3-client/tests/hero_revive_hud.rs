@@ -322,8 +322,8 @@ fn revive_command_is_accepted_in_real_assembly() {
     sim.step();
 
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v9");
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v10");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
     let item = snapshot
         .revive
         .queue
@@ -529,7 +529,7 @@ fn hud_redraw_keeps_state_hash_and_snapshot_bytes() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=snapshot_version_9 frame={frame}"
+            "reason=snapshot_version_10 frame={frame}"
         );
     }
 }

@@ -284,9 +284,9 @@ pub fn point_target() -> AbilityTargetKind {
 }
 
 /// 当前版本号硬断言的公共入口。
-pub fn assert_v9_versions() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+pub fn assert_v10_versions() {
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
     assert_eq!(
         ABILITY_CATALOG_BASE % 2,
         0,

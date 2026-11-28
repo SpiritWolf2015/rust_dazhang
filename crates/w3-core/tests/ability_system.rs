@@ -9,7 +9,7 @@ mod ability_common;
 use std::collections::BTreeSet;
 
 use ability_common::{
-    PLAYER, assert_v9_versions, basic_for, command_stream, config, gp, hero, id, next_rng,
+    PLAYER, assert_v10_versions, basic_for, command_stream, config, gp, hero, id, next_rng,
     producer, setup, target, ultimate_for,
 };
 use w3_core::{
@@ -40,7 +40,7 @@ const EFFECT_KINDS: [EffectKind; 13] = [
 /// 冻结清单覆盖四席位、每席位 3 普通 + 1 大招 × 4 英雄 + 单位 / 道具代表项。
 #[test]
 fn synthetic_catalog_and_effect_codes_are_stable() {
-    assert_v9_versions();
+    assert_v10_versions();
     assert_eq!(SYNTHETIC_ABILITY_CATALOG.len(), ABILITY_CATALOG_LEN);
     for faction in FactionSlot::ALL {
         let entries: Vec<_> = SYNTHETIC_ABILITY_CATALOG
@@ -240,8 +240,8 @@ fn ability_primitives_populate_authoritative_state_and_snapshot() {
     );
 
     let snapshot = a.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v9");
-    assert_eq!(snapshot.sim_version, SIM_VERSION, "reason=sim_version_v9");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v10");
+    assert_eq!(snapshot.sim_version, SIM_VERSION, "reason=sim_version_v10");
     assert_eq!(
         snapshot.gameplay.abilities, state,
         "reason=snapshot_contains_ability_state"
@@ -413,7 +413,7 @@ fn new_ability_commands_are_encoded_validated_and_dispatched() {
     }
     assert_eq!(
         sim.capture_snapshot().version,
-        9,
+        10,
         "reason=commands_dispatched_without_version_change"
     );
     assert_eq!(producer(), id(1), "reason=producer_id_stable");
@@ -518,8 +518,8 @@ fn old_v8_snapshot_and_sim_version_are_explicitly_rejected() {
         ),
         "reason=old_sim_version_rejected"
     );
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
 }
 
 /// Buff 分类映射穷尽覆盖全部效果原语，且不含 fog / 可见性字段。

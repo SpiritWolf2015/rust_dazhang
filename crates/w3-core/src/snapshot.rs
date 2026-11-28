@@ -55,6 +55,16 @@
 //! 同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 9。旧 v8 及更早快照按
 //! `UnsupportedVersion` / `SimVersionMismatch` 明确拒绝、不提供跨版本
 //! 迁移（ADR 0002 §7）。
+//!
+//! v10 由 P18（Q1 / Q2 / Q3 已拍板）引入：新增顶层权威状态
+//! `melee_mechanisms`（三类经验机制结算 / 经验阈值分档 / 克制矩阵查表
+//! 产出 / 买活 / 回购 / leash 归巢计数，全落 `BTreeMap` 稳定序），
+//! 四处同步进 FNV-1a 状态哈希 / 本快照顶层字段 / `first_difference()` /
+//! `restore_snapshot`；`BuybackHero` 为唯一新增玩法命令变体。机制常量
+//! 属编译期合成占位层、MUST NOT 编入 `compute_defs_hash()`，不改
+//! `content_hash()`。同步 `SNAPSHOT_VERSION` 与 `SIM_VERSION` 到 10，
+//! 旧 v9 及更早快照 / 回放按 `UnsupportedVersion` /
+//! `SimVersionMismatch` 明确拒绝、不提供跨版本迁移（ADR 0002 §7 / D3）。
 
 use crate::command::Command;
 use crate::creep::CreepCampState;
@@ -63,9 +73,10 @@ use crate::gameplay::{
     FrozenDefinitions, HeroReviveState, TownHallUpgradeState, UnitGameplayState, WorldGameplayState,
 };
 use crate::item_shop::ItemShopState;
+use crate::melee_mechanisms::MeleeMechanismsState;
 
-pub const SNAPSHOT_VERSION: u32 = 9;
-pub const SIM_VERSION: u32 = 9;
+pub const SNAPSHOT_VERSION: u32 = 10;
+pub const SIM_VERSION: u32 = 10;
 
 /// 订单的快照表示（与权威 `Order` 一一对应）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -176,6 +187,14 @@ pub struct Snapshot {
     /// （ADR 0002 §6-8 / CODEBUDDY.md §5 / Q2 / Q3）。
     /// 迷雾 / 视野可见性 MUST NOT 进本字段（R10.5 / §0.3 T3 / Q2'）。
     pub faction_mechanics: FactionMechanicsState,
+    /// P18 全量 Melee 机制顶层权威运行态（三类经验机制结算 / 经验阈值分档 /
+    /// 克制矩阵查表产出 / 买活 / 回购 / leash 归巢计数）。
+    /// 帧 N 提交后的完整状态 MUST 含本字段，恢复后从 N+1 继续不残留；
+    /// 全落 `BTreeMap` 稳定序、按稳定 `EntityId` 顺序遍历，四处同步进
+    /// FNV-1a 状态哈希 / 本快照 / `first_difference()` / `restore_snapshot`
+    /// （ADR 0002 §6-8 / `CODEBUDDY.md §5`）。机制常量属冻结占位层、
+    /// MUST NOT 进本字段 / 哈希 / 快照 / `first_difference()`（D1）。
+    pub melee_mechanisms: MeleeMechanismsState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

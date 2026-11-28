@@ -40,7 +40,10 @@ pub type DefId = u32;
 ///
 /// 所有字段都是编译期整数，不含 `f64`、MPQ 派生数据、真实导出 JSON、
 /// 参考项目单位名或 rawcode。费用按「基数 + 等级系数 → 绝对上限」表驱动
-/// 计算，祭坛复活与酒馆买活的参数 / 命令分离（酒馆按 Q4 不在本期范围）。
+/// 计算。P18 起祭坛复活与酒馆买活的参数 / 命令分离已落地：祭坛复活沿用
+/// 本套常量、`ReviveHero` 命令与队列恢复满生命 / 满法力；酒馆买活走
+/// `BuybackHero` 命令与独立的 `BuybackConstants`，以半血无蓝入场，
+/// MUST NOT 串用本套恢复百分比 / 费用参数（R6.3 / `design.md` G4）。
 /// 改任一常量即改变 [`FrozenDefinitions::content_hash`]，进而改变快照头部。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ReviveConstants {
@@ -1677,6 +1680,21 @@ pub enum GameplayCommandKind {
     LevelUpHero {
         hero: EntityId,
     },
+    // -----------------------------------------------------------------------
+    // P18 唯一新增玩法命令变体（kind 码 42，既有码 1–41 一个不动）。
+    //
+    // R7.4 回购价 / 交互距离走既有 `SellItem` 命令面与资源结算，
+    // R8.5 三级 leash 走 `step()` 内部野怪 AI 结算，R6.1 经验阈值分档 /
+    // R6.5 三类经验机制 / R5.3 克制矩阵均为击杀 / 攻击结算逻辑，
+    // 全部 MUST NOT 新增命令变体或借命令旁路改写 R1.4 可移动性过滤。
+    // -----------------------------------------------------------------------
+    /// 酒馆买活：指定阵亡英雄与酒馆实体，按独立买活参数半血无蓝入场
+    /// （R6.3）。与祭坛 `ReviveHero` 参数 / 命令分离；`hero` / `tavern`
+    /// MUST 均非 `EntityId::NONE`。
+    BuybackHero {
+        hero: EntityId,
+        tavern: EntityId,
+    },
 }
 
 /// 玩法命令。
@@ -2016,6 +2034,13 @@ fn hash_gameplay_command(hasher: &mut StateHasher, command: &GameplayCommand) {
             hasher.write_u8(41);
             hasher.write_u64(hero.value());
         }
+        // P18：追加唯一编码 42，既有码 1–41 一个不动；两个实体字段显式
+        // 小端编码，且与校验 / 穷尽分发三处同步（D4 / Q1）。
+        GameplayCommandKind::BuybackHero { hero, tavern } => {
+            hasher.write_u8(42);
+            hasher.write_u64(hero.value());
+            hasher.write_u64(tavern.value());
+        }
     }
 }
 
@@ -2104,6 +2129,11 @@ pub(crate) fn validate_gameplay_entities(
         } => caster == EntityId::NONE || radius_raw < 0,
         GameplayCommandKind::LearnAbility { hero, .. }
         | GameplayCommandKind::LevelUpHero { hero } => hero == EntityId::NONE,
+        // P18 唯一新增变体：酒馆买活两个实体字段 MUST 逐个校验，新增变体
+        // 漏分支即触发编译错误，MUST NOT 靠默认放行（ADR 0002 §3）。
+        GameplayCommandKind::BuybackHero { hero, tavern } => {
+            hero == EntityId::NONE || tavern == EntityId::NONE
+        }
     };
     if invalid {
         return Err(GameplayCommandError::InvalidEntity);

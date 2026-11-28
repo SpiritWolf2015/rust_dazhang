@@ -5,7 +5,7 @@
 //! `RtsMatch::create_with_definitions` → `submit_command` → `step()` →
 //! `capture_snapshot()` / `restore_snapshot()` 既有确定性生产路径注入夹具；
 //! 迷雾只驻留 `w3-client` / `w3-render` 表现层，MUST NOT 进 `w3-core` 权威
-//! 状态 / FNV-1a 状态哈希 / v9 快照 / `first_difference()`（R10.5 / ADR 0002 §5）。
+//! 状态 / FNV-1a 状态哈希 / v10 快照 / `first_difference()`（R10.5 / ADR 0002 §5）。
 //!
 //! Q9 反向验证采用 `CODEBUDDY.md §5` 形态①：测试内构造缺陷态，并写元断言
 //! 证明同一断言在正式态通过、退化态失败；退化态真经 `capture_snapshot()` /
@@ -346,7 +346,7 @@ fn degenerate_first_difference_with_fog(
     }
 }
 
-/// 快照字节中是否出现三态迷雾标记；正式 v9 快照 MUST NOT 含这些字段。
+/// 快照字节中是否出现三态迷雾标记；正式 v10 快照 MUST NOT 含这些字段。
 fn contains_fog_marker(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     text.contains("masked") || text.contains("fogged") || text.contains("fog_grid")
@@ -546,7 +546,7 @@ fn real_assembly_fog_hud_keeps_authoritative_state_isolated() {
         assert_eq!(
             raw_a.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=fog_hud_keeps_snapshot_v9"
+            "reason=fog_hud_keeps_snapshot_v10"
         );
     }
     assert!(
@@ -763,7 +763,7 @@ fn two_clients_same_script_and_8_frame_batches_match_authoritative_and_fog() {
             "reason=two_clients_explored_layer_matches"
         );
     });
-    assert_eq!(PROTOCOL_VERSION, 9, "reason=protocol_version_9");
+    assert_eq!(PROTOCOL_VERSION, 10, "reason=protocol_version_10");
 }
 
 #[test]
@@ -844,18 +844,18 @@ fn reconnect_explored_layer_degrades_from_current_frame_until_q7_is_decided() {
 }
 
 #[test]
-fn version_numbers_and_snapshot_header_stay_at_v9() {
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    assert_eq!(SIM_VERSION, 9, "reason=sim_version_9");
-    assert_eq!(PROTOCOL_VERSION, 9, "reason=protocol_version_9");
+fn version_numbers_and_snapshot_header_stay_at_v10() {
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    assert_eq!(SIM_VERSION, 10, "reason=sim_version_10");
+    assert_eq!(PROTOCOL_VERSION, 10, "reason=protocol_version_10");
     let defs = synthetic_definitions();
     let sim = build_match(0);
     let snapshot = sim.capture_snapshot();
     assert_eq!(
         snapshot.version, SNAPSHOT_VERSION,
-        "reason=snapshot_header_v9"
+        "reason=snapshot_header_v10"
     );
-    assert_eq!(snapshot.sim_version, SIM_VERSION, "reason=sim_header_v9");
+    assert_eq!(snapshot.sim_version, SIM_VERSION, "reason=sim_header_v10");
     assert_eq!(
         snapshot.content_hash,
         defs.content_hash(),

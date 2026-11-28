@@ -27,6 +27,7 @@ pub mod fixed;
 pub mod frame;
 pub mod gameplay;
 pub mod item_shop;
+pub mod melee_mechanisms;
 pub mod nav;
 pub mod sim_match;
 pub mod snapshot;
@@ -67,6 +68,14 @@ pub use item_shop::{
     ItemShopFactKind, ItemShopState, PurchaseCharge, SHOP_FIXTURE_ID_BASE,
     SYNTHETIC_ITEM_SHOP_CONSTANTS, ShopFixture, ShopRefreshDraw, ShopShelf, TownPortalCast,
     shop_fixture_id, synthetic_item_shop_definitions,
+};
+pub use melee_mechanisms::{
+    ARMOR_TYPE_COUNT, ATTACK_TYPE_COUNT, BuybackConstants, BuybackCost, BuybackRecord,
+    MeleeMechanismsState, RepurchaseRecord, SYNTHETIC_BUYBACK_CONSTANTS,
+    SYNTHETIC_BUYBACK_HP_PERCENT, SYNTHETIC_BUYBACK_MANA_PERCENT, SYNTHETIC_DAMAGE_MATRIX,
+    SYNTHETIC_HERO_XP_THRESHOLDS, SYNTHETIC_REPURCHASE_INTERACT_RADIUS_RAW,
+    SYNTHETIC_REPURCHASE_RATIO_PERCENT, XpSettlementRecord, buyback_cost, scale_damage_by_ratio,
+    synthetic_damage_ratio, synthetic_level_tier, synthetic_xp_threshold,
 };
 pub use nav::{DEFAULT_NODE_BUDGET, DynamicObstacles, GridArea};
 pub use sim_match::{EntityView, Event, EventKind, MatchConfig, RtsMatch, WorldView};

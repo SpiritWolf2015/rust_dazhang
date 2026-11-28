@@ -46,8 +46,12 @@ pub const MAGIC: [u8; 4] = *b"W3N1";
 ///     tag 4–13 / 33–58 一字不动，`EffectDef` 字段编号保持不动）；明确
 ///     拒绝 v8，玩法命令字段不被静默当作 unknown field，客户端与 relay
 ///     同步发布。
+/// 10 = 新增 P18 酒馆买活玩法命令变体 `BuybackHero`（ADR 0005 §3，
+///     `GameplayCommand.oneof` 只追加 tag 64，`reserved 14 to 32` 与
+///     tag 4–13 / 33–63 一字不动）；明确拒绝 v9，玩法命令字段不被静默
+///     当作 unknown field，客户端与 relay 同步发布。
 /// 与 `w3-core` 的 `SNAPSHOT_VERSION` / `SIM_VERSION` 是相互独立的版本号。
-pub const PROTOCOL_VERSION: u8 = 9;
+pub const PROTOCOL_VERSION: u8 = 10;
 /// 固定包头长度：magic4 + version1 + kind1 + sender1 + seq4 + frame8 + len2 + sum4。
 pub const HEADER_LEN: usize = 25;
 const MAX_PAYLOAD: usize = u16::MAX as usize;
@@ -424,9 +428,9 @@ mod tests {
         assert_eq!(&bytes[..4], &MAGIC);
         assert_eq!(
             bytes[4], PROTOCOL_VERSION,
-            "PROTOCOL_VERSION bumped for breaking payload change"
+            "reason=protocol_version_bumped_for_breaking_payload_change expected=10"
         );
-        assert_eq!(PROTOCOL_VERSION, 9);
+        assert_eq!(PROTOCOL_VERSION, 10);
         assert_eq!(&bytes[7..11], &7u32.to_le_bytes());
         assert_eq!(&bytes[11..19], &4u64.to_le_bytes());
         assert_eq!(&bytes[19..21], &(payload.len() as u16).to_le_bytes());
@@ -630,6 +634,41 @@ mod tests {
                 assert_eq!(found, 8);
             }
             other => panic!("version=8 must be rejected decisively: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_nine_packet_carrying_p18_variant_is_rejected_before_payload_decode() {
+        use w3_core::{EntityId, GameplayCommand, GameplayCommandKind};
+
+        // PROTOCOL_VERSION 由 9 bump 到 10（P18 新增酒馆买活 BuybackHero，
+        // tag 64）。构造一个携带 tag 64 新玩法命令字段的 v10 载荷，再把
+        // 包头版本字节伪装成旧 v9；v9 端会把 tag 64 字段当 unknown field
+        // 静默丢弃，两端命令流不等 -> desync 不可见。因此必须在解码
+        // payload 之前按 VersionMismatch 明确拒绝，不提供跨版本迁移、
+        // 不静默兼容，玩法命令字段绝不被静默当作 unknown field。
+        let gameplay = GameplayCommand::new(
+            Frame::new(3),
+            1,
+            1,
+            GameplayCommandKind::BuybackHero {
+                hero: EntityId::new(20).unwrap(),
+                tavern: EntityId::new(21).unwrap(),
+            },
+        );
+        let payload = encode_commands(&sample_commands(), &[gameplay]).unwrap();
+        let mut bytes = Packet::new(PacketKind::Frame, 0, 7, 4, payload)
+            .encode()
+            .unwrap();
+        bytes[4] = 9;
+
+        match Packet::decode(&bytes) {
+            Err(NetError::VersionMismatch { expected, found }) => {
+                assert_eq!(expected, PROTOCOL_VERSION);
+                assert_eq!(expected, 10);
+                assert_eq!(found, 9);
+            }
+            other => panic!("version=9 must be rejected decisively: {other:?}"),
         }
     }
 }

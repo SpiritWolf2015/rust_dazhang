@@ -121,7 +121,7 @@ fn upgrade_fixture() -> (RtsMatch, FrozenDefinitions, StaticWorld, u64, EntityId
     sim.step();
 
     let mut snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v9");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v10");
     let economy = snapshot.gameplay.players.entry(PLAYER).or_default();
     economy.gold = 100_000;
     economy.lumber = 100_000;
@@ -181,7 +181,7 @@ fn tier_gate_fixture_with_defs(
     sim.step();
 
     let mut snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v9");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v10");
     {
         let hall = snapshot
             .positions
@@ -639,9 +639,9 @@ fn upgrade_command_is_accepted_in_real_assembly_and_builds_state() {
     sim.step();
 
     let snapshot = sim.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v9");
-    assert_eq!(SNAPSHOT_VERSION, 9, "reason=snapshot_version_9");
-    // `Some(TownHallUpgradeState)`：v9 快照携带已填充的顶层权威状态。
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v10");
+    assert_eq!(SNAPSHOT_VERSION, 10, "reason=snapshot_version_10");
+    // `Some(TownHallUpgradeState)`：v10 快照携带已填充的顶层权威状态。
     let state: TownHallUpgradeState = snapshot.town_hall.clone();
     let item = state
         .queue
@@ -921,7 +921,7 @@ fn hud_redraw_keeps_state_hash_and_snapshot_bytes() {
         assert_eq!(
             rendered.capture_snapshot().version,
             SNAPSHOT_VERSION,
-            "reason=snapshot_version_9 frame={frame}"
+            "reason=snapshot_version_10 frame={frame}"
         );
     }
 }
@@ -1177,7 +1177,7 @@ fn real_assembly_t2_accepts_tier2_train_research_and_settles_effects() {
     advance_until_tier2_effects_dual(&mut primary, &mut replay, producer_a, before_alive);
 
     let snapshot = primary.capture_snapshot();
-    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v9");
+    assert_eq!(snapshot.version, SNAPSHOT_VERSION, "reason=snapshot_v10");
     assert_eq!(
         snapshot.defs_hash,
         defs.content_hash(),
